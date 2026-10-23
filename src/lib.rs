@@ -16,6 +16,7 @@ pub mod picker;
 pub mod rename;
 pub mod server;
 pub mod system;
+pub mod term;
 pub mod theme;
 pub mod user_actions;
 pub mod watchdog;
@@ -35,8 +36,8 @@ pub fn run(args: args::Args) {
         multiple: args.multiple,
     });
     // One app, one index: a second launch hands its folder and search to the
-    // window that is already open.
-    if picker.is_none() {
+    // window that is already open. A window in a terminal is its own.
+    if picker.is_none() && !args.term {
         let path = args
             .path
             .as_ref()
@@ -45,6 +46,16 @@ pub fn run(args: args::Args) {
             return;
         }
     }
+    // Checked before indexing starts, so a terminal that can't show the
+    // window fails right away.
+    let app = if args.term {
+        term::application().unwrap_or_else(|err| {
+            eprintln!("fffinder: {err:#}");
+            std::process::exit(2);
+        })
+    } else {
+        gpui_kit::application()
+    };
     // Indexing starts right away, in the background.
     let engine = Engine::new(EngineOptions {
         roots: config.search_roots.clone(),
@@ -55,10 +66,11 @@ pub fn run(args: args::Args) {
     let nu = nushell::find_nu(config.nu_path.as_deref());
 
     // macOS keeps running with no windows open, like Finder, so the index
-    // stays warm for Nushell; elsewhere closing the last window quits.
-    let app = gpui_kit::application()
+    // stays warm for Nushell; elsewhere, and in a terminal, closing the last
+    // window quits.
+    let app = app
         .with_assets(assets::AppAssets)
-        .with_quit_mode(if picker.is_some() {
+        .with_quit_mode(if picker.is_some() || args.term {
             QuitMode::LastWindowClosed
         } else {
             QuitMode::Default
@@ -80,7 +92,8 @@ pub fn run(args: args::Args) {
             config.appearance,
         );
         watchdog::start_if_enabled(cx);
-        if picker.is_none() {
+        // The control socket stays with the GUI.
+        if picker.is_none() && !args.term {
             serve(server_engine, cx);
         }
         cx.on_action(move |_: &actions::Quit, cx: &mut App| {

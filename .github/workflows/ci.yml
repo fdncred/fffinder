@@ -32,6 +32,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Run every test binary, so one run shows every failure.
       - run: cargo test --workspace --no-fail-fast
+      # Terminal mode, `fffinder --term`, is macOS and Linux only.
+      - if: runner.os != 'Windows'
+        run: cargo clippy --workspace --all-targets --features term -- -D warnings
+      - if: runner.os != 'Windows'
+        run: cargo test --lib --features term -- term::
       - name: Check Nushell scripts
         shell: nu {0}
         run: |

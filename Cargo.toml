@@ -31,6 +31,20 @@ path = "src/lib.rs"
 name = "fffinder"
 path = "src/main.rs"
 
+[features]
+# `fffinder --term`: the window drawn inside a terminal with the kitty graphics
+# protocol (macOS and Linux). GPUI only builds its offscreen renderer with
+# gpui-kit's `test-support`, so this turns that on for the whole app.
+term = [
+    "gpui-kit/test-support",
+    "dep:base64",
+    "dep:crossterm",
+    "dep:flate2",
+    "dep:futures",
+    "dep:libc",
+    "dep:raw-window-handle",
+]
+
 [dependencies]
 fffinder-core.workspace = true
 gpui-kit = "0.7.3"
@@ -44,6 +58,20 @@ trash = "5"
 async-channel = "2"
 # Colors file names the way Nushell's `ls` does.
 lscolors = { version = "0.21", default-features = false }
+# `term` feature: frames as kitty graphics escape codes, and the types GPUI's
+# platform traits are written in.
+base64 = { version = "0.22", optional = true }
+flate2 = { version = "1", optional = true }
+futures = { version = "0.3", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+# `term` feature: terminal input and raw mode, ioctl, and shared memory.
+[target.'cfg(unix)'.dependencies]
+crossterm = { version = "0.29", optional = true, default-features = false, features = [
+    "bracketed-paste",
+    "events",
+] }
+libc = { version = "0.2", optional = true }
 
 # Finder's own colors and icons, read from AppKit at run time.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -79,3 +107,7 @@ taffy = { opt-level = 3 }
 ttf-parser = { opt-level = 3 }
 resvg = { opt-level = 3 }
 image = { opt-level = 3 }
+# crossterm takes one off SGR mouse coordinates, which underflows on the pixel
+# position 0 that Ghostty sends in pixel mode; `term::input` undoes it with a
+# wrapping add, as release builds already wrap.
+crossterm = { overflow-checks = false }

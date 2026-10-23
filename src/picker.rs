@@ -17,6 +17,9 @@ pub fn render(paths: &[PathBuf]) -> String {
 
 /// Print the chosen paths and exit successfully.
 pub fn choose(paths: &[PathBuf]) -> ! {
+    // When stdout is the terminal the window was drawn in, the paths belong
+    // on the main screen, not the alternate one about to be cleared.
+    crate::term::restore();
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(render(paths).as_bytes());
     let _ = out.flush();

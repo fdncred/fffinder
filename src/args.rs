@@ -1,5 +1,5 @@
 //! Command line: `fffinder [PATH] [--query TEXT] [--pick] [--multiple] [--detach]
-//! [--software-rendering]`.
+//! [--term] [--software-rendering]`.
 //!
 //! `--pick` turns the window into a chooser for scripts (used by `fff pick`):
 //! choosing prints a JSON array of absolute paths and exits 0; cancelling exits 1.
@@ -15,6 +15,8 @@ pub struct Args {
     pub multiple: bool,
     /// Start in the background and return at once (used by `fff gui`).
     pub detach: bool,
+    /// Draw the window inside this terminal instead of opening one.
+    pub term: bool,
     /// Draw with Mesa's software renderers instead of a GPU (Linux).
     pub software_rendering: bool,
 }
@@ -32,6 +34,7 @@ Options:
       --pick         Choose files and print them as JSON to stdout
       --multiple     With --pick, allow choosing several items
       --detach       Start in the background and return right away
+      --term         Show the window inside this terminal (kitty graphics)
       --software-rendering
                      Draw without a GPU (Linux)
   -h, --help         Show this help
@@ -56,6 +59,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
             "--pick" => out.pick = true,
             "--multiple" | "-m" => out.multiple = true,
             "--detach" => out.detach = true,
+            "--term" => out.term = true,
             "--software-rendering" => out.software_rendering = true,
             "-q" | "--query" => {
                 let value = iter.next().ok_or("--query needs a value")?;
@@ -76,6 +80,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
                 out.path = Some(PathBuf::from(arg));
             }
         }
+    }
+    if out.term && out.detach {
+        return Err("--term and --detach can't be used together".into());
     }
     Ok(Parsed::Run(out))
 }
@@ -99,9 +106,19 @@ mod tests {
                 pick: true,
                 multiple: true,
                 detach: false,
+                term: false,
                 software_rendering: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_term() {
+        let Parsed::Run(args) = run(&["--term", "--pick", "/tmp"]).unwrap() else {
+            panic!("expected a run");
+        };
+        assert!(args.term && args.pick);
+        assert!(run(&["--term", "--detach"]).is_err());
     }
 
     #[test]

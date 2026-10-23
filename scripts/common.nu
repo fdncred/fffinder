@@ -20,8 +20,10 @@ export def target-dir []: nothing -> path {
 }
 
 # Build the workspace; returns the target directory holding the binaries.
-export def build [--debug]: nothing -> path {
+# `--term` adds `fffinder --term`, the window drawn inside a terminal.
+export def build [--debug, --term]: nothing -> path {
     let args = if $debug { [build --workspace] } else { [build --release --workspace] }
+    let args = if $term { $args | append [--features term] } else { $args }
     cd (repo-root)
     ^cargo ...$args
     target-dir | path join (if $debug { 'debug' } else { 'release' })

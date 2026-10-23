@@ -1,6 +1,6 @@
 //! Actions, key bindings, and the application menu bar.
 
-use gpui_kit::{App, KeyBinding, Menu, MenuItem, OsAction, actions};
+use gpui_kit::{App, DummyKeyboardMapper, KeyBinding, Menu, MenuItem, OsAction, actions};
 
 actions!(
     finder,
@@ -69,7 +69,7 @@ pub const QUICK_LOOK: &str = "QuickLook";
 pub fn bind_keys(cx: &mut App) {
     let finder = Some(FINDER);
     let files = Some(FILES);
-    cx.bind_keys([
+    let bindings = [
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("secondary-,", ShowSettings, None),
         KeyBinding::new("secondary-n", NewWindow, None),
@@ -130,7 +130,48 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("f2", Rename, files),
         KeyBinding::new("secondary-backspace", MoveToTrash, files),
         KeyBinding::new("delete", MoveToTrash, files),
-    ]);
+    ];
+    // Terminals keep most Cmd shortcuts for themselves, so in one every Cmd
+    // binding also works with Ctrl. Added last, menus show the Ctrl form.
+    let aliases: Vec<KeyBinding> = if crate::term::active() {
+        bindings.iter().filter_map(ctrl_alias).collect()
+    } else {
+        Vec::new()
+    };
+    cx.bind_keys(bindings);
+    cx.bind_keys(aliases);
+}
+
+/// The binding with Cmd swapped for Ctrl, if it uses Cmd at all.
+fn ctrl_alias(binding: &KeyBinding) -> Option<KeyBinding> {
+    if !binding
+        .keystrokes()
+        .iter()
+        .any(|k| k.inner().modifiers.platform)
+    {
+        return None;
+    }
+    let keystrokes: Vec<String> = binding
+        .keystrokes()
+        .iter()
+        .map(|keystroke| {
+            let mut keystroke = keystroke.inner().clone();
+            if keystroke.modifiers.platform {
+                keystroke.modifiers.platform = false;
+                keystroke.modifiers.control = true;
+            }
+            keystroke.unparse()
+        })
+        .collect();
+    KeyBinding::load(
+        &keystrokes.join(" "),
+        binding.action().boxed_clone(),
+        binding.predicate(),
+        false,
+        None,
+        &DummyKeyboardMapper,
+    )
+    .ok()
 }
 
 pub fn set_menus(cx: &mut App) {
@@ -195,4 +236,19 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Copy as Nushell List", CopyAsNuon),
         ]),
     ]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_alias_swaps_cmd_for_ctrl() {
+        let binding = KeyBinding::new("cmd-shift-n", NewFolder, Some(FINDER));
+        let alias = ctrl_alias(&binding).expect("a Cmd binding has an alias");
+        assert_eq!(alias.keystrokes()[0].inner().unparse(), "ctrl-shift-n");
+        assert!(alias.action().partial_eq(&NewFolder));
+        assert_eq!(alias.predicate(), binding.predicate());
+        assert!(ctrl_alias(&KeyBinding::new("alt-left", GoBack, None)).is_none());
+    }
 }

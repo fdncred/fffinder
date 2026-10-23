@@ -1,13 +1,8 @@
 # fffinder manual
 
-This manual describes everything fffinder does, control by control. The
-[README](../README.md) covers installing it, [Building](#building) lists what
-each platform needs to build it, [Development](#development) covers testing
-it, and [protocol.md](protocol.md) documents the local socket that the `fff`
-Nushell module and other tools use.
+This manual describes everything fffinder does, control by control. The [README](../README.md) covers installing it, [Building](#building) lists what each platform needs to build it, [Development](#development) covers testing it, and [protocol.md](protocol.md) documents the local socket that the `fff` Nushell module and other tools use.
 
-Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl
-instead.
+Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 
 ## Contents
 
@@ -31,6 +26,7 @@ instead.
 - [Using your Nushell environment](#using-your-nushell-environment)
 - [Open Nushell Here and terminals](#open-nushell-here-and-terminals)
 - [Choosing files for scripts](#choosing-files-for-scripts)
+- [In a terminal](#in-a-terminal)
 - [Menus](#menus)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Settings](#settings)
@@ -55,6 +51,7 @@ fffinder [PATH] [OPTIONS]
       --pick         Choose files and print them as JSON to stdout
       --multiple     With --pick, allow choosing several items (also -m)
       --detach       Start in the background and return right away
+      --term         Show the window inside this terminal (kitty graphics)
       --software-rendering
                      Draw without a GPU (Linux)
   -h, --help         Show this help
@@ -62,41 +59,25 @@ fffinder [PATH] [OPTIONS]
 ```
 
 - A PATH that is a file opens its folder.
-- With no PATH, the window opens the folder you last had open, or your home
-  folder if that folder is gone.
-- If fffinder is already running, a second launch hands its PATH and
-  `--query` to the running copy, which opens a window, and then exits. There
-  is always one app and one index. `--pick` windows are separate and never
-  hand off.
-- On macOS, fffinder keeps running after you close its last window, like
-  Finder, so the index stays warm for Nushell. Clicking the Dock icon opens a
-  new window. On Linux and Windows, closing the last window quits.
-- `--detach` starts fffinder in the background and returns at once. `fff gui`
-  uses it.
-- `--pick` turns the window into a file chooser. See
-  [Choosing files for scripts](#choosing-files-for-scripts).
-- `--software-rendering` draws with Mesa's software renderers instead of a
-  GPU, on Linux. It only applies when it starts the app, not when it hands
-  off to a running copy. See
-  [Without a GPU](#without-a-gpu-wsl2-and-virtual-machines).
+- With no PATH, the window opens the folder you last had open, or your home folder if that folder is gone.
+- If fffinder is already running, a second launch hands its PATH and `--query` to the running copy, which opens a window, and then exits. There is always one app and one index. `--pick` windows are separate and never hand off.
+- On macOS, fffinder keeps running after you close its last window, like Finder, so the index stays warm for Nushell. Clicking the Dock icon opens a new window. On Linux and Windows, closing the last window quits.
+- `--detach` starts fffinder in the background and returns at once. `fff gui` uses it.
+- `--pick` turns the window into a file chooser. See [Choosing files for scripts](#choosing-files-for-scripts).
+- `--term` shows the window inside the terminal instead. See [In a terminal](#in-a-terminal).
+- `--software-rendering` draws with Mesa's software renderers instead of a GPU, on Linux. It only applies when it starts the app, not when it hands off to a running copy. See [Without a GPU](#without-a-gpu-wsl2-and-virtual-machines).
 
-Indexing starts as soon as the app starts. The first scan has to finish
-before "This Computer" searches return results.
+Indexing starts as soon as the app starts. The first scan has to finish before "This Computer" searches return results.
 
-macOS asks before an app reads Desktop, Documents, or Downloads. To index
-those and other protected folders without prompts, give fffinder Full Disk
-Access in System Settings > Privacy & Security, then reopen it.
+macOS asks before an app reads Desktop, Documents, or Downloads. To index those and other protected folders without prompts, give fffinder Full Disk Access in System Settings > Privacy & Security, then reopen it.
 
-On Linux the index watches folders with inotify, one watch per folder, and a
-big home folder can exceed the default limit. Raise it with
-`sudo sysctl fs.inotify.max_user_watches=1048576`.
+On Linux the index watches folders with inotify, one watch per folder, and a big home folder can exceed the default limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
 
 ## The window
 
 From top to bottom, the window has:
 
-- The toolbar, with the window title, navigation, view and menu buttons, and
-  the search field.
+- The toolbar, with the window title, navigation, view and menu buttons, and the search field.
 - The scope bar, only while a search is active.
 - The filter bar, while a Nushell filter is open.
 - The file area, showing the current view.
@@ -116,15 +97,11 @@ The file area shows a message when there is nothing to list:
 | No Recent Files | Recents is empty. |
 | No Items | The folder is empty. |
 
-Open folders refresh on their own. fffinder checks the folder every two
-seconds and reloads it quietly when it changed on disk.
+Open folders refresh on their own. fffinder checks the folder every two seconds and reloads it quietly when it changed on disk.
 
 ### Path bar
 
-The path bar shows the current folder as a row of crumbs, from the volume down.
-Click a crumb to go to that folder. While searching, in Recents, or when
-showing results sent from Nushell, the path bar shows the selected item's path
-instead. Clicking the item's own crumb opens its folder with the item selected.
+The path bar shows the current folder as a row of crumbs, from the volume down. Click a crumb to go to that folder. While searching, in Recents, or when showing results sent from Nushell, the path bar shows the selected item's path instead. Clicking the item's own crumb opens its folder with the item selected.
 
 ### Status bar
 
@@ -135,8 +112,7 @@ The status bar shows:
 - A `+` after the count when a search stopped at the result limit.
 - The time the search took, in milliseconds.
 - A spinner while a search or filter runs.
-- "Indexing N files…" while the index is being built, when the sidebar is
-  hidden. The sidebar footer shows it otherwise.
+- "Indexing N files…" while the index is being built, when the sidebar is hidden. The sidebar footer shows it otherwise.
 - In icon view, a slider for the icon size, from 32 to 128 points.
 
 ## Toolbar
@@ -161,54 +137,32 @@ From left to right:
 The sidebar has four sections:
 
 - **Recents** lists files you used recently. See [Recents](#recents).
-- **Favorites** starts with the standard folders that exist on the computer
-  (Applications, Desktop, Documents, Downloads, and so on). Add folders with
-  "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the
-  sidebar.
-- **Smart Folders** lists saved searches. It appears once you save one. See
-  [Filters and Smart Folders](#filters-and-smart-folders).
-- **Locations** lists your home folder, iCloud Drive or other cloud drives,
-  and mounted volumes.
+- **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar.
+- **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
+- **Locations** lists your home folder, iCloud Drive or other cloud drives, and mounted volumes.
 
 Click a row to open it. The current folder's row is highlighted.
 
 Right-click a Favorites or Locations row for:
 
 - **Open Nushell Here**: open `nu` in that folder in your terminal.
-- **Show in Finder** (Show in Explorer on Windows, Show in File Manager on
-  Linux).
+- **Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux).
 - **Remove from Sidebar**: Favorites only.
 
 Right-click a Smart Folder for **Remove from Sidebar**.
 
-The footer shows "N files indexed", or "Indexing… N" with a spinner while
-scanning. Its gear button opens Settings. The Hide Sidebar button, or
-Cmd+Alt+S, hides the sidebar.
+The footer shows "N files indexed", or "Indexing… N" with a spinner while scanning. Its gear button opens Settings. The Hide Sidebar button, or Cmd+Alt+S, hides the sidebar.
 
 ## Views
 
-Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is
-saved.
+Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is saved.
 
-- **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other
-  documents show their icon with an extension badge. Change the icon size
-  with the slider in the status bar.
-- **List** (Cmd+2) shows Name, Date Modified, Size, and Kind columns. Click a
-  header to sort by it, and click it again to reverse. Search results add a
-  Folder column, or a Match column showing the matching line for a contents
-  search. Rows alternate in color, as in Finder.
-- **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns.
-  Selecting a folder opens it in a new column to the right. Selecting a file
-  shows a preview card with its kind, size, modification date, and location in
-  the last column. Search results and Recents always use the list in this
-  view, as Finder does.
-- **Gallery** (Cmd+4) shows a large preview of the selected item above a strip
-  of everything in the folder. Left and Right arrows move along the strip. The
-  gallery always shows an item, so it selects the first one when nothing is
-  selected.
+- **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
+- **List** (Cmd+2) shows Name, Date Modified, Size, and Kind columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder.
+- **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns. Selecting a folder opens it in a new column to the right. Selecting a file shows a preview card with its kind, size, modification date, and location in the last column. Search results and Recents always use the list in this view, as Finder does.
+- **Gallery** (Cmd+4) shows a large preview of the selected item above a strip of everything in the folder. Left and Right arrows move along the strip. The gallery always shows an item, so it selects the first one when nothing is selected.
 
-Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to
-40 MB.
+Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB.
 
 ## Selecting items
 
@@ -228,43 +182,27 @@ Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to
 
 ### Type to select
 
-As in Finder, typing letters while the files have focus selects the first item
-whose name starts with them. Letters typed within a second of each other add
-to the prefix. When no name starts with the prefix, the next name after it in
-alphabetical order is selected, and the last item when the prefix is past
-every name. In column view, typing selects in the active column. Typing in the
-search field searches instead.
+As in Finder, typing letters while the files have focus selects the first item whose name starts with them. Letters typed within a second of each other add to the prefix. When no name starts with the prefix, the next name after it in alphabetical order is selected, and the last item when the prefix is past every name. In column view, typing selects in the active column. Typing in the search field searches instead.
 
 ## Sorting and hidden files
 
 The Sort and View Options menu has:
 
-- **Sort By**: Relevance (only while searching), Name, Date Modified, Size, and
-  Kind. Choosing the current key again reverses the order.
+- **Sort By**: Relevance (only while searching), Name, Date Modified, Size, and Kind. Choosing the current key again reverses the order.
 - **Ascending** and **Descending**. Both are disabled for Relevance.
 - **Show Hidden Files**.
 
-Name sorting is natural, so `file2` comes before `file10`. Date Modified and
-Size start with the newest and largest items. Kind sorts by kind, then name.
+Name sorting is natural, so `file2` comes before `file10`. Date Modified and Size start with the newest and largest items. Kind sorts by kind, then name.
 
-The folder sort is saved. A search has its own sort, which starts at Relevance
-and isn't saved.
+The folder sort is saved. A search has its own sort, which starts at Relevance and isn't saved.
 
-**Show Hidden Files** (Cmd+Shift+.) shows dot files and other hidden items in
-folders. It is also in the empty-space menu and the View menu, and in Settings.
-Searches find hidden files only when the search location is itself a git
-repository, because that is what fff-search indexes. See
-[What the index skips](#what-the-index-skips).
+**Show Hidden Files** (Cmd+Shift+.) shows dot files and other hidden items in folders. It is also in the empty-space menu and the View menu, and in Settings. Searches find hidden files only when the search location is itself a git repository, because that is what fff-search indexes. See [What the index skips](#what-the-index-skips).
 
 ## Searching
 
-Type in the search field (Cmd+F) to search. Searches start 50 ms after you
-stop typing. Return searches right away and moves into the results, selecting
-the first one. Down Arrow in the search field also moves into the results.
+Type in the search field (Cmd+F) to search. Searches start 50 ms after you stop typing. Return searches right away and moves into the results, selecting the first one. Down Arrow in the search field also moves into the results.
 
-To search one part of the tree, open its folder and turn on **Search Only in
-"Folder name"**, the folder button left of the search field, before or while
-you search.
+To search one part of the tree, open its folder and turn on **Search Only in "Folder name"**, the folder button left of the search field, before or while you search.
 
 While a search is active, the scope bar shows:
 
@@ -295,46 +233,29 @@ Cmd+/ shows this table in the app.
 
 ### Ranking and limits
 
-fff-search ranks results, and fffinder re-ranks them so name matches come
-first, shallow paths come before deep ones, and nothing inside `.app` or
-`.framework` bundles shows. When a word matches files exactly, typo-only
-matches are dropped.
+fff-search ranks results, and fffinder re-ranks them so name matches come first, shallow paths come before deep ones, and nothing inside `.app` or `.framework` bundles shows. When a word matches files exactly, typo-only matches are dropped.
 
-A search shows at most `result_limit` items (500 by default; **Results
-shown** in [Settings › Search engine](#search-engine)). With a filter on, it
-fetches up to 5,000 so the filter has enough to work with. Opening a
-file from search results records it, so files you open often rank higher for
-the same search later.
+A search shows at most `result_limit` items (500 by default; **Results shown** in [Settings › Search engine](#search-engine)). With a filter on, it fetches up to 5,000 so the filter has enough to work with. Opening a file from search results records it, so files you open often rank higher for the same search later.
 
-Search results always show where each item is. Searches can't filter by size
-or date themselves; use a [Nushell filter](#filters-and-smart-folders).
+Search results always show where each item is. Searches can't filter by size or date themselves; use a [Nushell filter](#filters-and-smart-folders).
 
 ### What the index skips
 
 fff-search decides what goes into the index, and no setting changes it:
 
-- Hidden files and folders, unless the search location is itself a git
-  repository. This keeps caches and configuration such as `~/.cache` out of a
-  home folder index. Show Hidden Files also applies to search results, but it
-  can't bring back files the index left out.
+- Hidden files and folders, unless the search location is itself a git repository. This keeps caches and configuration such as `~/.cache` out of a home folder index. Show Hidden Files also applies to search results, but it can't bring back files the index left out.
 - Files a repository's `.gitignore` excludes.
-- Outside git repositories, build and cache folders such as `node_modules`,
-  `target/debug`, `.cargo/registry`, and, on macOS, `~/Library/Caches` and
-  `~/Library/Application Support`.
+- Outside git repositories, build and cache folders such as `node_modules`, `target/debug`, `.cargo/registry`, and, on macOS, `~/Library/Caches` and `~/Library/Application Support`.
 
-A folder outside every search location gets its own temporary index when you
-search it, so a git repository searched that way includes its hidden files.
+A folder outside every search location gets its own temporary index when you search it, so a git repository searched that way includes its hidden files.
 
 ## Recents
 
-Recents (Cmd+Shift+F) shows up to 500 files from the search locations,
-ranked by how often and how recently you opened them in fffinder, then by
-modification time. It waits for the index to be ready.
+Recents (Cmd+Shift+F) shows up to 500 files from the search locations, ranked by how often and how recently you opened them in fffinder, then by modification time. It waits for the index to be ready.
 
 ## Previews and Quick Look
 
-Previews appear in the gallery, in the column view's last column, and in
-Quick Look.
+Previews appear in the gallery, in the column view's last column, and in Quick Look.
 
 | File | Preview |
 | --- | --- |
@@ -345,82 +266,50 @@ Quick Look.
 | Other text | The first 64 KB as plain text, marked "preview truncated" when longer. |
 | Anything else | The file's icon. |
 
-Nushell previews give up after 10 seconds and show the icon. They need `nu`;
-without it, structured files preview as text.
+Nushell previews give up after 10 seconds and show the icon. They need `nu`; without it, structured files preview as text.
 
 ### Nushell highlighting
 
-`.nu` previews run `nu-highlight` in a login shell, so your `color_config`
-applies. Every color comes from it, with one addition: `nu-highlight` leaves
-comments uncolored, so fffinder draws comments in the theme's secondary
-(gray) text color.
+`.nu` previews run `nu-highlight` in a login shell, so your `color_config` applies. Every color comes from it, with one addition: `nu-highlight` leaves comments uncolored, so fffinder draws comments in the theme's secondary (gray) text color.
 
 ### Quick Look
 
-Space or Cmd+Y opens Quick Look for the selected item, and pressing either
-again closes it. Quick Look shows the item's icon and name, a large preview,
-and its kind, size, and modification date.
+Space or Cmd+Y opens Quick Look for the selected item, and pressing either again closes it. Quick Look shows the item's icon and name, a large preview, and its kind, size, and modification date.
 
 The arrow keys move to other items while Quick Look stays open, as in Finder:
 
-- With one item selected, they move the selection the way they do in the
-  view, and Quick Look shows the new item. In the icon grid, Up and Down move
-  by row. In the list and in columns, Left and Right go to the previous and
-  next item, so they step through a folder of images the same way in every
-  view. In columns they stay in the current column.
-- With several items selected, they step through just those items, wrapping
-  around at the ends, and the selection stays as it is.
+- With one item selected, they move the selection the way they do in the view, and Quick Look shows the new item. In the icon grid, Up and Down move by row. In the list and in columns, Left and Right go to the previous and next item, so they step through a folder of images the same way in every view. In columns they stay in the current column.
+- With several items selected, they step through just those items, wrapping around at the ends, and the selection stays as it is.
 
-- **Show in Finder** (Show in Explorer, Show in File Manager) reveals the item
-  and keeps Quick Look open.
+- **Show in Finder** (Show in Explorer, Show in File Manager) reveals the item and keeps Quick Look open.
 - **Open** opens the item and closes Quick Look.
 
 ### Preview text size
 
-Text, code, and table previews in Quick Look have text size controls at the
-bottom left:
+Text, code, and table previews in Quick Look have text size controls at the bottom left:
 
 - The small "A" makes the text one point smaller.
 - The large "A" makes it one point bigger.
 - The size label, such as "11.5 pt", resets it.
 
-With Quick Look open, Cmd+= (or Cmd++) makes the text bigger, Cmd+- makes it
-smaller, and Cmd+0 resets it. The size ranges from 8 to 32 points, defaults to
-11.5, and is saved as `preview_font_size`. The gallery uses the same size. The
-column view's preview card stays at 11.5 points. The window's
-[text size](#appearance-and-text-size) setting multiplies all of these.
+With Quick Look open, Cmd+= (or Cmd++) makes the text bigger, Cmd+- makes it smaller, and Cmd+0 resets it. The size ranges from 8 to 32 points, defaults to 11.5, and is saved as `preview_font_size`. The gallery uses the same size. The column view's preview card stays at 11.5 points. The window's [text size](#appearance-and-text-size) setting multiplies all of these.
 
 ## Opening files
 
-**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button)
-opens a folder in the window, and opens a file or app with its default
-application. Opening several files opens each one.
+**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button) opens a folder in the window, and opens a file or app with its default application. Opening several files opens each one.
 
-When no application is registered for a file (checked with LaunchServices on
-macOS and `xdg-mime` on Linux):
+When no application is registered for a file (checked with LaunchServices on macOS and `xdg-mime` on Linux):
 
-- A file that looks like text opens in your editor instead: Nushell's
-  `buffer_editor` when "Use Nushell's file colors and editor" is on and
-  `buffer_editor` is set, otherwise the system text editor. That is
-  `open -t` on macOS (the default app for plain text), Notepad on Windows, and
-  `$VISUAL` or `$EDITOR` on Linux (a notification says so when neither is
-  set).
+- A file that looks like text opens in your editor instead: Nushell's `buffer_editor` when "Use Nushell's file colors and editor" is on and `buffer_editor` is set, otherwise the system text editor. That is `open -t` on macOS (the default app for plain text), Notepad on Windows, and `$VISUAL` or `$EDITOR` on Linux (a notification says so when neither is set).
 - A binary file shows a notification instead.
 
-Windows has its own "Open with" chooser, so there the file goes to Windows as
-usual.
+Windows has its own "Open with" chooser, so there the file goes to Windows as usual.
 
-**Open in Editor** (File menu or item menu) opens files in Nushell's editor
-when that option is on and an editor is set. Otherwise it uses the file's
-default app, or the system text editor when there is none. Terminal editors
-open in your chosen terminal. See
-[Using your Nushell environment](#using-your-nushell-environment).
+**Open in Editor** (File menu or item menu) opens files in Nushell's editor when that option is on and an editor is set. Otherwise it uses the file's default app, or the system text editor when there is none. Terminal editors open in your chosen terminal. See [Using your Nushell environment](#using-your-nushell-environment).
 
-**Show in Finder** (Show in Explorer on Windows, Show in File Manager on
-Linux) reveals the selected items in the system file manager.
+**Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux) reveals the selected items in the system file manager.
 
-**Show in Enclosing Folder** appears in the item menu for a single search
-result. It opens the item's folder in this window with the item selected.
+**Show in Enclosing Folder** appears in the item menu for a single search result. It opens the item's folder in this window with the item selected.
 
 ## Working with files
 
@@ -439,44 +328,30 @@ result. It opens the item's folder in this window with the item selected.
 
 ## Dragging and dropping
 
-- Drag items from any view to another app to hand it the files. This works on
-  macOS and Wayland; GPUI doesn't support dragging out on Windows or X11.
+- Drag items from any view to another app to hand it the files. This works on macOS and Wayland; GPUI doesn't support dragging out on Windows or X11.
 - Drop folders on the sidebar to add them to Favorites.
-- Drop a folder on the file area to open it, or a file to open its folder with
-  the file selected.
+- Drop a folder on the file area to open it, or a file to open its folder with the file selected.
 
 ## The Nushell panel
 
-Ctrl+` (or "Run a Pipeline…" in the Nushell menu, or "Run Nushell
-Pipeline…" in a context menu) opens the Nushell panel below the files. It runs
-a pipeline with the selected items as `$in`, or every item shown when nothing
-is selected.
+Ctrl+` (or "Run a Pipeline…" in the Nushell menu, or "Run Nushell Pipeline…" in a context menu) opens the Nushell panel below the files. It runs a pipeline with the selected items as `$in`, or every item shown when nothing is selected.
 
-Each item is a record with `name`, `path`, `type` (`file` or `dir`), `kind`,
-`size` (a filesize), and `modified` (a date), so pipelines such as
-`where size > 1mb | sort-by modified` work as they do in Nushell.
+Each item is a record with `name`, `path`, `type` (`file` or `dir`), `kind`, `size` (a filesize), and `modified` (a date), so pipelines such as `where size > 1mb | sort-by modified` work as they do in Nushell.
 
 - Type a pipeline and press Return or click **Run**.
-- **Clear** empties the pipeline and its result, and the examples show again.
-  Clicking it while a pipeline runs drops that pipeline's result.
-- Before the first run, and after Clear, the panel lists examples. Click one
-  to fill it in and run it.
-- A table result shows with a row number column. Other results show as text.
-  Errors show in red above the result.
+- **Clear** empties the pipeline and its result, and the examples show again. Clicking it while a pipeline runs drops that pipeline's result.
+- Before the first run, and after Clear, the panel lists examples. Click one to fill it in and run it.
+- A table result shows with a row number column. Other results show as text. Errors show in red above the result.
 - The line at the bottom says what `$in` held and how long the run took.
 - Close the panel with its close button or Ctrl+`.
 
 Your [Nushell actions](#nushell-actions) show their results here too.
 
-The text size of the panel is set in Settings. See
-[Nushell text size](#nushell-text-size).
+The text size of the panel is set in Settings. See [Nushell text size](#nushell-text-size).
 
 ## Filters and Smart Folders
 
-A filter narrows what the window shows with Nushell. Open the filter bar with
-Cmd+Alt+F, the funnel button in the scope bar, "Filter with Nushell…" in the
-Actions menu, or "Filter with Nushell" in the Edit menu. It works on a folder
-and on search results.
+A filter narrows what the window shows with Nushell. Open the filter bar with Cmd+Alt+F, the funnel button in the scope bar, "Filter with Nushell…" in the Actions menu, or "Filter with Nushell" in the Edit menu. It works on a folder and on search results.
 
 Type a `where` condition:
 
@@ -490,53 +365,30 @@ Or start with `|` to use a whole pipeline, which must keep the `path` column:
 | sort-by size --reverse | first 20
 ```
 
-The filter runs 400 ms after you stop typing, or right away when you press
-Return. The status bar counts how many items pass. Errors show in red below
-the bar. The close button removes the filter.
+The filter runs 400 ms after you stop typing, or right away when you press Return. The status bar counts how many items pass. Errors show in red below the bar. The close button removes the filter.
 
-While searching, the filter bar's **Save** button opens "Save Smart Folder".
-Name it, and the search, its scope folder, the kind, Name or Contents, and the
-filter are saved in the sidebar under Smart Folders. Clicking a Smart Folder
-runs the search again with the filter, so it stays up to date.
+While searching, the filter bar's **Save** button opens "Save Smart Folder". Name it, and the search, its scope folder, the kind, Name or Contents, and the filter are saved in the sidebar under Smart Folders. Clicking a Smart Folder runs the search again with the filter, so it stays up to date.
 
 ## Renaming several items
 
-Select several items and press F2, or choose "Rename N Items…", to rename them
-with a Nushell closure. The closure gets each item with `name`, `stem`, `ext`,
-`index` (starting at 1), `path`, `type`, `kind`, `size`, and `modified`, and
-returns the new name. It may take the item as a parameter (`{|f| $f.name }`)
-or as `$in`. Text that isn't a closure is used as the body, with the item as
-`$f`.
+Select several items and press F2, or choose "Rename N Items…", to rename them with a Nushell closure. The closure gets each item with `name`, `stem`, `ext`, `index` (starting at 1), `path`, `type`, `kind`, `size`, and `modified`, and returns the new name. It may take the item as a parameter (`{|f| $f.name }`) or as `$in`. Text that isn't a closure is used as the body, with the item as `$f`.
 
-Starting points are one click away: **Lowercase**, **Spaces to dashes**,
-**Number**, **Date first**, and **New extension**.
+Starting points are one click away: **Lowercase**, **Spaces to dashes**, **Number**, **Date first**, and **New extension**.
 
 ```nu
 {|f| $f.name | str downcase }
 {|f| $"($f.index | fill --alignment right --character '0' --width 3) ($f.name)" }
 ```
 
-The dialog previews every old and new name 300 ms after you stop typing, or
-when you press Return. It flags names that are empty, contain characters the
-system forbids, are too long, collide with each other, or already exist.
-**Rename** is enabled when at least one name changes and nothing is flagged.
-Renaming happens in two steps through temporary names, so swaps such as
-`a -> b, b -> a` and case-only changes work. If a step fails, the names that
-already changed are put back.
+The dialog previews every old and new name 300 ms after you stop typing, or when you press Return. It flags names that are empty, contain characters the system forbids, are too long, collide with each other, or already exist. **Rename** is enabled when at least one name changes and nothing is flagged. Renaming happens in two steps through temporary names, so swaps such as `a -> b, b -> a` and case-only changes work. If a step fails, the names that already changed are put back.
 
 Batch rename needs `nu`.
 
 ## Nushell actions
 
-Commands exported from `actions.nu` in the settings folder appear under
-**Nushell Actions** in the item menu and in the toolbar's Nushell menu. Each
-command's name becomes a menu label (`count lines` becomes "Count Lines"), and
-the comment above it describes it.
+Commands exported from `actions.nu` in the settings folder appear under **Nushell Actions** in the item menu and in the toolbar's Nushell menu. Each command's name becomes a menu label (`count lines` becomes "Count Lines"), and the comment above it describes it.
 
-An action receives the selected items as a table on `$in`, with the same
-columns as the [Nushell panel](#the-nushell-panel), and its result shows in
-the panel. Running an action fills in the panel's pipeline, so you can see and
-edit what ran.
+An action receives the selected items as a table on `$in`, with the same columns as the [Nushell panel](#the-nushell-panel), and its result shows in the panel. Running an action fills in the panel's pipeline, so you can see and edit what ran.
 
 The first time, fffinder writes starter actions:
 
@@ -548,13 +400,10 @@ The first time, fffinder writes starter actions:
 | Find Duplicates | Files with the same contents (SHA-256) among the selected files and everything inside the selected folders. Empty files and symbolic links are skipped. |
 | Archive | Packs the selection into `Archive <date time>.tar.gz` next to the first item. Items may come from different folders. |
 
-When a new version of fffinder changes the starters, it updates an
-`actions.nu` you never edited. A file you edited is left alone.
+When a new version of fffinder changes the starters, it updates an `actions.nu` you never edited. A file you edited is left alone.
 
-- **Edit Actions…** opens `actions.nu` in your editor, writing the starters
-  first if it is missing.
-- **Reload Actions** reads the file again. fffinder also reloads it on its
-  own within a few seconds of a save.
+- **Edit Actions…** opens `actions.nu` in your editor, writing the starters first if it is missing.
+- **Reload Actions** reads the file again. fffinder also reloads it on its own within a few seconds of a save.
 - If the file has an error, the submenu shows it as its first, disabled item.
 
 ```nu
@@ -566,23 +415,13 @@ export def "count lines" []: table -> table {
 
 ## Using your Nushell environment
 
-With **Use Nushell's file colors and editor** on in Settings, fffinder reads
-`$env.LS_COLORS`, `$env.config.buffer_editor`, `$VISUAL`, `$EDITOR`, and
-`PATH` from a `nu --login` session, so `config.nu` and `env.nu` apply.
+With **Use Nushell's file colors and editor** on in Settings, fffinder reads `$env.LS_COLORS`, `$env.config.buffer_editor`, `$VISUAL`, `$EDITOR`, and `PATH` from a `nu --login` session, so `config.nu` and `env.nu` apply.
 
-- File names are drawn the way `ls` draws them, using Nushell's default
-  colors when `LS_COLORS` isn't set: the color, a background behind the
-  letters (README, LICENSE-style names are black on light yellow in Nushell's
-  defaults), bold, italic, underline, strikethrough, dim, and reverse. A
-  selected item uses the selection colors instead.
-- "Open in Editor", "Edit Actions…", and the Open fallback use
-  `buffer_editor`, then `$VISUAL`, then `$EDITOR`.
-- Terminal editors (vi, vim, nvim, lvim, hx, helix, nano, pico, micro, kak,
-  joe, ne, mg, emacs, amp, ed, vis, jed, mcedit) open in the terminal you chose
-  for "Open Nushell Here". Others start directly.
+- File names are drawn the way `ls` draws them, using Nushell's default colors when `LS_COLORS` isn't set: the color, a background behind the letters (README, LICENSE-style names are black on light yellow in Nushell's defaults), bold, italic, underline, strikethrough, dim, and reverse. A selected item uses the selection colors instead.
+- "Open in Editor", "Edit Actions…", and the Open fallback use `buffer_editor`, then `$VISUAL`, then `$EDITOR`.
+- Terminal editors (vi, vim, nvim, lvim, hx, helix, nano, pico, micro, kak, joe, ne, mg, emacs, amp, ed, vis, jed, mcedit) open in the terminal you chose for "Open Nushell Here". Others start directly.
 
-Settings shows what was read, or why it couldn't be. With the option off,
-names use the theme's colors.
+Settings shows what was read, or why it couldn't be. With the option off, names use the theme's colors.
 
 ## Open Nushell Here and terminals
 
@@ -590,63 +429,64 @@ names use the theme's colors.
 
 - From the item menu, it uses the selected folder, or a file's folder.
 - From the empty-space menu or a sidebar row, it uses that folder.
-- Cmd+Alt+T ("Open in Nushell" in the Nushell menu) uses the selected item's
-  folder, the current folder, or your home folder.
+- Cmd+Alt+T ("Open in Nushell" in the Nushell menu) uses the selected item's folder, the current folder, or your home folder.
 
-Choose the terminal in Settings. **Automatic** uses the first of these that is
-installed:
+Choose the terminal in Settings. **Automatic** uses the first of these that is installed:
 
 - macOS: Ghostty, iTerm2, WezTerm, kitty, Alacritty, Rio, then Terminal.
 - Windows: Windows Terminal, WezTerm, Alacritty, then a plain console window.
-- Linux: `$TERMINAL` if it is set, then Ghostty, WezTerm, kitty, Alacritty,
-  Rio, foot, GNOME Terminal, Konsole, Xfce Terminal, any other terminal found,
-  the system default (`x-terminal-emulator`), and XTerm last.
+- Linux: `$TERMINAL` if it is set, then Ghostty, WezTerm, kitty, Alacritty, Rio, foot, GNOME Terminal, Konsole, Xfce Terminal, any other terminal found, the system default (`x-terminal-emulator`), and XTerm last.
 
 Terminals are found the way each system records them:
 
-- macOS: the `Info.plist` of every app in the Applications folders and of every
-  app the index finds. An app that adds a "New … Window Here" service and opens
-  shell scripts counts even if fffinder doesn't know it.
-- Linux: `.desktop` entries in the `TerminalEmulator` category, programs on
-  `PATH`, and AppImages in the index. Flatpak terminals are skipped, because
-  the sandbox can't see the host's `nu`.
-- Windows: the install folders, `PATH`, and the index, which finds portable
-  and Scoop installs.
+- macOS: the `Info.plist` of every app in the Applications folders and of every app the index finds. An app that adds a "New … Window Here" service and opens shell scripts counts even if fffinder doesn't know it.
+- Linux: `.desktop` entries in the `TerminalEmulator` category, programs on `PATH`, and AppImages in the index. Flatpak terminals are skipped, because the sandbox can't see the host's `nu`.
+- Windows: the install folders, `PATH`, and the index, which finds portable and Scoop installs.
 
 How each one starts:
 
-- Most terminals start with their own working-directory flag and run `nu`. On
-  macOS they open with `open -na <app> --args …`, so each starts as its own
-  app.
-- Terminal and iTerm2 on macOS open a small `.command` script that changes to
-  the folder and runs `nu`.
-- Ghostty on macOS opens a new window in the running app through AppleScript.
-  macOS asks once whether fffinder may control Ghostty. If Ghostty isn't
-  running, or you decline, a new Ghostty instance starts with
-  `--working-directory`. fffinder avoids Ghostty's `-e` flag because Ghostty
-  asks for confirmation every time it is used
-  ([ghostty discussion #10203](https://github.com/ghostty-org/ghostty/discussions/10203)).
-- **Custom Command** runs your own command. `{dir}` becomes the folder and
-  `{nu}` the path to `nu`, and quotes group words that contain spaces. For
-  example: `open -na WezTerm --args start --cwd {dir} -- {nu}`,
-  `wt.exe -d {dir} {nu}`, or `foot --working-directory={dir} {nu}`.
+- Most terminals start with their own working-directory flag and run `nu`. On macOS they open with `open -na <app> --args …`, so each starts as its own app.
+- Terminal and iTerm2 on macOS open a small `.command` script that changes to the folder and runs `nu`.
+- Ghostty on macOS opens a new window in the running app through AppleScript. macOS asks once whether fffinder may control Ghostty. If Ghostty isn't running, or you decline, a new Ghostty instance starts with `--working-directory`. fffinder avoids Ghostty's `-e` flag because Ghostty asks for confirmation every time it is used ([ghostty discussion #10203](https://github.com/ghostty-org/ghostty/discussions/10203)).
+- **Custom Command** runs your own command. `{dir}` becomes the folder and `{nu}` the path to `nu`, and quotes group words that contain spaces. For example: `open -na WezTerm --args start --cwd {dir} -- {nu}`, `wt.exe -d {dir} {nu}`, or `foot --working-directory={dir} {nu}`.
 
-If the terminal saved in Settings isn't installed, Automatic's choice is used
-and a notification says so. The choice is saved per operating system. See
-[settings.json](#settingsjson).
+If the terminal saved in Settings isn't installed, Automatic's choice is used and a notification says so. The choice is saved per operating system. See [settings.json](#settingsjson).
 
 ## Choosing files for scripts
 
-`fffinder --pick [PATH] [--multiple] [--query TEXT]` opens a chooser window.
-The picker bar at the bottom explains what to do and has **Cancel** and
-**Choose** buttons. "Choose" becomes "Choose N Items" with several selected.
+`fffinder --pick [PATH] [--multiple] [--query TEXT]` opens a chooser window. The picker bar at the bottom explains what to do and has **Cancel** and **Choose** buttons. "Choose" becomes "Choose N Items" with several selected.
 
-- Return, double-click on a file, **Choose**, or "Choose" or "Choose Items" in
-  the item menu prints a JSON array of absolute paths to stdout and exits 0.
+- Return, double-click on a file, **Choose**, or "Choose" or "Choose Items" in the item menu prints a JSON array of absolute paths to stdout and exits 0.
 - Double-clicking a folder opens it.
 - Escape or **Cancel** exits 1.
 
 `fff pick` in Nushell wraps it.
+
+## In a terminal
+
+`fffinder --term [PATH]` shows the window inside the terminal you run it in. It looks the same as the window: fffinder draws each frame offscreen on the GPU and sends it to the terminal as an image, so text, icons, and previews are the same pixels.
+
+It needs:
+
+- a build with the `term` feature: `nu scripts/install.nu --term`, or `cargo build --release --features term`.
+- macOS or Linux.
+- a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, or Konsole. It doesn't work inside tmux.
+
+Frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+
+What's different from the window:
+
+- The terminal keeps most Cmd shortcuts for itself, so each Cmd shortcut also works with Ctrl: Ctrl+Q quits, Ctrl+F searches, and Ctrl+1 to Ctrl+4 switch views. Menus show the Ctrl form. Ctrl+C copies the selected paths, like Cmd+C; it doesn't stop fffinder.
+- There's no menu bar. The item menu and the toolbar menus work as usual.
+- Pasting (Cmd+V in most terminals) types into the focused text field.
+- There's one window. Ctrl+Q, or closing it, quits and puts the terminal back.
+- Files can't be dragged out to other apps, and Settings can't open a folder dialog. Add search locations to [settings.json](#settingsjson) instead.
+- It keeps its own index, and doesn't hand off to a running fffinder or answer the [control socket](#the-control-socket).
+- `fffinder --term --pick` prints the chosen paths after the terminal is put back, so `fffinder --term --pick | from json` works.
+
+The window fills the terminal. When character cells are at least 24 pixels tall, as they usually are on a Retina screen, it's drawn at 2x, or less, down to 1x, to keep it at least 850 by 470 points; otherwise at 1x. Set `FFFINDER_TERM_SCALE`, such as `1.5`, to choose the scale.
+
+While fffinder has the terminal, anything it would print to stderr goes to `term.log` in the data folder. The log starts with the cell size, the scale, and how frames reach the terminal.
 
 ## Menus
 
@@ -695,18 +535,13 @@ Right-click empty space in a view:
 
 ### Nushell Actions submenu
 
-Your actions, then **Edit Actions…** and **Reload Actions**. See
-[Nushell actions](#nushell-actions).
+Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell actions](#nushell-actions).
 
 ### Toolbar menus
 
-- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Size,
-  Kind), Ascending, Descending, Show Hidden Files.
-- **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when
-  it is open), Nushell Actions, Copy as Nushell List.
-- **Actions** (…): New Folder, Quick Look, Rename…, Copy Path, Show in Finder,
-  Add Folder to Sidebar, Move to Trash, Filter with Nushell…, Go to Folder…,
-  Search Syntax…, Settings….
+- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Size, Kind), Ascending, Descending, Show Hidden Files.
+- **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
+- **Actions** (…): New Folder, Quick Look, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Filter with Nushell…, Go to Folder…, Search Syntax…, Settings….
 
 ## Keyboard shortcuts
 
@@ -780,20 +615,15 @@ Cmd on macOS, Ctrl elsewhere.
 
 ## Settings
 
-Cmd+, (or the gear in the sidebar footer, or Settings… in the Actions menu)
-opens Settings. Changes apply and save right away. **Done** closes it.
+Cmd+, (or the gear in the sidebar footer, or Settings… in the Actions menu) opens Settings. Changes apply and save right away. **Done** closes it.
 
 ### Search locations
 
-"This Computer" searches these folders, and their indexes stay live while
-fffinder runs. Each row shows the folder and its file count, or "indexing…"
-while it scans. The X button stops indexing that folder.
+"This Computer" searches these folders, and their indexes stay live while fffinder runs. Each row shows the folder and its file count, or "indexing…" while it scans. The X button stops indexing that folder.
 
 - **Add Folder…** chooses another folder to index.
-- **Index Entire Disk** replaces the list with the whole disk (`/`, or `C:\`
-  on Windows). The first scan takes longer and uses more memory.
-- **Reset** goes back to the defaults: your home folder, plus `/Applications`
-  on macOS.
+- **Index Entire Disk** replaces the list with the whole disk (`/`, or `C:\` on Windows). The first scan takes longer and uses more memory.
+- **Reset** goes back to the defaults: your home folder, plus `/Applications` on macOS.
 - **Rescan** rebuilds the index.
 
 ### Search engine
@@ -813,33 +643,18 @@ These are fff-search's options. Each change applies and saves right away.
 | Content search time limit | After this long a content search stops and shows what it found so far, even when that is nothing: None, or 1 to 60 seconds (5 by default). The status bar then says "stopped at the time limit". | `search.time_limit_secs` |
 | Search threads | Threads for name searches; Auto uses one per processor core. Content search always uses fff-search's own threads, one per performance core on macOS and one per core elsewhere. | `search.threads` |
 
-Changing one of the five switches rebuilds every index, so the file counts
-under Search locations start over. The other controls apply to the next
-search, and a search on screen runs again.
+Changing one of the five switches rebuilds every index, so the file counts under Search locations start over. The other controls apply to the next search, and a search on screen runs again.
 
 ### Appearance and text size
 
-- **System**, **Light**, **Dark**: the appearance. System follows the
-  operating system as it changes.
+- **System**, **Light**, **Dark**: the appearance. System follows the operating system as it changes.
 - **Show hidden files**.
-- **Text size**: a small "A" button, a large "A" button, and a percentage
-  label such as "100%" that resets it. It scales everything in the window
-  (text, controls, rows, the sidebar, the toolbar, and dialogs), like zooming,
-  from 80% to 200% in steps of 10%. It also multiplies the
-  [preview text size](#preview-text-size) and the
-  [Nushell text size](#nushell-text-size). It is saved as `ui_scale`, where
-  1.0 is 100%.
+- **Text size**: a small "A" button, a large "A" button, and a percentage label such as "100%" that resets it. It scales everything in the window (text, controls, rows, the sidebar, the toolbar, and dialogs), like zooming, from 80% to 200% in steps of 10%. It also multiplies the [preview text size](#preview-text-size) and the [Nushell text size](#nushell-text-size). It is saved as `ui_scale`, where 1.0 is 100%.
 
 ### Nushell
 
-- The path of the `nu` in use, or a note that it wasn't found. fffinder
-  looks at the `nu_path` setting, `PATH`, and the usual install folders
-  (`~/.cargo/bin`, `~/.local/bin`, Homebrew, `/usr/local/bin`, `/usr/bin`,
-  and on Windows `Programs\nu\bin`).
-- **Open Nushell Here in**: the terminal menu. It lists Automatic (with the
-  terminal it picks), each terminal found, **Custom Command**, and
-  **Detect Again**, which looks for terminals again. The line below explains the choice
-  and says it is saved for this operating system.
+- The path of the `nu` in use, or a note that it wasn't found. fffinder looks at the `nu_path` setting, `PATH`, and the usual install folders (`~/.cargo/bin`, `~/.local/bin`, Homebrew, `/usr/local/bin`, `/usr/bin`, and on Windows `Programs\nu\bin`).
+- **Open Nushell Here in**: the terminal menu. It lists Automatic (with the terminal it picks), each terminal found, **Custom Command**, and **Detect Again**, which looks for terminals again. The line below explains the choice and says it is saved for this operating system.
 - **Try It** opens Nushell in the current folder with the chosen terminal.
 - The custom command field, when Custom Command is chosen.
 - **Use Nushell's file colors and editor**, with a line saying what was read.
@@ -848,21 +663,11 @@ search, and a search on screen runs again.
 
 ### Nushell text size
 
-The Nushell text size setting has a small "A" button and a large "A" button
-that change it by one point, and a size label such as "12 pt" that resets it.
-It sizes the [Nushell panel](#the-nushell-panel) (the
-pipeline field, the examples, text results, errors, and tables), so the
-results of [Nushell actions](#nushell-actions) use it too. It also sizes the
-action names in the Nushell Actions submenu. It ranges from 8 to 32 points,
-defaults to 12, and is saved as `nu_font_size`.
+The Nushell text size setting has a small "A" button and a large "A" button that change it by one point, and a size label such as "12 pt" that resets it. It sizes the [Nushell panel](#the-nushell-panel) (the pipeline field, the examples, text results, errors, and tables), so the results of [Nushell actions](#nushell-actions) use it too. It also sizes the action names in the Nushell Actions submenu. It ranges from 8 to 32 points, defaults to 12, and is saved as `nu_font_size`.
 
 ## settings.json
 
-Settings live in `settings.json` in the settings folder (see
-[Files, folders, and environment variables](#files-folders-and-environment-variables)).
-fffinder writes it shortly after each change, through a temporary file so a
-crash never leaves it half written. Missing fields use their defaults, and a
-file that can't be read falls back to defaults.
+Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change, through a temporary file so a crash never leaves it half written. Missing fields use their defaults, and a file that can't be read falls back to defaults.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -901,11 +706,7 @@ The `search` record:
 | `time_limit_secs` | `5` | Content search time limit; `0` means none. |
 | `threads` | `0` | Name search threads; `0` means one per core. |
 
-Terminal ids: `ghostty`, `iterm2`, `wezterm`, `kitty`, `alacritty`, `rio`,
-`foot`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `terminal` (macOS
-Terminal), `xterm`, `windows-terminal`, `x-terminal-emulator`, and `console`
-(Windows console window). Terminals known only from their metadata use
-`app:<bundle id>` on macOS and `desktop:<entry>` on Linux.
+Terminal ids: `ghostty`, `iterm2`, `wezterm`, `kitty`, `alacritty`, `rio`, `foot`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `terminal` (macOS Terminal), `xterm`, `windows-terminal`, `x-terminal-emulator`, and `console` (Windows console window). Terminals known only from their metadata use `app:<bundle id>` on macOS and `desktop:<entry>` on Linux.
 
 ```json
 "terminals": {
@@ -917,23 +718,16 @@ Terminal), `xterm`, `windows-terminal`, `x-terminal-emulator`, and `console`
 
 ## The fff Nushell module
 
-`nu/fff.nu` is a Nushell module. The app bundle includes a copy. Load it from
-your config:
+`nu/fff.nu` is a Nushell module. The app bundle includes a copy. Load it from your config:
 
 ```nu
 use /path/to/fffinder/nu/fff.nu *
 fff keybindings
 ```
 
-Most commands ask the running fffinder over its [control
-socket](#the-control-socket), so nothing is scanned in the shell and results
-come from the window's live index. When no window is running they fail with
-"no fffinder window is running"; `fff gui` starts one. `fff show` starts it
-for you.
+Most commands ask the running fffinder over its [control socket](#the-control-socket), so nothing is scanned in the shell and results come from the window's live index. When no window is running they fail with "no fffinder window is running"; `fff gui` starts one. `fff show` starts it for you.
 
-The module finds the app through `$env.FFFINDER_BIN`, then `PATH`, then
-`/Applications/fffinder.app` and `~/Applications/fffinder.app`, then a
-release or debug build in the repository.
+The module finds the app through `$env.FFFINDER_BIN`, then `PATH`, then `/Applications/fffinder.app` and `~/Applications/fffinder.app`, then a release or debug build in the repository.
 
 | Command | What it does |
 | --- | --- |
@@ -955,28 +749,21 @@ release or debug build in the repository.
 
 ## The control socket
 
-The control socket is experimental. Its endpoints may change between
-versions.
+The control socket is experimental. Its endpoints may change between versions.
 
-A running fffinder answers requests about its index, and requests to show
-things, over a local connection:
+A running fffinder answers requests about its index, and requests to show things, over a local connection:
 
-- macOS and Linux: a Unix socket at `run/fffinder.sock` in the data folder,
-  readable only by you.
-- Windows: `127.0.0.1` on a random port, with a random token required on every
-  request.
+- macOS and Linux: a Unix socket at `run/fffinder.sock` in the data folder, readable only by you.
+- Windows: `127.0.0.1` on a random port, with a random token required on every request.
 
-`run/server.json` in the data folder says where to connect. The endpoints are
-plain HTTP with JSON, so Nushell can call them directly:
+`run/server.json` in the data folder says where to connect. The endpoints are plain HTTP with JSON, so Nushell can call them directly:
 
 ```nu
 let sock = ($nu.data-dir | path dirname | path join fffinder run fffinder.sock)
 http get --unix-socket $sock 'http://localhost/v1/find?query=readme&limit=5'
 ```
 
-[protocol.md](protocol.md) documents every endpoint: status, find, files, dirs,
-search, watch, selection, show, and open. A second launch of fffinder uses
-`POST /v1/open` to hand off to the running copy.
+[protocol.md](protocol.md) documents every endpoint: status, find, files, dirs, search, watch, selection, show, and open. A second launch of fffinder uses `POST /v1/open` to hand off to the running copy.
 
 ## Files, folders, and environment variables
 
@@ -985,15 +772,13 @@ search, watch, selection, show, and open. A second launch of fffinder uses
 | Settings | `~/Library/Application Support/fffinder` | `~/.config/fffinder` | `%APPDATA%\fffinder` |
 | Data | `~/Library/Application Support/fffinder` | `$XDG_DATA_HOME/fffinder`, else `~/.local/share/fffinder` | `%LOCALAPPDATA%\fffinder` |
 
-The settings folder holds `settings.json` and `actions.nu`. The data folder
-holds:
+The settings folder holds `settings.json` and `actions.nu`. The data folder holds:
 
 - `run/`: the socket and `server.json`, removed on a normal quit.
-- `gui/`: the frecency and search-history databases that rank Recents and
-  repeat searches.
-- `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one
-  per app or special folder.
+- `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
+- `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
+- `term.log`: stderr from the last `fffinder --term`.
 
 | Variable | Effect |
 | --- | --- |
@@ -1002,45 +787,35 @@ holds:
 | `FFFINDER_WATCHDOG=1` | When the window stops responding for three seconds, save every thread's stack to `hang-<time>.txt` in the data folder (with `sample` on macOS) and print where. Other systems print the process ID to attach a debugger to. |
 | `FFFINDER_BIN` | Where the `fff` module finds the app. |
 | `FFFINDER_SOFTWARE_RENDERING` | On Linux, `1` draws with Mesa's software renderers and skips the GPU drivers, like `--software-rendering`, and `0` never does, even with no GPU device. See [Without a GPU](#without-a-gpu-wsl2-and-virtual-machines). |
+| `FFFINDER_TERM_SCALE` | With `--term`, device pixels per point, such as `2` or `1.5`. See [In a terminal](#in-a-terminal). |
 | `TERMINAL` | On Linux, the terminal Automatic prefers. |
 
-The app used to be called fff-Finder. The variables still work with the old
-prefix, `FFF_FINDER_`. The first time fffinder starts, it moves its folders
-from `fff-Finder` to `fffinder`, unless you set the folder variables above.
+The app used to be called fff-Finder. The variables still work with the old prefix, `FFF_FINDER_`. The first time fffinder starts, it moves its folders from `fff-Finder` to `fffinder`, unless you set the folder variables above.
 
 ## Appearance
 
-fffinder has light and dark themes, chosen in Settings or switched with
-Cmd+Shift+D. With System, it follows the operating system as it changes.
+fffinder has light and dark themes, chosen in Settings or switched with Cmd+Shift+D. With System, it follows the operating system as it changes.
 
 On macOS it looks like Finder:
 
-- File and folder icons are the ones Finder shows, drawn by macOS. Special
-  folders and apps get their own icons. New icons fill in over a few frames
-  instead of making the window wait.
+- File and folder icons are the ones Finder shows, drawn by macOS. Special folders and apps get their own icons. New icons fill in over a few frames instead of making the window wait.
 - The sidebar uses Finder's sidebar icons, tinted with the accent color.
 - The colors were measured from macOS's own light and dark appearances.
-- The accent and selection colors follow System Settings. fffinder reads
-  them when it starts, so restart it after changing them.
+- The accent and selection colors follow System Settings. fffinder reads them when it starts, so restart it after changing them.
 
 Linux and Windows use the same colors with fffinder's own icons.
 
 ## Names
 
-The app, its bundle, and its packages are named fffinder, all lowercase: the
-packages are `fffinder` and `fffinder-core`, which Rust code calls `fffinder`
-and `fffinder_core`. Environment variables are uppercase, as `FFFINDER_*`.
+The app, its bundle, and its packages are named fffinder, all lowercase: the packages are `fffinder` and `fffinder-core`, which Rust code calls `fffinder` and `fffinder_core`. Environment variables are uppercase, as `FFFINDER_*`.
 
 ## Building
 
-You need Rust 1.92 or newer, Nushell 0.116 for the scripts, and each
-platform's build tools and libraries below.
+You need Rust 1.92 or newer, Nushell 0.116 for the scripts, and each platform's build tools and libraries below.
 
 ### macOS
 
-Install the Xcode Command Line Tools with `xcode-select --install`. Full
-Xcode isn't needed. `scripts/bundle.nu` also uses `qlmanage`, `sips`,
-`iconutil`, and `codesign`, which come with macOS.
+Install the Xcode Command Line Tools with `xcode-select --install`. Full Xcode isn't needed. `scripts/bundle.nu` also uses `qlmanage`, `sips`, `iconutil`, and `codesign`, which come with macOS.
 
 ### Linux
 
@@ -1051,8 +826,7 @@ sudo apt install gcc g++ clang pkg-config libfontconfig-dev libwayland-dev \
   libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev libvulkan1
 ```
 
-On Fedora and Arch, these should be the same packages, but nobody has tested
-them yet:
+On Fedora and Arch, these should be the same packages, but nobody has tested them yet:
 
 ```sh
 sudo dnf install gcc gcc-c++ clang pkgconf-pkg-config fontconfig-devel wayland-devel \
@@ -1061,17 +835,11 @@ sudo pacman -S --needed base-devel clang fontconfig wayland libxkbcommon-x11 lib
   libxcb openssl zstd vulkan-icd-loader
 ```
 
-To run fffinder you also need a Vulkan or OpenGL driver. Mesa's drivers
-(`mesa-vulkan-drivers` on Debian, Ubuntu, and Fedora; `vulkan-radeon` or
-`vulkan-intel` on Arch) cover AMD and Intel GPUs, and NVIDIA's driver brings
-its own. Desktop installs usually have one already.
+To run fffinder you also need a Vulkan or OpenGL driver. Mesa's drivers (`mesa-vulkan-drivers` on Debian, Ubuntu, and Fedora; `vulkan-radeon` or `vulkan-intel` on Arch) cover AMD and Intel GPUs, and NVIDIA's driver brings its own. Desktop installs usually have one already.
 
 ### Windows
 
-Install the Visual Studio 2022 Build Tools with the "Desktop development with
-C++" workload, which includes the MSVC compiler and the Windows SDK. The build
-uses the SDK's resource compiler, `rc.exe`, to put the app icon into
-`fffinder.exe`, so Explorer, the taskbar, and the title bar show it.
+Install the Visual Studio 2022 Build Tools with the "Desktop development with C++" workload, which includes the MSVC compiler and the Windows SDK. The build uses the SDK's resource compiler, `rc.exe`, to put the app icon into `fffinder.exe`, so Explorer, the taskbar, and the title bar show it.
 
 ### Scripts
 
@@ -1083,48 +851,26 @@ uses the SDK's resource compiler, `rc.exe`, to put the app icon into
 | `scripts/screenshots.nu` | Renders `docs/images` (macOS). |
 | `scripts/windows-icon.nu` | Renders `assets/app-icon.svg` into `assets/windows/fffinder.ico`, the icon the Windows build embeds (macOS). Run it after changing the SVG. |
 
-The scripts ask Cargo where it builds, so `CARGO_TARGET_DIR` and
-`build.target-dir` in a Cargo config work. When the app isn't installed, the
-`fff` module looks for a build in `$env.CARGO_TARGET_DIR`, then in `target/`.
+The scripts ask Cargo where it builds, so `CARGO_TARGET_DIR` and `build.target-dir` in a Cargo config work. When the app isn't installed, the `fff` module looks for a build in `$env.CARGO_TARGET_DIR`, then in `target/`.
 
 ### Without a GPU (WSL2 and virtual machines)
 
-On Linux, fffinder draws with the first graphics driver that works, trying
-GPUs before Mesa's software renderers (llvmpipe for OpenGL, lavapipe for
-Vulkan), which run on the CPU. With no usable GPU, as in WSL2 without GPU
-support and in many virtual machines, it ends up drawing in software.
+On Linux, fffinder draws with the first graphics driver that works, trying GPUs before Mesa's software renderers (llvmpipe for OpenGL, lavapipe for Vulkan), which run on the CPU. With no usable GPU, as in WSL2 without GPU support and in many virtual machines, it ends up drawing in software.
 
-On the way, Mesa can print a warning for each hardware driver it tried, such
-as `libEGL warning: failed to get driver for name fd -1`,
-`MESA-LOADER: failed to retrieve device information`, and
-`MESA: error: ZINK: failed to choose pdev`. If the window opens and draws,
-they're harmless.
+On the way, Mesa can print a warning for each hardware driver it tried, such as `libEGL warning: failed to get driver for name fd -1`, `MESA-LOADER: failed to retrieve device information`, and `MESA: error: ZINK: failed to choose pdev`. If the window opens and draws, they're harmless.
 
-fffinder goes straight to the software renderers, skipping the hardware
-drivers and their warnings, when:
+fffinder goes straight to the software renderers, skipping the hardware drivers and their warnings, when:
 
 - you pass `--software-rendering`, or set `FFFINDER_SOFTWARE_RENDERING=1`.
-- the system shows no GPU device at all: nothing in `/dev/dri`, no `/dev/dxg`
-  (WSL's GPU), and no `/dev/nvidia*`. No hardware driver could work then.
-  `FFFINDER_SOFTWARE_RENDERING=0` turns this off.
+- the system shows no GPU device at all: nothing in `/dev/dri`, no `/dev/dxg` (WSL's GPU), and no `/dev/nvidia*`. No hardware driver could work then. `FFFINDER_SOFTWARE_RENDERING=0` turns this off.
 
-It doesn't switch on its own just because it runs in WSL2 or a virtual
-machine, since many of those have a working GPU: WSLg passes the Windows GPU
-through `/dev/dxg`, and virtual machines often have a 3D-capable virtual GPU.
-When a GPU device exists but no driver for it works, fffinder falls back to
-software by itself and prints one line on stderr that says so and suggests
-the flag:
+It doesn't switch on its own just because it runs in WSL2 or a virtual machine, since many of those have a working GPU: WSLg passes the Windows GPU through `/dev/dxg`, and virtual machines often have a 3D-capable virtual GPU. When a GPU device exists but no driver for it works, fffinder falls back to software by itself and prints one line on stderr that says so and suggests the flag:
 
 ```text
 fffinder: no GPU driver worked; drawing in software with llvmpipe (…). Pass --software-rendering …
 ```
 
-Software rendering sets Mesa's `LIBGL_ALWAYS_SOFTWARE=1` and the Vulkan
-loader's `VK_LOADER_DRIVERS_SELECT=*lvp*` (Vulkan loader 1.3.234 or newer),
-unless you've set them yourself. In WSLg that also stops it from using the
-Windows GPU. It needs Mesa's software drivers: `libgl1-mesa-dri` and `mesa-vulkan-drivers` on
-Debian and Ubuntu. To make it stick for the desktop entry, change its `Exec`
-line to `fffinder --software-rendering %f`.
+Software rendering sets Mesa's `LIBGL_ALWAYS_SOFTWARE=1` and the Vulkan loader's `VK_LOADER_DRIVERS_SELECT=*lvp*` (Vulkan loader 1.3.234 or newer), unless you've set them yourself. In WSLg that also stops it from using the Windows GPU. It needs Mesa's software drivers: `libgl1-mesa-dri` and `mesa-vulkan-drivers` on Debian and Ubuntu. To make it stick for the desktop entry, change its `Exec` line to `fffinder --software-rendering %f`.
 
 ## Development
 
@@ -1136,43 +882,25 @@ cargo run -- ~/src --query readme    # run from source
 
 ### Tests
 
-The UI tests open the real window headlessly and use it with mouse clicks and
-key presses:
+The UI tests open the real window headlessly and use it with mouse clicks and key presses:
 
-- `tests/controls.rs` clicks every control and checks what each click changed:
-  toolbar buttons and menus, the search field and scope bar, the filter bar,
-  sidebar rows and Smart Folders, the path bar, the icon-size slider, list
-  headers, items in all four views, context menus and Nushell actions, every
-  button and field in every dialog (batch rename included), the Nushell panel,
-  and the picker bar.
-- `tests/finder.rs` presses every keyboard shortcut except Quit and New Window,
-  which belong to the app rather than the window, and types to select.
-- `tests/server.rs` talks to the socket server, and `tests/nu_module.rs` runs
-  `fff.nu` in a real `nu` against it.
+- `tests/controls.rs` clicks every control and checks what each click changed: toolbar buttons and menus, the search field and scope bar, the filter bar, sidebar rows and Smart Folders, the path bar, the icon-size slider, list headers, items in all four views, context menus and Nushell actions, every button and field in every dialog (batch rename included), the Nushell panel, and the picker bar.
+- `tests/finder.rs` presses every keyboard shortcut except Quit and New Window, which belong to the app rather than the window, and types to select.
+- `tests/server.rs` talks to the socket server, and `tests/nu_module.rs` runs `fff.nu` in a real `nu` against it.
 
-A step that runs longer than 20 seconds fails the run and names the step, so a
-hang shows up as a failure instead of a `cargo test` that never ends. Opening a
-file or showing it in Finder is recorded instead of performed, and nothing is
-moved to the Trash.
+A step that runs longer than 20 seconds fails the run and names the step, so a hang shows up as a failure instead of a `cargo test` that never ends. Opening a file or showing it in Finder is recorded instead of performed, and nothing is moved to the Trash.
 
 ### Example tools
 
-`examples/drive.rs` replays the same kind of steps in the visible window
-against your real index and prints the window's state after each one. It
-never writes your settings.
+`examples/drive.rs` replays the same kind of steps in the visible window against your real index and prints the window's state after each one. It never writes your settings.
 
 ```nu
 cargo run --example drive -- key:cmd-, click:show-hidden key:escape key:cmd-shift-g 'type:~/src' key:enter
 ```
 
-`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change
-can be checked without opening it. `examples/macos_colors.rs` prints the
-macOS colors the themes are based on, in light and dark.
+`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change can be checked without opening it. `examples/macos_colors.rs` prints the macOS colors the themes are based on, in light and dark.
 
-`examples/terminals.rs` lists the terminals found and what Automatic picks.
-With `--verify` it opens each one with a short script in place of `nu` that
-records the folder it started in, then closes it. Terminal and iTerm2 keep
-their windows open, so it checks them only when you name them.
+`examples/terminals.rs` lists the terminals found and what Automatic picks. With `--verify` it opens each one with a short script in place of `nu` that records the folder it started in, then closes it. Terminal and iTerm2 keep their windows open, so it checks them only when you name them.
 
 ```nu
 cargo run --example terminals -- --verify
@@ -1180,7 +908,4 @@ cargo run --example terminals -- --verify
 
 ### Hangs
 
-If the window ever stops responding, run it with `FFFINDER_WATCHDOG=1`. After
-three seconds without a response it saves every thread's stack to
-`hang-<time>.txt` in the data folder and prints the path. Other platforms print
-the process ID to attach a debugger to.
+If the window ever stops responding, run it with `FFFINDER_WATCHDOG=1`. After three seconds without a response it saves every thread's stack to `hang-<time>.txt` in the data folder and prints the path. Other platforms print the process ID to attach a debugger to.

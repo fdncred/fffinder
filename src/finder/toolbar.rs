@@ -153,7 +153,9 @@ impl Finder {
         let pal = palette(cx);
         let view = cx.entity();
         let mode = self.config.view_mode;
-        let traffic = cfg!(target_os = "macos") && !self.config.show_sidebar;
+        // A terminal window has no traffic lights to make room for.
+        let traffic =
+            cfg!(target_os = "macos") && !self.config.show_sidebar && !crate::term::active();
         let can_back = self.history.can_back();
         let can_forward = self.history.can_forward();
 
