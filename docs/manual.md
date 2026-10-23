@@ -46,7 +46,10 @@ Run `fffinder`, open the app bundle, or use `fff gui` from Nushell.
 ```text
 fffinder [PATH] [OPTIONS]
 
-  [PATH]             Folder to open (default: last folder or home)
+  [PATH]             Folder to open (default: the current folder with --term,
+                     else the last folder or home)
+  -s, --startup-path PATH
+                     Folder to open, same as [PATH] (also --startup-path=PATH)
   -q, --query TEXT   Start with this search (also --query=TEXT)
       --pick         Choose files and print them as JSON to stdout
       --multiple     With --pick, allow choosing several items (also -m)
@@ -58,8 +61,9 @@ fffinder [PATH] [OPTIONS]
   -V, --version      Show the version
 ```
 
+- `--startup-path` (`-s`) is another way to give PATH. Give one or the other, not both.
 - A PATH that is a file opens its folder.
-- With no PATH, the window opens the folder you last had open, or your home folder if that folder is gone.
+- With no PATH, the window opens the folder you last had open, or your home folder if that folder is gone. With `--term`, it opens the folder you ran it from.
 - If fffinder is already running, a second launch hands its PATH and `--query` to the running copy, which opens a window, and then exits. There is always one app and one index. `--pick` windows are separate and never hand off.
 - On macOS, fffinder keeps running after you close its last window, like Finder, so the index stays warm for Nushell. Clicking the Dock icon opens a new window. On Linux and Windows, closing the last window quits.
 - `--detach` starts fffinder in the background and returns at once. `fff gui` uses it.
@@ -464,7 +468,7 @@ If the terminal saved in Settings isn't installed, Automatic's choice is used an
 
 ## In a terminal
 
-`fffinder --term [PATH]` shows the window inside the terminal you run it in. It looks the same as the window: fffinder draws each frame offscreen on the GPU and sends it to the terminal as an image, so text, icons, and previews are the same pixels.
+`fffinder --term [PATH]` shows the window inside the terminal you run it in, at PATH or else the folder you ran it from. It looks the same as the window: fffinder draws each frame offscreen on the GPU and sends it to the terminal as an image, so text, icons, and previews are the same pixels.
 
 It needs:
 

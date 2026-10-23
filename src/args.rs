@@ -1,5 +1,5 @@
-//! Command line: `fffinder [PATH] [--query TEXT] [--pick] [--multiple] [--detach]
-//! [--term] [--software-rendering]`.
+//! Command line: `fffinder [PATH] [--startup-path PATH] [--query TEXT] [--pick]
+//! [--multiple] [--detach] [--term] [--software-rendering]`.
 //!
 //! `--pick` turns the window into a chooser for scripts (used by `fff pick`):
 //! choosing prints a JSON array of absolute paths and exits 0; cancelling exits 1.
@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Args {
+    /// The folder to open, from `[PATH]` or `--startup-path`.
     pub path: Option<PathBuf>,
     pub query: Option<String>,
     pub pick: bool,
@@ -27,9 +28,12 @@ fffinder - fast Finder-style file search
 Usage: fffinder [PATH] [OPTIONS]
 
 Arguments:
-  [PATH]             Folder to open (default: last folder or home)
+  [PATH]             Folder to open (default: the current folder with --term,
+                     else the last folder or home)
 
 Options:
+  -s, --startup-path PATH
+                     Folder to open, same as [PATH]
   -q, --query TEXT   Start with this search
       --pick         Choose files and print them as JSON to stdout
       --multiple     With --pick, allow choosing several items
@@ -61,6 +65,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
             "--detach" => out.detach = true,
             "--term" => out.term = true,
             "--software-rendering" => out.software_rendering = true,
+            "-s" | "--startup-path" => {
+                let value = iter.next().ok_or("--startup-path needs a value")?;
+                set_path(&mut out, value.into())?;
+            }
+            _ if text.starts_with("--startup-path=") => {
+                set_path(&mut out, text["--startup-path=".len()..].into())?;
+            }
             "-q" | "--query" => {
                 let value = iter.next().ok_or("--query needs a value")?;
                 out.query = Some(value.to_string_lossy().into_owned());
@@ -73,18 +84,23 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
             _ if text.starts_with('-') && text.len() > 1 => {
                 return Err(format!("unknown option: {text}"));
             }
-            _ => {
-                if out.path.is_some() {
-                    return Err(format!("unexpected argument: {text}"));
-                }
-                out.path = Some(PathBuf::from(arg));
-            }
+            _ => set_path(&mut out, arg.into())?,
         }
     }
     if out.term && out.detach {
         return Err("--term and --detach can't be used together".into());
     }
     Ok(Parsed::Run(out))
+}
+
+/// Record the folder to open, which `[PATH]` and `--startup-path` share, so
+/// only one of them can be given, once.
+fn set_path(out: &mut Args, path: PathBuf) -> Result<(), String> {
+    if out.path.is_some() {
+        return Err(format!("a folder was already given: {}", path.display()));
+    }
+    out.path = Some(path);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -128,6 +144,24 @@ mod tests {
         };
         assert!(args.software_rendering);
         assert_eq!(args.path, Some("/tmp".into()));
+    }
+
+    #[test]
+    fn parses_startup_path() {
+        for args in [
+            &["-s", "/tmp"][..],
+            &["--startup-path", "/tmp"],
+            &["--startup-path=/tmp"],
+        ] {
+            let Parsed::Run(parsed) = run(args).unwrap() else {
+                panic!("expected a run");
+            };
+            assert_eq!(parsed.path, Some("/tmp".into()), "{args:?}");
+        }
+        assert!(run(&["--startup-path"]).is_err());
+        assert!(run(&["-s"]).is_err());
+        assert!(run(&["/tmp", "-s", "/var"]).is_err());
+        assert!(run(&["--startup-path=/tmp", "/var"]).is_err());
     }
 
     #[test]

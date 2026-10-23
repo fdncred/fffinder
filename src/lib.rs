@@ -31,7 +31,10 @@ use std::path::PathBuf;
 pub fn run(args: args::Args) {
     config::migrate_legacy_dirs();
     let config = Config::load();
-    let start = start_location(args.path.as_ref(), &config);
+    // A window in a terminal opens where it was started, like a shell command.
+    // `bool::then` gives `Some(current_dir())` only with `--term`.
+    let cwd = args.term.then(std::env::current_dir).and_then(Result::ok);
+    let start = start_location(args.path.as_ref().or(cwd.as_ref()), &config);
     let picker = args.pick.then_some(PickerOptions {
         multiple: args.multiple,
     });
