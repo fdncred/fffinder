@@ -55,6 +55,7 @@ fffinder [PATH] [OPTIONS]
       --multiple     With --pick, allow choosing several items (also -m)
       --detach       Start in the background and return right away
       --term         Show the window inside this terminal (kitty graphics)
+      --fps          With --term, show frames per second in the status bar
       --software-rendering
                      Draw without a GPU (Linux)
   -h, --help         Show this help
@@ -69,6 +70,7 @@ fffinder [PATH] [OPTIONS]
 - `--detach` starts fffinder in the background and returns at once. `fff gui` uses it.
 - `--pick` turns the window into a file chooser. See [Choosing files for scripts](#choosing-files-for-scripts).
 - `--term` shows the window inside the terminal instead. See [In a terminal](#in-a-terminal).
+- `--fps`, with `--term`, shows in the status bar how many frames a second reach the terminal.
 - `--software-rendering` draws with Mesa's software renderers instead of a GPU, on Linux. It only applies when it starts the app, not when it hands off to a running copy. See [Without a GPU](#without-a-gpu-wsl2-and-virtual-machines).
 
 Indexing starts as soon as the app starts. The first scan has to finish before "This Computer" searches return results.
@@ -476,7 +478,7 @@ It needs:
 - macOS or Linux.
 - a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, or Konsole. It doesn't work inside tmux.
 
-Frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+Frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. fffinder draws a frame only when something on screen changes, at most about 60 a second, and when the terminal falls behind it skips ahead to the newest frame. `fffinder --term --fps` shows the rate in the status bar: the frames that reached the terminal in the last second, so an idle window reads 0. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
 
 What's different from the window:
 

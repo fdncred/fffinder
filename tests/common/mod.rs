@@ -135,6 +135,8 @@ pub struct Open {
     /// Terminals for "Open Nushell Here"; none by default, so tests never
     /// depend on what is installed.
     pub terminals: Vec<Terminal>,
+    /// Frames per second in the status bar, as with `--fps`.
+    pub fps: bool,
 }
 
 impl<'a> Ui<'a> {
@@ -164,6 +166,9 @@ impl<'a> Ui<'a> {
                 Appearance::Light,
             );
             cx.set_global(Recorder::default());
+            if options.fps {
+                cx.set_global(fffinder::finder::ShowFps);
+            }
             // Dialogs slide in on a wall-clock animation; under load a click
             // could land while one is still moving.
             cx.set_reduce_motion(true);

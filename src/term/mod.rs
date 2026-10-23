@@ -10,7 +10,7 @@
 //! Needs the `term` cargo feature, macOS or Linux, and a terminal with kitty
 //! graphics.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(all(feature = "term", unix))]
 mod input;
@@ -24,10 +24,19 @@ mod tty;
 mod window;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Frames written to the terminal; the writer thread counts them.
+static FRAMES: AtomicU64 = AtomicU64::new(0);
 
 /// Whether this process draws its window in the terminal.
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
+}
+
+/// How many frames have reached the terminal so far. Frames that arrived
+/// while the terminal was still taking an earlier one, and were replaced by
+/// a newer one, don't count. Always 0 outside the terminal.
+pub fn frames_shown() -> u64 {
+    FRAMES.load(Ordering::Relaxed)
 }
 
 /// Take over the terminal and return an app whose window is drawn there.

@@ -1,5 +1,5 @@
 //! Command line: `fffinder [PATH] [--startup-path PATH] [--query TEXT] [--pick]
-//! [--multiple] [--detach] [--term] [--software-rendering]`.
+//! [--multiple] [--detach] [--term] [--fps] [--software-rendering]`.
 //!
 //! `--pick` turns the window into a chooser for scripts (used by `fff pick`):
 //! choosing prints a JSON array of absolute paths and exits 0; cancelling exits 1.
@@ -18,6 +18,8 @@ pub struct Args {
     pub detach: bool,
     /// Draw the window inside this terminal instead of opening one.
     pub term: bool,
+    /// With `term`, show frames per second in the status bar.
+    pub fps: bool,
     /// Draw with Mesa's software renderers instead of a GPU (Linux).
     pub software_rendering: bool,
 }
@@ -39,6 +41,7 @@ Options:
       --multiple     With --pick, allow choosing several items
       --detach       Start in the background and return right away
       --term         Show the window inside this terminal (kitty graphics)
+      --fps          With --term, show frames per second in the status bar
       --software-rendering
                      Draw without a GPU (Linux)
   -h, --help         Show this help
@@ -64,6 +67,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
             "--multiple" | "-m" => out.multiple = true,
             "--detach" => out.detach = true,
             "--term" => out.term = true,
+            "--fps" => out.fps = true,
             "--software-rendering" => out.software_rendering = true,
             "-s" | "--startup-path" => {
                 let value = iter.next().ok_or("--startup-path needs a value")?;
@@ -89,6 +93,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Parsed, String>
     }
     if out.term && out.detach {
         return Err("--term and --detach can't be used together".into());
+    }
+    if out.fps && !out.term {
+        return Err("--fps needs --term".into());
     }
     Ok(Parsed::Run(out))
 }
@@ -123,6 +130,7 @@ mod tests {
                 multiple: true,
                 detach: false,
                 term: false,
+                fps: false,
                 software_rendering: false,
             })
         );
@@ -134,7 +142,17 @@ mod tests {
             panic!("expected a run");
         };
         assert!(args.term && args.pick);
+        assert!(!args.fps);
         assert!(run(&["--term", "--detach"]).is_err());
+    }
+
+    #[test]
+    fn parses_fps_only_with_term() {
+        let Parsed::Run(args) = run(&["--fps", "--term"]).unwrap() else {
+            panic!("expected a run");
+        };
+        assert!(args.term && args.fps);
+        assert_eq!(run(&["--fps"]), Err("--fps needs --term".into()));
     }
 
     #[test]

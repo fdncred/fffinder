@@ -311,6 +311,7 @@ impl Finder {
             .indexing_progress()
             .filter(|_| !self.config.show_sidebar);
         let icons = self.effective_view() == ViewMode::Icons;
+        let fps = self.fps.as_ref().and_then(|meter| meter.fps());
         h_flex()
             .h(ui(28.))
             .flex_shrink_0()
@@ -340,6 +341,16 @@ impl Finder {
                 )
             })
             .child(div().flex_1())
+            .when_some(fps, |this, fps| {
+                this.child(
+                    div()
+                        .id("fps")
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_size(ui(10.5))
+                        .child(format!("{fps} fps"))
+                        .test_support(),
+                )
+            })
             .when(icons, |this| {
                 this.child(
                     h_flex()

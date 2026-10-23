@@ -6,6 +6,7 @@ mod batch_rename;
 mod dialogs;
 mod editor;
 mod filter;
+mod fps;
 mod menus;
 mod nu_panel;
 mod preview;
@@ -34,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+pub use fps::ShowFps;
 pub use menus::reveal_label;
 pub use preview::Preview;
 pub use views::path_id;
@@ -232,6 +234,9 @@ pub struct Finder {
     search_settings_task: Task<()>,
     watch_task: Task<()>,
     save_task: Task<()>,
+    /// Frames per second for the status bar, with `--fps`.
+    fps: Option<fps::FpsMeter>,
+    fps_task: Task<()>,
 
     icon_slider: Entity<SliderState>,
     dialog_sub: Option<Subscription>,
@@ -386,6 +391,8 @@ impl Finder {
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
+            fps: None,
+            fps_task: Task::ready(()),
             icon_slider,
             dialog_sub: None,
             persist: true,
@@ -398,6 +405,9 @@ impl Finder {
         this.watch_folder(cx);
         this.detect_terminals(cx);
         this.load_user_actions(cx);
+        if cx.has_global::<ShowFps>() {
+            this.start_fps_meter(cx);
+        }
         if this.config.use_nu_environment {
             this.load_nu_env(cx);
         }

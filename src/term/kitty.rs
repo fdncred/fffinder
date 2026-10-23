@@ -12,6 +12,7 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use std::ffi::CString;
 use std::io::{self, Write as _};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 
 use super::tty;
@@ -74,12 +75,16 @@ fn run(rx: &mpsc::Receiver<Message>, shared_memory: bool) {
                 Message::Codes(codes) => out.extend_from_slice(codes.as_bytes()),
             }
         }
+        let has_frame = newest.is_some();
         if let Some(frame) = newest {
             encoder.encode(&frame, &mut out);
         }
         if let Err(err) = tty::write(&out) {
             log::error!("writing to the terminal: {err}");
             return;
+        }
+        if has_frame {
+            super::FRAMES.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

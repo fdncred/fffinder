@@ -416,6 +416,35 @@ fn status_bar_slider_resizes_icons(cx: &mut TestAppContext) {
     );
 }
 
+#[gpui_kit::test]
+fn status_bar_has_no_fps_by_default(cx: &mut TestAppContext) {
+    let fx = Fixture::new("fps-off");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.cx
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    ui.settle();
+    assert!(!ui.exists("fps"));
+}
+
+#[gpui_kit::test]
+fn status_bar_shows_fps_when_asked(cx: &mut TestAppContext) {
+    let fx = Fixture::new("fps-on");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            fps: true,
+            ..Default::default()
+        },
+    );
+    ui.cx
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    ui.settle();
+    assert!(ui.exists("fps"), "shown once the first second has passed");
+}
+
 // ----- views -----------------------------------------------------------------------
 
 #[gpui_kit::test]

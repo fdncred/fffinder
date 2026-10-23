@@ -95,6 +95,9 @@ pub fn run(args: args::Args) {
             config.appearance,
         );
         watchdog::start_if_enabled(cx);
+        if args.fps {
+            cx.set_global(finder::ShowFps);
+        }
         // The control socket stays with the GUI.
         if picker.is_none() && !args.term {
             serve(server_engine, cx);
