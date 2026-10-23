@@ -851,9 +851,9 @@ Install the Visual Studio 2022 Build Tools with the "Desktop development with C+
 
 | Script | What it does |
 | --- | --- |
-| `scripts/build.nu` | Builds the workspace. `--debug` skips optimizations, `--test` runs the tests, and `--lint` runs clippy. |
-| `scripts/install.nu` | Builds a release and copies `fffinder` to `~/.cargo/bin`, or to `--dest`. |
-| `scripts/bundle.nu` | Packages the app into `dist/` for this platform. `--skip-build` packages the last release build, and `--install` installs the Linux desktop entry. |
+| `scripts/build.nu` | Builds the workspace. `--debug` skips optimizations, `--test` runs the tests, `--lint` runs clippy, and `--term` adds terminal mode. |
+| `scripts/install.nu` | Builds a release and copies `fffinder` to `~/.cargo/bin`, or to `--dest`. `--term` adds terminal mode. |
+| `scripts/bundle.nu` | Packages the app into `dist/` for this platform. `--skip-build` packages the last release build, `--install` installs the Linux desktop entry, and `--term` adds terminal mode. |
 | `scripts/screenshots.nu` | Renders `docs/images` (macOS). |
 | `scripts/windows-icon.nu` | Renders `assets/app-icon.svg` into `assets/windows/fffinder.ico`, the icon the Windows build embeds (macOS). Run it after changing the SVG. |
 

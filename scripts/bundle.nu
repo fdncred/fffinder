@@ -11,9 +11,10 @@ use common.nu *
 def main [
     --install   # Linux: install the desktop entry and icon for this user
     --skip-build # Package existing release binaries
+    --term      # Include terminal mode, `fffinder --term`
 ] {
     let root = repo-root
-    let target = if $skip_build { target-dir | path join release } else { build }
+    let target = if $skip_build { target-dir | path join release } else { build --term=$term }
     let dist = $root | path join dist
     mkdir $dist
     match $nu.os-info.name {
