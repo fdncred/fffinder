@@ -345,9 +345,13 @@ mod tests {
         assert_eq!(unparse(KeyCode::Char('A'), none), "shift-a");
         assert_eq!(unparse(KeyCode::Char('>'), none), ">");
         assert_eq!(unparse(KeyCode::Char('c'), KeyModifiers::CONTROL), "ctrl-c");
+        // gpui spells the platform modifier per OS: cmd, super, or win.
+        let platform_shift_q = Keystroke::parse("cmd-shift-q")
+            .expect("a valid keystroke")
+            .unparse();
         assert_eq!(
             unparse(KeyCode::Char('Q'), KeyModifiers::SUPER),
-            "cmd-shift-q"
+            platform_shift_q
         );
         assert_eq!(unparse(KeyCode::Char(' '), none), "space");
         assert_eq!(unparse(KeyCode::BackTab, none), "shift-tab");
