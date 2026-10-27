@@ -1,10 +1,15 @@
 //! Windows integration through the Win32 API: putting files on the
 //! clipboard the way Explorer does, the apps registered for a file type
-//! (Explorer's Open with list) opened through the shell, and shortcuts.
+//! (Explorer's Open with list) opened through the shell, shortcuts, and
+//! the thumbnails Explorer shows.
 
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, SIZE};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
+    DeleteObject, GetDIBits, GetObjectW, HBITMAP, HGDIOBJ,
+};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, IDataObject, IPersistFile,
@@ -18,7 +23,8 @@ use windows::Win32::UI::Shell::DROPFILES;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR, ASSOCSTR_EXECUTABLE,
     ASSOCSTR_FRIENDLYAPPNAME, AssocQueryStringW, BHID_DataObject, IAssocHandler, IShellItem,
-    IShellLinkW, SHAssocEnumHandlers, SHCreateItemFromParsingName, ShellLink,
+    IShellItemImageFactory, IShellLinkW, SHAssocEnumHandlers, SHCreateItemFromParsingName,
+    SIIGBF_BIGGERSIZEOK, SIIGBF_THUMBNAILONLY, ShellLink,
 };
 use windows::core::{HSTRING, Interface as _, PCWSTR, PWSTR};
 
@@ -255,4 +261,97 @@ pub fn make_shortcut(target: &Path, link: &Path) -> Result<(), String> {
         file.Save(&HSTRING::from(link.as_os_str()), true)
             .map_err(|e| e.message())
     }
+}
+
+/// A bitmap's pixels as top-down RGBA rows, and its size.
+fn bitmap_rgba(bitmap: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
+    // SAFETY: GetObjectW fills a BITMAP of the size given, and GetDIBits
+    // writes at most width × height 32-bit pixels into a buffer that size.
+    unsafe {
+        let mut info = BITMAP::default();
+        let read = GetObjectW(
+            HGDIOBJ(bitmap.0),
+            std::mem::size_of::<BITMAP>() as i32,
+            Some((&raw mut info).cast()),
+        );
+        let (width, height) = (info.bmWidth, info.bmHeight.abs());
+        if read == 0 || width <= 0 || height <= 0 {
+            return None;
+        }
+        let mut header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                // Negative: rows top to bottom.
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let dc = CreateCompatibleDC(None);
+        let lines = GetDIBits(
+            dc,
+            bitmap,
+            0,
+            height as u32,
+            Some(pixels.as_mut_ptr().cast()),
+            &mut header,
+            DIB_RGB_COLORS,
+        );
+        let _ = DeleteDC(dc);
+        if lines == 0 {
+            return None;
+        }
+        // BGRA to RGBA. Thumbnails without transparency come with alpha 0
+        // throughout; the rest have it premultiplied.
+        let opaque = pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 0);
+        for p in pixels.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+            match p[3] {
+                _ if opaque => p[3] = 255,
+                0 | 255 => {}
+                alpha => {
+                    for c in &mut p[..3] {
+                        *c = (u16::from(*c) * 255 / u16::from(alpha)).min(255) as u8;
+                    }
+                }
+            }
+        }
+        Some((width as u32, height as u32, pixels))
+    }
+}
+
+/// Save the thumbnail Explorer would show for `file`, about `px` across,
+/// as a PNG at `out`. Types with no thumbnail handler have none.
+pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+    com();
+    let name = HSTRING::from(file.as_os_str());
+    // SAFETY: the image factory lives until GetImage returns, and the
+    // bitmap it returns is ours to delete.
+    let (width, height, pixels) = unsafe {
+        let factory: IShellItemImageFactory =
+            SHCreateItemFromParsingName(&name, None).map_err(|e| e.message())?;
+        let size = SIZE {
+            cx: px as i32,
+            cy: px as i32,
+        };
+        let bitmap = factory
+            .GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK)
+            .map_err(|e| e.message())?;
+        let rgba = bitmap_rgba(bitmap);
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        rgba.ok_or("Windows returned an empty thumbnail")?
+    };
+    let file = std::fs::File::create(out).map_err(|e| e.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&pixels))
+        .map_err(|e| e.to_string())
 }

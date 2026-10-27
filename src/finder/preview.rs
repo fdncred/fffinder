@@ -1,6 +1,8 @@
 //! File previews for the gallery, the column view, and Quick Look. Structured
 //! files (CSV, JSON, TOML, YAML, SQLite, …) are opened with Nushell and shown
-//! as tables.
+//! as tables. Code is highlighted, Markdown rendered, archives listed, fonts
+//! shown in their own type, and on macOS PDFs, videos, and documents show
+//! QuickLook's picture of them.
 
 use super::views::file_icon;
 use super::{AppState, Finder};
@@ -17,6 +19,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
@@ -24,9 +27,13 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::io::Read as _;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 const TEXT_LIMIT: usize = 64 * 1024;
 const TABLE_ROWS: usize = 200;
+/// Font files bigger than this aren't loaded to show them.
+const FONT_LIMIT: u64 = 50_000_000;
 
 #[derive(Clone)]
 pub enum Preview {
@@ -48,7 +55,22 @@ pub enum Preview {
     Table {
         columns: Vec<SharedString>,
         rows: Vec<Vec<SharedString>>,
-        via_nu: bool,
+        /// A line under the table, such as where it came from.
+        footer: Option<SharedString>,
+    },
+    /// Markdown, rendered.
+    Markdown {
+        text: SharedString,
+    },
+    /// A font file, drawn in its own type once `data` is loaded into the
+    /// text system.
+    Font {
+        family: SharedString,
+        data: Option<Arc<Vec<u8>>>,
+    },
+    /// Audio or video, with its running time when the header says.
+    Media {
+        duration: Option<Duration>,
     },
     Folder {
         items: usize,
@@ -61,12 +83,64 @@ impl Preview {
     fn has_text(&self) -> bool {
         matches!(
             self,
-            Preview::Text { .. } | Preview::Code { .. } | Preview::Table { .. }
+            Preview::Text { .. }
+                | Preview::Code { .. }
+                | Preview::Table { .. }
+                | Preview::Markdown { .. }
+                | Preview::Font { .. }
         )
     }
 }
 
-fn load_preview(entry: &FileEntry, nu: Option<&Path>) -> Preview {
+/// The family name stored in a font file.
+fn font_family(data: &[u8]) -> Option<String> {
+    use ttf_parser::name_id::{FAMILY, TYPOGRAPHIC_FAMILY};
+    let face = ttf_parser::Face::parse(data, 0).ok()?;
+    [TYPOGRAPHIC_FAMILY, FAMILY].into_iter().find_map(|id| {
+        face.names()
+            .into_iter()
+            .find(|name| name.name_id == id && name.is_unicode())
+            .and_then(|name| name.to_string())
+    })
+}
+
+fn extension(entry: &FileEntry) -> String {
+    entry
+        .path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
+}
+
+/// What's inside a zip or tar archive, as a table.
+fn archive_table(entry: &FileEntry) -> Option<Preview> {
+    let (listed, more) = fffinder_core::archive::list(&entry.path, TABLE_ROWS).ok()?;
+    let count = listed.len();
+    let rows = listed
+        .into_iter()
+        .map(|item| {
+            let size = if item.is_dir {
+                "--".to_string()
+            } else {
+                format::human_size(item.size)
+            };
+            vec![item.name.into(), size.into()]
+        })
+        .collect();
+    let footer = match (count, more) {
+        (n, true) => format!("The first {n} items"),
+        (1, false) => "1 item".to_string(),
+        (n, false) => format!("{n} items"),
+    };
+    Some(Preview::Table {
+        columns: vec!["Name".into(), "Size".into()],
+        rows,
+        footer: Some(footer.into()),
+    })
+}
+
+/// Work out the preview for `entry`; `dark` picks the code colors.
+fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
     if entry.is_dir {
         let items = std::fs::read_dir(&entry.path)
             .map(|d| d.count())
@@ -101,6 +175,16 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>) -> Preview {
         let run = nushell::preview_file(nu, &entry.path);
         match run.output {
             NuOutput::Table { columns, rows } => {
+                let total = rows.len();
+                let footer = format!(
+                    "Opened with Nushell · {total} row{}{}",
+                    if total == 1 { "" } else { "s" },
+                    if total > TABLE_ROWS {
+                        ", the first 200 shown"
+                    } else {
+                        ""
+                    }
+                );
                 return Preview::Table {
                     columns: columns.into_iter().map(Into::into).collect(),
                     rows: rows
@@ -108,7 +192,7 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>) -> Preview {
                         .take(TABLE_ROWS)
                         .map(|r| r.into_iter().map(Into::into).collect())
                         .collect(),
-                    via_nu: true,
+                    footer: Some(footer.into()),
                 };
             }
             NuOutput::Text(text) => {
@@ -120,14 +204,47 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>) -> Preview {
             NuOutput::Empty => {}
         }
     }
-    if matches!(entry.kind, FileKind::Image) {
-        return Preview::Image;
+    let ext = extension(entry);
+    if fffinder_core::archive::format(&entry.path).is_some()
+        && let Some(table) = archive_table(entry)
+    {
+        return table;
+    }
+    if matches!(ext.as_str(), "ttf" | "otf" | "ttc")
+        && entry.size.unwrap_or(0) < FONT_LIMIT
+        && let Ok(data) = std::fs::read(&entry.path)
+        && let Some(family) = font_family(&data)
+    {
+        return Preview::Font {
+            family: family.into(),
+            data: Some(Arc::new(data)),
+        };
+    }
+    match entry.kind {
+        FileKind::Image => return Preview::Image,
+        FileKind::Video | FileKind::Audio => {
+            return Preview::Media {
+                duration: fffinder_core::media::duration(&entry.path),
+            };
+        }
+        _ => {}
     }
     if matches!(
         entry.kind,
         FileKind::Text | FileKind::Code | FileKind::Data | FileKind::Other | FileKind::Executable
     ) && let Some((text, truncated)) = read_text(&entry.path)
     {
+        if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
+            return Preview::Markdown { text: text.into() };
+        }
+        if let Some(spans) = crate::highlight::highlight(&text, &entry.path, dark) {
+            return Preview::Code {
+                text: text.into(),
+                spans,
+                comments: Vec::new(),
+                truncated,
+            };
+        }
         return Preview::Text {
             text: text.into(),
             truncated,
@@ -171,15 +288,25 @@ impl Finder {
             self.previews.clear();
         }
         let nu = cx.global::<AppState>().nu.clone();
+        let dark = cx.theme().is_dark();
         let entry = entry.clone();
         let task = cx.spawn(async move |this, cx| {
-            let preview = cx
+            let mut preview = cx
                 .background_spawn({
                     let entry = entry.clone();
-                    async move { load_preview(&entry, nu.as_deref()) }
+                    async move { load_preview(&entry, nu.as_deref(), dark) }
                 })
                 .await;
             this.update(cx, |this, cx| {
+                // A font is drawn in its own type once the text system has it.
+                if let Preview::Font { data, .. } = &mut preview
+                    && let Some(bytes) = data.take()
+                {
+                    let bytes = Arc::unwrap_or_clone(bytes);
+                    if let Err(err) = cx.text_system().add_fonts(vec![bytes.into()]) {
+                        log::warn!("loading a font to preview it: {err}");
+                    }
+                }
                 this.preview_tasks.remove(&entry.path);
                 this.previews.insert(entry.path.clone(), preview);
                 cx.notify();
@@ -441,7 +568,7 @@ pub fn render_preview_large(finder: &Finder, entry: &FileEntry, cx: &App) -> Any
                 .child(
                     div()
                         .text_color(theme.muted_foreground)
-                        .child(info_line(entry)),
+                        .child(info_line(finder, entry)),
                 ),
         )
         .into_any_element()
@@ -485,6 +612,18 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
         .when_some(entry.size, |this, size| {
             this.child(row("Size", format::human_size(size)))
         })
+        .when_some(
+            match finder.preview_of(entry) {
+                Preview::Media { duration } => duration,
+                _ => None,
+            },
+            |this, duration| {
+                this.child(row(
+                    "Duration",
+                    fffinder_core::media::format_duration(duration),
+                ))
+            },
+        )
         .when_some(entry.modified, |this, t| {
             this.child(row("Modified", format::human_date(t)))
         })
@@ -495,8 +634,14 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
         .into_any_element()
 }
 
-fn info_line(entry: &FileEntry) -> String {
+fn info_line(finder: &Finder, entry: &FileEntry) -> String {
     let mut parts = vec![entry.kind_label()];
+    if let Preview::Media {
+        duration: Some(duration),
+    } = finder.preview_of(entry)
+    {
+        parts.push(fffinder_core::media::format_duration(duration));
+    }
     if let Some(size) = entry.size {
         parts.push(format::human_size(size));
     }
@@ -533,6 +678,13 @@ fn preview_body(
             })
             .into_any_element()
     };
+    // QuickLook's picture of the file (macOS), or its icon.
+    let picture = |caption: Option<String>| {
+        let (shown, muted) = (entry.clone(), theme.muted_foreground);
+        large_thumbnail(entry, move || {
+            icon_with_caption(&shown, icon, &pal, muted, caption.clone())
+        })
+    };
     let is_image = entry.kind == FileKind::Image;
     match finder.preview_of(entry) {
         _ if is_image => div()
@@ -545,8 +697,14 @@ fn preview_body(
                     .size_full()
                     .object_fit(ObjectFit::Contain)
                     .with_fallback({
-                        let asset = entry.kind.icon_asset();
-                        move || img(asset).size(ui(160.)).into_any_element()
+                        // Formats GPUI can't decode (HEIC, RAW, PSD) use QuickLook's.
+                        let (entry, muted) = (entry.clone(), theme.muted_foreground);
+                        move || {
+                            let shown = entry.clone();
+                            large_thumbnail(&entry, move || {
+                                icon_with_caption(&shown, icon, &pal, muted, None)
+                            })
+                        }
                     }),
             )
             .into_any_element(),
@@ -556,7 +714,53 @@ fn preview_body(
             .justify_center()
             .child(Spinner::new().small())
             .into_any_element(),
-        Preview::Image | Preview::Unavailable => centered_icon(None),
+        Preview::Image | Preview::Unavailable => picture(None),
+        Preview::Media { duration } => picture(duration.map(fffinder_core::media::format_duration)),
+        Preview::Markdown { text } => div()
+            .id(("markdown-preview", super::views::path_id(&entry.path)))
+            .size_full()
+            .bg(theme.background)
+            .px(ui(16.))
+            .py(ui(12.))
+            .text_size(ui(text_size + 1.5))
+            .child(
+                TextView::markdown(("markdown", super::views::path_id(&entry.path)), text)
+                    .selectable(true)
+                    .scrollable(true)
+                    .size_full(),
+            )
+            .into_any_element(),
+        Preview::Font { family, .. } => {
+            let samples = [
+                (text_size + 2., "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+                (text_size + 2., "abcdefghijklmnopqrstuvwxyz"),
+                (text_size + 2., "0123456789 !?&@#%*()[]{}"),
+                (
+                    text_size * 2.4,
+                    "The quick brown fox jumps over the lazy dog",
+                ),
+            ];
+            v_flex()
+                .id(("font-preview", super::views::path_id(&entry.path)))
+                .size_full()
+                .bg(theme.background)
+                .p(ui(16.))
+                .gap(ui(10.))
+                .overflow_y_scrollbar()
+                .child(
+                    div()
+                        .text_size(ui(12.))
+                        .text_color(theme.muted_foreground)
+                        .child(family.clone()),
+                )
+                .children(samples.into_iter().map(|(size, sample)| {
+                    div()
+                        .font_family(family.clone())
+                        .text_size(ui(size))
+                        .child(sample)
+                }))
+                .into_any_element()
+        }
         Preview::Folder { items } => centered_icon(Some(if items == 1 {
             "1 item".into()
         } else {
@@ -614,7 +818,7 @@ fn preview_body(
         Preview::Table {
             columns,
             rows,
-            via_nu,
+            footer,
         } => {
             let header_bg = theme.muted;
             let border = theme.border;
@@ -654,7 +858,7 @@ fn preview_body(
                                 })),
                         ),
                 )
-                .when(via_nu, |this| {
+                .when_some(footer, |this, footer| {
                     this.child(
                         h_flex()
                             .px(ui(10.))
@@ -663,21 +867,49 @@ fn preview_body(
                             .border_color(border)
                             .text_size(ui(10.5))
                             .text_color(theme.muted_foreground)
-                            .child(format!(
-                                "Opened with Nushell · {} row{}{}",
-                                rows.len(),
-                                if rows.len() == 1 { "" } else { "s" },
-                                if rows.len() >= TABLE_ROWS {
-                                    " shown"
-                                } else {
-                                    ""
-                                }
-                            )),
+                            .child(footer),
                     )
                 })
                 .into_any_element()
         }
     }
+}
+
+/// A file's icon, centered, with an optional line under it.
+fn icon_with_caption(
+    entry: &FileEntry,
+    icon: Pixels,
+    pal: &crate::theme::Palette,
+    muted: Hsla,
+    caption: Option<String>,
+) -> AnyElement {
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap(ui(10.))
+        .child(file_icon(entry, icon, false, pal))
+        .when_some(caption, |this, text| {
+            this.child(div().text_size(ui(12.)).text_color(muted).child(text))
+        })
+        .into_any_element()
+}
+
+/// QuickLook's picture of `entry` filling the space (macOS), or `fallback`
+/// while it loads and when there is none.
+fn large_thumbnail(
+    entry: &FileEntry,
+    fallback: impl Fn() -> AnyElement + Clone + 'static,
+) -> AnyElement {
+    if !crate::thumbnails::wanted(entry) {
+        return fallback();
+    }
+    img(crate::thumbnails::image(entry, 1024))
+        .size_full()
+        .object_fit(ObjectFit::Contain)
+        .with_loading(fallback.clone())
+        .with_fallback(fallback)
+        .into_any_element()
 }
 
 fn table_cell(text: SharedString, width: f32) -> impl IntoElement {
@@ -696,6 +928,7 @@ mod tests {
     use super::{Preview, load_preview};
     use crate::nushell;
     use fffinder_core::FileEntry;
+    use fffinder_core::ops::Progress;
 
     /// Runs only where `nu` is installed.
     #[test]
@@ -712,7 +945,7 @@ mod tests {
         )
         .unwrap();
         let entry = FileEntry::from_path(&script).unwrap();
-        match load_preview(&entry, Some(&nu)) {
+        match load_preview(&entry, Some(&nu), false) {
             Preview::Code {
                 text,
                 spans,
@@ -731,9 +964,69 @@ mod tests {
         std::fs::write(&plain, "def greet").unwrap();
         let entry = FileEntry::from_path(&plain).unwrap();
         assert!(matches!(
-            load_preview(&entry, Some(&nu)),
+            load_preview(&entry, Some(&nu), false),
             Preview::Text { .. }
         ));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn previews_by_kind() {
+        let dir = std::env::temp_dir().join(format!("fff-previews-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("pack")).unwrap();
+        let write = |name: &str, text: &str| {
+            std::fs::write(dir.join(name), text).unwrap();
+            FileEntry::from_path(dir.join(name)).unwrap()
+        };
+        let load = |entry: &FileEntry| load_preview(entry, None, false);
+
+        let code = write("main.py", "def main():\n    return 1\n");
+        assert!(matches!(load(&code), Preview::Code { spans, .. } if spans.len() > 1));
+        let notes = write("notes.md", "# Title\n\nSome *text*.\n");
+        assert!(matches!(load(&notes), Preview::Markdown { .. }));
+        assert!(matches!(
+            load(&write("plain.txt", "words")),
+            Preview::Text { .. }
+        ));
+
+        std::fs::write(dir.join("pack/a.txt"), "a").unwrap();
+        let zip = dir.join("pack.zip");
+        fffinder_core::archive::compress(&[dir.join("pack")], &zip, &Progress::default()).unwrap();
+        match load(&FileEntry::from_path(&zip).unwrap()) {
+            Preview::Table { rows, footer, .. } => {
+                assert_eq!(rows.len(), 2);
+                assert_eq!(footer.as_deref(), Some("2 items"));
+            }
+            _ => panic!("an archive lists its contents"),
+        }
+
+        // 1 s of 8 kHz, 8-bit mono WAV.
+        let mut wav = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0".to_vec();
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(b"\x01\0\x08\0data");
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        std::fs::write(dir.join("tone.wav"), &wav).unwrap();
+        let tone = FileEntry::from_path(dir.join("tone.wav")).unwrap();
+        assert!(matches!(
+            load(&tone),
+            Preview::Media { duration: Some(d) } if d.as_secs() == 1
+        ));
+
+        let fonts = [
+            "/System/Library/Fonts/Supplemental/Georgia.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+        ];
+        if let Some(font) = fonts.iter().find(|f| std::path::Path::new(f).is_file()) {
+            match load(&FileEntry::from_path(font).unwrap()) {
+                Preview::Font { family, data } => {
+                    assert!(!family.is_empty() && data.is_some());
+                }
+                _ => panic!("a font shows itself"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

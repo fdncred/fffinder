@@ -194,6 +194,64 @@ impl<R: Read> Read for Counted<'_, R> {
     }
 }
 
+/// One item inside an archive, for a preview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    /// The path inside the archive, with `/` separators.
+    pub name: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+/// The first `limit` items in an archive, and whether there are more. Tar
+/// archives are read in order, so a big one only as far as needed.
+pub fn list(path: &Path, limit: usize) -> io::Result<(Vec<Listed>, bool)> {
+    let file = File::open(path)?;
+    match format(path) {
+        Some(Format::Zip) => {
+            let mut zip = zip::ZipArchive::new(file).map_err(io::Error::other)?;
+            let listed = (0..zip.len().min(limit))
+                .filter_map(|i| {
+                    let entry = zip.by_index_raw(i).ok()?;
+                    Some(Listed {
+                        name: entry.name().trim_end_matches('/').to_string(),
+                        size: entry.size(),
+                        is_dir: entry.is_dir(),
+                    })
+                })
+                .collect();
+            Ok((listed, zip.len() > limit))
+        }
+        Some(Format::Tar | Format::TarGz) => {
+            let reader: Box<dyn Read> = if format(path) == Some(Format::TarGz) {
+                Box::new(flate2::read::GzDecoder::new(io::BufReader::new(file)))
+            } else {
+                Box::new(io::BufReader::new(file))
+            };
+            let mut tar = tar::Archive::new(reader);
+            let mut listed = Vec::new();
+            for entry in tar.entries()? {
+                if listed.len() == limit {
+                    return Ok((listed, true));
+                }
+                let entry = entry?;
+                let header = entry.header();
+                listed.push(Listed {
+                    name: entry
+                        .path()?
+                        .to_string_lossy()
+                        .trim_end_matches('/')
+                        .to_string(),
+                    size: header.size().unwrap_or(0),
+                    is_dir: header.entry_type().is_dir(),
+                });
+            }
+            Ok((listed, false))
+        }
+        None => Err(io::Error::other("not a zip or tar archive")),
+    }
+}
+
 /// Unpack an archive beside itself. One item at the top of the archive
 /// lands as itself; several land in a folder named after the archive.
 /// Returns where the result is.
@@ -400,6 +458,27 @@ mod tests {
         assert!(compress(&[dir.join("folder")], &zip, &progress).is_err());
         assert!(!zip.exists());
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2, "only the fixture");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_contents() {
+        let dir = temp("list");
+        let zip = dir.join("folder.zip");
+        compress(&[dir.join("folder")], &zip, &Progress::default()).unwrap();
+        let (listed, more) = list(&zip, 10).unwrap();
+        let names: Vec<&str> = listed.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "folder",
+                "folder/a.txt",
+                "folder/inner",
+                "folder/inner/b.txt"
+            ]
+        );
+        assert!(!more && listed[0].is_dir && listed[1].size == 5);
+        assert!(list(&zip, 2).unwrap().1, "more than the limit");
         let _ = fs::remove_dir_all(&dir);
     }
 

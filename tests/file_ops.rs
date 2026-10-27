@@ -378,7 +378,10 @@ fn duplicate_new_file_links_and_archives(cx: &mut TestAppContext) {
     {
         ui.select("Roadmap.md");
         ui.dispatch(MakeAlias);
-        assert!(fx.path("Roadmap.md - Shortcut.lnk").is_file(), "an Explorer shortcut");
+        assert!(
+            fx.path("Roadmap.md - Shortcut.lnk").is_file(),
+            "an Explorer shortcut"
+        );
     }
 
     // Compress, then opening the zip extracts it beside itself.

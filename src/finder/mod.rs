@@ -313,6 +313,8 @@ impl Finder {
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.config.appearance == fffinder_core::Appearance::System {
                     crate::theme::apply(this.config.appearance, Some(window), cx);
+                    // Code previews are colored for light or dark.
+                    this.previews.clear();
                 }
             }),
             cx.observe_window_activation(window, |this, window, cx| {
@@ -1597,6 +1599,7 @@ impl Finder {
             Appearance::Dark
         };
         crate::theme::apply(self.config.appearance, Some(window), cx);
+        self.previews.clear();
         self.schedule_save(cx);
     }
 
@@ -1608,6 +1611,7 @@ impl Finder {
     ) {
         self.config.appearance = appearance;
         crate::theme::apply(appearance, Some(window), cx);
+        self.previews.clear();
         self.schedule_save(cx);
         cx.notify();
     }

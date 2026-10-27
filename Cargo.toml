@@ -59,6 +59,10 @@ log.workspace = true
 trash = "5"
 # Hands control-socket requests to the UI thread.
 async-channel = "2"
+# Code previews: grammars and themes for syntax highlighting, in pure Rust.
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+# Font previews: the family name inside a font file.
+ttf-parser = "0.25"
 # Colors file names the way Nushell's `ls` does.
 lscolors = { version = "0.21", default-features = false }
 # `term` feature: frames as kitty graphics escape codes, and the types GPUI's
@@ -82,11 +86,16 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 block2 = "0.6"
+# Thumbnails of PDFs, videos, and every other type macOS understands.
+objc2-quick-look-thumbnailing = "0.3"
 
-# Windows: files on the clipboard as Explorer puts them.
+# Windows: files on the clipboard, Open With, shortcuts, and thumbnails, as
+# Explorer has them. `png` saves the thumbnails.
 [target.'cfg(windows)'.dependencies]
+png = "0.18"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_DataExchange",
     "Win32_System_Memory",

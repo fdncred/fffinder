@@ -75,7 +75,8 @@ fn thumbnailable(entry: &FileEntry) -> bool {
 }
 
 /// A file's colored icon, an image thumbnail, or a document icon with its
-/// extension badge.
+/// extension badge. With `thumbnails`, images show themselves, and on macOS
+/// PDFs, videos, and documents show QuickLook's picture once it's ready.
 pub fn file_icon(entry: &FileEntry, size: Pixels, thumbnails: bool, pal: &Palette) -> AnyElement {
     if thumbnails && thumbnailable(entry) {
         let fallback = entry.kind.icon_asset();
@@ -85,6 +86,26 @@ pub fn file_icon(entry: &FileEntry, size: Pixels, thumbnails: bool, pal: &Palett
             .with_fallback(move || img(fallback).size_full().into_any_element())
             .into_any_element();
     }
+    if thumbnails && crate::thumbnails::wanted(entry) {
+        // Device pixels, in a few sizes so neighboring icon sizes share them.
+        let px = ((f32::from(size) * 2.) as u32)
+            .next_power_of_two()
+            .clamp(64, 512);
+        let (shown, pal) = (entry.clone(), *pal);
+        let icon = move || kind_icon(&shown, size, &pal);
+        return img(crate::thumbnails::image(entry, px))
+            .size(size)
+            .flex_shrink_0()
+            .object_fit(ObjectFit::Contain)
+            .with_loading(icon.clone())
+            .with_fallback(icon)
+            .into_any_element();
+    }
+    kind_icon(entry, size, pal)
+}
+
+/// Finder's icon for the file's type, or the bundled one with a badge.
+fn kind_icon(entry: &FileEntry, size: Pixels, pal: &Palette) -> AnyElement {
     // Finder's own icon for this type, on macOS.
     let later = match crate::macos::file_icon(entry, f32::from(size)) {
         IconLookup::Ready(icon) => {

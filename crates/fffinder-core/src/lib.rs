@@ -11,9 +11,11 @@ pub mod format;
 pub mod info;
 pub mod kind;
 pub mod listing;
+pub mod media;
 pub mod ops;
 pub mod places;
 pub mod terminals;
+pub mod thumbnailers;
 
 pub use config::{Appearance, Config, SearchCase, SearchSettings, SmartFolder, ViewMode};
 pub use engine::{

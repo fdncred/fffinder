@@ -269,14 +269,31 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 
 | File | Preview |
 | --- | --- |
-| Images | The image. |
+| Images | The image. Formats GPUI can't draw, such as HEIC, RAW, and PSD, show the system's thumbnail of them (see [Thumbnails](#thumbnails)). |
+| PDFs, videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a PDF or document, a frame of a video. Types the system can't draw show their icon. |
+| Video and audio | The running time, in the caption and in the column view's card, for MP4, MOV, M4A, M4V, WAV, and FLAC files. Audio shows its icon with the time under it. |
 | Folders | The folder icon and how many items it holds. |
+| Zip, `.tar`, `.tar.gz`, `.tgz` | A table of what's inside: each item's path and size, up to 200 items, with the count below. |
+| TrueType and OpenType fonts (`.ttf`, `.otf`, `.ttc`) | The family name, the alphabet, digits, and a sample line, drawn in the font itself. |
+| Markdown (`.md`, `.markdown`) | Rendered: headings, lists, links, tables, and code blocks. Text can be selected. |
 | CSV, TSV, JSON, JSONL, NUON, TOML, YAML, XML, INI, SQLite, XLSX, ODS, EML, ICS, VCF, MessagePack, plist | Opened with Nushell's `open` and shown as a table of up to 200 rows, with "Opened with Nushell" and the row count below. Files over 50 MB are skipped. |
 | `.nu` scripts | Colored the way `nu-highlight` colors them with your `color_config`. |
-| Other text | The first 64 KB as plain text, marked "preview truncated" when longer. |
+| Code and other text | The first 64 KB, marked "preview truncated" when longer. Code in the languages syntect knows (Rust, Python, JavaScript, C and C++, Go, Java, shell, HTML, CSS, SQL, and dozens more, found by extension, by names like `Makefile`, or by a `#!` line) is colored with a light or dark theme to match the window. Files with lines over 2,000 characters, such as minified JavaScript, stay plain. |
 | Anything else | The file's icon. |
 
 Nushell previews give up after 10 seconds and show the icon. They need `nu`; without it, structured files preview as text.
+
+### Thumbnails
+
+The icon view, the gallery strip, and the large previews show the thumbnails the system draws for PDFs, videos, documents, fonts, and images:
+
+| System | Drawn by |
+| --- | --- |
+| macOS | QuickLook, as in Finder. |
+| Windows | The shell's thumbnail handlers, as in Explorer: whatever Explorer shows for the type. |
+| Linux | The freedesktop.org thumbnailers your desktop installed (`.thumbnailer` files in the XDG data folders' `thumbnailers` folders, such as `evince-thumbnailer` for PDFs and `ffmpegthumbnailer` for videos), chosen by the file's type from `xdg-mime`. A type with no thumbnailer keeps its icon. |
+
+Each item shows its icon until its thumbnail is ready. Thumbnails are cached as PNGs in `thumbnails/` in the data folder, keyed by the file's path, modification date, and size, so an edited file gets a new one. The folder can be deleted at any time.
 
 ### Nushell highlighting
 
@@ -894,6 +911,7 @@ The settings folder holds `settings.json` and `actions.nu`. The data folder hold
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
 - `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
 - `trash.json`: on macOS, where each item fffinder moved to the Trash came from, for Put Back.
+- `thumbnails/`: thumbnails of PDFs, videos, and documents, as PNGs.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
 - `term.log`: stderr from the last `fffinder --term`.
 

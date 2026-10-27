@@ -198,6 +198,55 @@ mod imp {
         })
     }
 
+    /// QuickLook writes the thumbnail itself and calls back when done.
+    pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+        use objc2_foundation::NSError;
+        use objc2_quick_look_thumbnailing::{
+            QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
+            QLThumbnailGenerator,
+        };
+        let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        autoreleasepool(|_| {
+            let points = f64::from(px) / 2.;
+            let done = block2::RcBlock::new(move |error: *mut NSError| {
+                // SAFETY: QuickLook passes a valid error or null.
+                let message =
+                    unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+                let _ = tx.send(message);
+            });
+            // SAFETY: the request and URLs live until the call returns, and
+            // QuickLook keeps what it needs; the block is 'static.
+            unsafe {
+                let request =
+                    QLThumbnailGenerationRequest::initWithFileAtURL_size_scale_representationTypes(
+                        QLThumbnailGenerationRequest::alloc(),
+                        &url(file),
+                        NSSize::new(points, points),
+                        2.,
+                        QLThumbnailGenerationRequestRepresentationTypes::Thumbnail,
+                    );
+                // Icon-sized thumbnails get Finder's decorations (a border,
+                // a page curl), so a white page still shows on white.
+                request.setIconMode(px <= 512);
+                // The replacement takes a UTType, which needs another binding crate.
+                #[allow(deprecated)]
+                QLThumbnailGenerator::sharedGenerator()
+                    .saveBestRepresentationForRequest_toFileAtURL_withContentType_completionHandler(
+                        &request,
+                        &url(out),
+                        &NSString::from_str("public.png"),
+                        &done,
+                    );
+            }
+        });
+        match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(None) => Ok(()),
+            Ok(Some(message)) => Err(message),
+            Err(_) => Err("QuickLook didn’t answer".into()),
+        }
+    }
+
     pub fn apps_for(path: &Path) -> Vec<PathBuf> {
         autoreleasepool(|_| {
             let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
@@ -430,6 +479,12 @@ pub fn default_app(path: &Path) -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 pub fn make_alias(target: &Path, alias: &Path) -> Result<(), String> {
     imp::make_alias(target, alias)
+}
+
+/// Have QuickLook write a `px`-wide PNG thumbnail of `file` to `out`.
+#[cfg(target_os = "macos")]
+pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+    imp::save_thumbnail(file, px, out)
 }
 
 /// Every app Launch Services says can open the file at `path`.
