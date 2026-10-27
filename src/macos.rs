@@ -278,6 +278,42 @@ mod imp {
         png(&image, px, None)
     }
 
+    /// One pasteboard item per file URL, with `text` on the first, so
+    /// Finder pastes the files and a terminal pastes the paths.
+    pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
+        use objc2::runtime::ProtocolObject;
+        use objc2_app_kit::{
+            NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeString,
+            NSPasteboardWriting,
+        };
+        use objc2_foundation::NSArray;
+        autoreleasepool(|_| {
+            let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = paths
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, path)| {
+                    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
+                        .absoluteString()?;
+                    let item = NSPasteboardItem::new();
+                    // SAFETY: the type constants are AppKit's own statics.
+                    unsafe {
+                        item.setString_forType(&url, NSPasteboardTypeFileURL);
+                        if ix == 0 {
+                            item.setString_forType(
+                                &NSString::from_str(text),
+                                NSPasteboardTypeString,
+                            );
+                        }
+                    }
+                    Some(ProtocolObject::from_retained(item))
+                })
+                .collect();
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            pasteboard.writeObjects(&NSArray::from_retained_slice(&items))
+        })
+    }
+
     pub fn template_png(file: &Path, px: usize, tint: u32) -> Option<Vec<u8>> {
         let image = NSImage::initWithContentsOfFile(
             NSImage::alloc(),
@@ -312,6 +348,13 @@ pub fn system_colors() -> Option<SystemColors> {
     {
         None
     }
+}
+
+/// Put `paths` on the general pasteboard as files, and `text` as a string.
+/// Returns whether that worked.
+#[cfg(target_os = "macos")]
+pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
+    imp::write_file_clipboard(paths, text)
 }
 
 /// Whether Launch Services knows an app that opens the file at `path`.

@@ -12,6 +12,7 @@ mod nu_panel;
 mod preview;
 mod sidebar;
 mod toolbar;
+mod transfer;
 mod views;
 
 use crate::actions::*;
@@ -234,6 +235,9 @@ pub struct Finder {
     search_settings_task: Task<()>,
     watch_task: Task<()>,
     save_task: Task<()>,
+    /// Copies and moves under way, and the task redrawing their progress.
+    transfers: Vec<transfer::Job>,
+    transfers_task: Task<()>,
     /// Frames per second for the status bar, with `--fps`.
     fps: Option<fps::FpsMeter>,
     fps_task: Task<()>,
@@ -391,6 +395,8 @@ impl Finder {
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
+            transfers: Vec::new(),
+            transfers_task: Task::ready(()),
             fps: None,
             fps_task: Task::ready(()),
             icon_slider,
@@ -400,7 +406,7 @@ impl Finder {
             _subscriptions: subscriptions,
             config,
         };
-        this.load_listing(None, false, cx);
+        this.load_listing(Vec::new(), false, cx);
         this.poll_index_status(cx);
         this.watch_folder(cx);
         this.detect_terminals(cx);
@@ -624,7 +630,7 @@ impl Finder {
             self.schedule_save(cx);
         }
         window.set_window_title(&self.history.current().title());
-        self.load_listing(select, false, cx);
+        self.load_listing(select.into_iter().collect(), false, cx);
         cx.notify();
     }
 
@@ -679,7 +685,8 @@ impl Finder {
 
     // ----- listing -----------------------------------------------------------
 
-    fn load_listing(&mut self, select: Option<PathBuf>, quiet: bool, cx: &mut Context<Self>) {
+    /// List the current location, then select the items at `select`.
+    fn load_listing(&mut self, select: Vec<PathBuf>, quiet: bool, cx: &mut Context<Self>) {
         let location = self.history.current().clone();
         let show_hidden = self.config.show_hidden;
         let engine = self.engine.clone();
@@ -719,11 +726,16 @@ impl Finder {
                     }
                 }
                 this.rebuild_rows(cx);
-                if let Some(path) = select
-                    && let Some(ix) = this.rows.iter().position(|r| r.entry.path == path)
-                {
-                    this.selection.select_only(ix);
-                    this.scroll_to(ix);
+                let found: Vec<usize> = select
+                    .iter()
+                    .filter_map(|path| this.rows.iter().position(|r| r.entry.path == *path))
+                    .collect();
+                if let Some((&first, rest)) = found.split_first() {
+                    this.selection.select_only(first);
+                    for &ix in rest {
+                        this.selection.toggle(ix);
+                    }
+                    this.scroll_to(first);
                     this.selection_changed(cx);
                 }
                 cx.notify();
@@ -746,7 +758,7 @@ impl Finder {
         if let Some(dir) = self.current_folder()
             && dir_stamp(dir) != self.listing_stamp
         {
-            self.load_listing(None, true, cx);
+            self.load_listing(Vec::new(), true, cx);
         }
     }
 
@@ -766,10 +778,15 @@ impl Finder {
 
     fn refresh(&mut self, _: &Refresh, _: &mut Window, cx: &mut Context<Self>) {
         self.previews.clear();
-        self.load_listing(None, true, cx);
+        self.load_listing(Vec::new(), true, cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
+        self.reload_columns(cx);
+    }
+
+    /// Reload the column view's panes after the first, which mirrors the rows.
+    fn reload_columns(&mut self, cx: &mut Context<Self>) {
         let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
         for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
             self.load_column(ix, dir, cx);
@@ -1029,7 +1046,7 @@ impl Finder {
                                 this.run_search(false, cx);
                             }
                             if matches!(this.history.current(), Location::Recents) {
-                                this.load_listing(None, true, cx);
+                                this.load_listing(Vec::new(), true, cx);
                             }
                         }
                         cx.notify();
@@ -1450,11 +1467,8 @@ impl Finder {
         }
         self.config.show_hidden = show;
         self.schedule_save(cx);
-        self.load_listing(None, true, cx);
-        let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
-        for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
-            self.load_column(ix, dir, cx);
-        }
+        self.load_listing(Vec::new(), true, cx);
+        self.reload_columns(cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
@@ -1961,7 +1975,7 @@ impl Finder {
         match std::fs::create_dir(&path) {
             Ok(()) => {
                 self.end_search(window, cx);
-                self.load_listing(Some(path.clone()), true, cx);
+                self.load_listing(vec![path.clone()], true, cx);
                 self.open_rename_dialog(path, window, cx);
             }
             Err(err) => window.push_notification(
@@ -1997,7 +2011,7 @@ impl Finder {
                 .await;
             this.update(cx, |this, cx| {
                 this.selection.clear();
-                this.load_listing(None, true, cx);
+                this.load_listing(Vec::new(), true, cx);
                 if this.is_searching() {
                     this.results.retain(|r| r.entry.path.exists());
                     this.rebuild_rows(cx);
@@ -2228,6 +2242,9 @@ impl Render for Finder {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::copy_files))
+            .on_action(cx.listener(Self::paste_files))
+            .on_action(cx.listener(Self::move_items_here))
             .on_action(cx.listener(Self::copy_as_nuon))
             .on_action(cx.listener(Self::reveal))
             .on_action(cx.listener(Self::open_in_nushell))
@@ -2288,6 +2305,9 @@ impl Render for Finder {
                             .child(self.render_content(window, cx))
                             .when(self.nu_open, |this| {
                                 this.child(self.render_nu_panel(window, cx))
+                            })
+                            .when(self.transfers_running(), |this| {
+                                this.child(self.render_transfers(cx))
                             })
                             .child(self.render_path_bar(window, cx))
                             .child(self.render_status_bar(window, cx)),
@@ -2405,8 +2425,12 @@ impl Finder {
                     cx.stop_propagation();
                 }
             }))
+            // Files from other apps are copied into the folder; with no
+            // folder showing, a dropped folder opens instead.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.paths().first() {
+                if let Some(dest) = this.drop_folder() {
+                    this.drop_files(paths.paths().to_vec(), dest, false, window, cx);
+                } else if let Some(path) = paths.paths().first() {
                     if path.is_dir() {
                         this.navigate(Location::Folder(path.clone()), window, cx);
                     } else {
@@ -2414,10 +2438,25 @@ impl Finder {
                     }
                 }
             }))
+            .on_drop(
+                cx.listener(|this, files: &views::DraggedFiles, window, cx| {
+                    if let Some(dest) = this.drop_folder() {
+                        this.drop_files(files.0.clone(), dest, true, window, cx);
+                    }
+                }),
+            )
             .on_prepaint(move |bounds, _, cx| {
                 entity.update(cx, |this, _| this.content_height = bounds.size.height);
             })
             .child(body)
+    }
+
+    /// The folder that files dropped on the view go into: the one shown,
+    /// when it isn't search results.
+    fn drop_folder(&self) -> Option<PathBuf> {
+        self.current_folder()
+            .filter(|_| !self.is_searching())
+            .map(Path::to_path_buf)
     }
 
     fn render_message(&self, title: &str, detail: &str, cx: &Context<Self>) -> impl IntoElement {

@@ -1,5 +1,6 @@
 //! Core of fffinder: search engine wrapper around `fff-search`, file model,
-//! folder listing, sidebar places, settings, terminals, and formatting.
+//! folder listing, copying and moving, sidebar places, settings, terminals,
+//! and formatting.
 
 pub mod config;
 pub mod engine;
@@ -7,6 +8,7 @@ pub mod entry;
 pub mod format;
 pub mod kind;
 pub mod listing;
+pub mod ops;
 pub mod places;
 pub mod terminals;
 

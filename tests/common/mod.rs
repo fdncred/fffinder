@@ -301,6 +301,63 @@ impl<'a> Ui<'a> {
         });
     }
 
+    /// Drag `from` onto `to` with the mouse, holding `modifiers`.
+    pub fn drag(
+        &mut self,
+        from: impl Into<ElementId>,
+        to: impl Into<ElementId>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
+        let (from, to) = (from.into(), to.into());
+        let start = self.snapshot(from.clone()).bounds().center();
+        let end = self.snapshot(to.clone()).bounds().center();
+        self.step(format!("drag {from:?} to {to:?}"), |window, cx| {
+            let pressed = Some(MouseButton::Left);
+            let moves = [
+                (start, None),
+                (start + point(px(8.), px(8.)), pressed),
+                (end, pressed),
+            ];
+            for (ix, (position, pressed_button)) in moves.into_iter().enumerate() {
+                window.render_frame(cx);
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position,
+                        pressed_button,
+                        modifiers,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                if ix == 0 {
+                    window.dispatch_event(
+                        MouseDownEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers,
+                            click_count: 1,
+                            first_mouse: false,
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                }
+            }
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: end,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     pub fn press(&mut self, key: &str) {
         self.step(format!("press {key}"), |window, cx| window.press(key, cx));
     }

@@ -232,6 +232,7 @@ fn every_menu_bar_action_has_a_handler(cx: &mut TestAppContext) {
         OpenInNushell.boxed_clone(),
         ToggleFilter.boxed_clone(),
         OpenInEditor.boxed_clone(),
+        MoveItemsHere.boxed_clone(),
     ];
     // Menus send actions to whatever has focus: the files, or a text field.
     for focus in ["files", "search"] {

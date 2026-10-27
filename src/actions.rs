@@ -1,5 +1,6 @@
 //! Actions, key bindings, and the application menu bar.
 
+use gpui_kit::component::input;
 use gpui_kit::{App, DummyKeyboardMapper, KeyBinding, Menu, MenuItem, OsAction, actions};
 
 actions!(
@@ -39,6 +40,7 @@ actions!(
         MoveEnd,
         CopyPath,
         CopyAsNuon,
+        MoveItemsHere,
         RevealInFileManager,
         MoveToTrash,
         NewFolder,
@@ -126,7 +128,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-0", PreviewTextReset, Some(QUICK_LOOK)),
         KeyBinding::new("escape", Escape, files),
         KeyBinding::new("secondary-a", SelectAll, files),
-        KeyBinding::new("secondary-c", CopyPath, files),
+        // Edit › Copy and Paste act on files when the files have focus.
+        KeyBinding::new("secondary-c", input::Copy, files),
+        KeyBinding::new("secondary-v", input::Paste, files),
+        KeyBinding::new("secondary-alt-v", MoveItemsHere, files),
         KeyBinding::new("f2", Rename, files),
         KeyBinding::new("secondary-backspace", MoveToTrash, files),
         KeyBinding::new("delete", MoveToTrash, files),
@@ -195,12 +200,13 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Close Window", CloseWindow),
         ]),
         Menu::new("Edit").items([
-            MenuItem::os_action("Undo", gpui_kit::component::input::Undo, OsAction::Undo),
-            MenuItem::os_action("Redo", gpui_kit::component::input::Redo, OsAction::Redo),
+            MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
+            MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
             MenuItem::separator(),
-            MenuItem::os_action("Cut", gpui_kit::component::input::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", gpui_kit::component::input::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", gpui_kit::component::input::Paste, OsAction::Paste),
+            MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
+            MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
+            MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
+            MenuItem::action("Move Items Here", MoveItemsHere),
             MenuItem::separator(),
             MenuItem::action("Copy Path", CopyPath),
             MenuItem::action("Copy as Nushell List", CopyAsNuon),

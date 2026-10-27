@@ -20,6 +20,8 @@ pub mod term;
 pub mod theme;
 pub mod user_actions;
 pub mod watchdog;
+#[cfg(windows)]
+pub mod win;
 
 use crate::finder::{AppState, Finder, PickerOptions};
 use crate::model::Location;

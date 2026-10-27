@@ -208,6 +208,11 @@ impl Finder {
         };
         let icon = row.entry.kind.icon_asset();
         let view = cx.entity();
+        let el = if row.entry.is_navigable() {
+            super::transfer::folder_drop_target(el, row.entry.path.clone(), cx)
+        } else {
+            el
+        };
         let item = el
             .on_mouse_down(
                 MouseButton::Left,
@@ -603,6 +608,7 @@ impl Finder {
         let mut panes: Vec<AnyElement> = Vec::new();
         for col in 0..self.columns.len() {
             let count = self.columns[col].entries.len();
+            let dir = self.columns[col].dir.clone();
             let list = uniform_list(
                 ("column", col),
                 count,
@@ -614,19 +620,18 @@ impl Finder {
             )
             .size_full()
             .track_scroll(&self.columns[col].scroll);
-            panes.push(
-                div()
-                    .w(ui(COLUMN_WIDTH))
-                    .h_full()
-                    .flex_shrink_0()
-                    .relative()
-                    .border_r_1()
-                    .border_color(border)
-                    .py(ui(4.))
-                    .child(list)
-                    .vertical_scrollbar(&self.columns[col].scroll)
-                    .into_any_element(),
-            );
+            let pane = div()
+                .id(("column-pane", col))
+                .w(ui(COLUMN_WIDTH))
+                .h_full()
+                .flex_shrink_0()
+                .relative()
+                .border_r_1()
+                .border_color(border)
+                .py(ui(4.))
+                .child(list)
+                .vertical_scrollbar(&self.columns[col].scroll);
+            panes.push(super::transfer::folder_drop_target(pane, dir, cx).into_any_element());
         }
         if let Some(entry) = leaf {
             panes.push(
@@ -746,6 +751,9 @@ impl Finder {
                     }
                 }),
             )
+            .when(entry.is_navigable(), |row| {
+                super::transfer::folder_drop_target(row, entry.path.clone(), cx)
+            })
             .on_drag(DraggedFiles(vec![entry.path.clone()]), {
                 let label: SharedString = entry.name.clone().into();
                 let icon = entry.kind.icon_asset();

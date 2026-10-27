@@ -233,6 +233,9 @@ impl Finder {
             return row.into_any_element();
         };
         let path: PathBuf = place.path.clone();
+        // Files dropped on a place go into it; dropped between rows, folders
+        // are added to Favorites.
+        let row = super::transfer::folder_drop_target(row, path.clone(), cx);
         // The menu lives on a wrapper so the row itself stays observable in UI tests.
         div()
             .id(SharedString::from(format!("place-menu:{}", path.display())))

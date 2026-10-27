@@ -18,6 +18,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Previews and Quick Look](#previews-and-quick-look)
 - [Opening files](#opening-files)
 - [Working with files](#working-with-files)
+- [Copying and moving](#copying-and-moving)
 - [Dragging and dropping](#dragging-and-dropping)
 - [The Nushell panel](#the-nushell-panel)
 - [Filters and Smart Folders](#filters-and-smart-folders)
@@ -324,7 +325,10 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and opens the Rename dialog for it. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
 | Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. You can restore items from the Trash. |
-| Copy Path (Cmd+Alt+C, Cmd+C in the files) | Copies the selected paths, one per line. |
+| Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
+| Paste (Cmd+V in the files) | Copies the items on the clipboard into the folder shown. |
+| Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
+| Copy Path (Cmd+Alt+C) | Copies the selected paths, one per line. |
 | Copy as Nushell List (Cmd+Shift+C) | Copies the selection as NUON: a quoted string for one path, a list for several. |
 | Go to Folder… (Cmd+Shift+G) | Type a path. `~` is your home folder, and relative paths start from the current folder. A folder opens; a file opens its folder with the file selected. |
 | Add to Sidebar | Adds a selected folder to Favorites. |
@@ -332,11 +336,38 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | Refresh (Cmd+R) | Reloads the folder, columns, and previews, and re-runs the search. |
 | Rescan Index | Rebuilds the search index from scratch. |
 
+## Copying and moving
+
+Cmd+C (Edit › Copy, or Copy "name" in the item menu) puts the selected items on the clipboard. Cmd+V (Edit › Paste, or Paste Item in the empty-space menu) copies them into the folder the window shows, and Cmd+Alt+V (Edit › Move Items Here) moves them there instead. Pasting needs a folder, so it does nothing while searching or in Recents.
+
+The clipboard holds the items' paths as text too, one per line, so pasting into a terminal or a text field gives the paths. On macOS and Windows it also holds them as files, so Finder or Explorer and other apps can paste them, and files copied there paste into fffinder. On Linux, files copied in GNOME Files, Dolphin, and other file managers paste into fffinder; GPUI can only put text on the Linux clipboard, so items copied in fffinder paste as files only into fffinder. Anywhere, text that is nothing but paths of existing items (or `file://` addresses), one per line, pastes those items.
+
+Pasting an item into the folder it's already in makes a copy beside it: "name copy.ext", then "name copy 2.ext", and so on.
+
+When items with the same names are already in the folder, a dialog asks what to do with all of them:
+
+| Button | What it does |
+| --- | --- |
+| Stop | Copies or moves nothing. |
+| Skip | Leaves the items that are there, and copies or moves the rest. |
+| Keep Both | Gives the new items free names: "name 2.ext", "name 3.ext", and so on. |
+| Replace | Removes the items that are there and puts the new ones in their place. The old item is removed only once its replacement is complete. |
+
+A folder can't go inside itself, and an item can't replace the folder it's in. A notification says so.
+
+Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
+
+A copy or move that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+
 ## Dragging and dropping
 
+- Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder.
+- Drag items onto empty space in a folder to move them into the folder shown.
+- Drop files from other apps on a folder, a column, a sidebar place, or the file area to copy them in.
+- Name clashes ask first, and long transfers show progress. See [Copying and moving](#copying-and-moving).
 - Drag items from any view to another app to hand it the files. This works on macOS and Wayland; GPUI doesn't support dragging out on Windows or X11.
-- Drop folders on the sidebar to add them to Favorites.
-- Drop a folder on the file area to open it, or a file to open its folder with the file selected.
+- Drop folders between the rows of the sidebar to add them to Favorites.
+- While searching or in Recents, drop a folder on the file area to open it, or a file to open its folder with the file selected.
 
 ## The Nushell panel
 
@@ -502,7 +533,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Rename…, Move to Trash, Close Window (Cmd+W) |
-| Edit | Undo, Redo, Cut, Copy, Paste (for text fields), Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
+| Edit | Undo, Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Go to Folder… |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
@@ -519,6 +550,7 @@ Right-click one or more items:
 - Open in Editor (when a file is selected)
 - Show in Enclosing Folder (one search result)
 - Show in Finder (Show in Explorer, Show in File Manager)
+- Copy "name", or Copy N Items
 - Copy Path, or Copy Paths
 - Copy as Nushell List
 - Open Nushell Here
@@ -533,6 +565,7 @@ Right-click one or more items:
 Right-click empty space in a view:
 
 - New Folder (in a folder)
+- Paste Item, or Paste N Items, and Move Item Here, or Move N Items Here (in a folder, when the clipboard holds files)
 - Open Nushell Here (in a folder)
 - Run Nushell Pipeline…
 - Add Folder to Sidebar (when the folder isn't a favorite)
@@ -597,7 +630,9 @@ Cmd on macOS, Ctrl elsewhere.
 | Space, Cmd+Y | Quick Look |
 | Escape | Clear the selection, end the search, or cancel `--pick` |
 | Cmd+A | Select all |
-| Cmd+C | Copy path |
+| Cmd+C | Copy the selected items |
+| Cmd+V | Paste items into the folder |
+| Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
 | Cmd+Backspace, Delete | Move to Trash |
 | Letters | Type to select |

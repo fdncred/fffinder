@@ -6,6 +6,7 @@ use crate::theme::ui;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IconName;
+use gpui_kit::component::input;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -161,8 +162,17 @@ pub fn item_menu(
         )
         .separator()
         .item(
+            PopupMenuItem::new(if single {
+                format!("Copy “{}”", first.name)
+            } else {
+                format!("Copy {} Items", entries.len())
+            })
+            .icon(IconName::Copy)
+            .action(Box::new(input::Copy)),
+        )
+        .item(
             PopupMenuItem::new(if single { "Copy Path" } else { "Copy Paths" })
-                .icon(IconName::Copy)
+                .icon(Lucide::Link)
                 .action(Box::new(CopyPath)),
         )
         .item(
@@ -246,11 +256,32 @@ pub fn background_menu(
         .as_ref()
         .is_some_and(|f| finder.config.favorites.contains(f));
     let nu_folder = folder.clone();
+    // Pasting goes into the folder shown, so not into search results.
+    let pasteable = match finder.is_searching() || folder.is_none() {
+        true => 0,
+        false => crate::system::clipboard_files(cx).len(),
+    };
+    let items = |n: usize| match n {
+        1 => "Item".to_string(),
+        n => format!("{n} Items"),
+    };
     menu.when(folder.is_some(), |menu| {
         menu.item(
             PopupMenuItem::new("New Folder")
                 .icon(Lucide::FolderPlus)
                 .action(Box::new(NewFolder)),
+        )
+    })
+    .when(pasteable > 0, |menu| {
+        menu.item(
+            PopupMenuItem::new(format!("Paste {}", items(pasteable)))
+                .icon(Lucide::ClipboardPaste)
+                .action(Box::new(input::Paste)),
+        )
+        .item(
+            PopupMenuItem::new(format!("Move {} Here", items(pasteable)))
+                .icon(Lucide::FolderInput)
+                .action(Box::new(MoveItemsHere)),
         )
     })
     .when_some(nu_folder, |menu, dir| {

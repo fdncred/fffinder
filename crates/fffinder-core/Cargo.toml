@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 log.workspace = true
+thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Reads app bundles' Info.plist to find terminals; pure Rust, so it builds everywhere.
 plist = "1"

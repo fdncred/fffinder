@@ -748,7 +748,7 @@ impl Finder {
                 *row = super::Row::new(entry, Vec::new(), None);
             }
         }
-        self.load_listing(Some(target), true, cx);
+        self.load_listing(vec![target], true, cx);
         true
     }
 

@@ -14,7 +14,7 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
 - Browses folders as icons, a list, columns, or a gallery, with a sidebar, back and forward history, and a clickable path bar.
 - Previews files in the gallery, the column view, and Quick Look (Space). CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
-- Handles everyday file work: open, open in your editor, show in Finder, copy paths, rename one item or many, new folder, move to Trash, and drag files out to other apps.
+- Handles everyday file work: open, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, copy paths, rename one item or many, new folder, and move to Trash.
 - Has light and dark themes that follow the system, and a text size setting for the whole window.
 - Runs inside a terminal with `fffinder --term`, drawn with the kitty graphics protocol so it looks the same as the window. It needs a build with `--features term` and a terminal like kitty, Ghostty, or WezTerm.
 
@@ -125,7 +125,7 @@ In Settings you choose the search locations (or the entire disk), fff-search's o
 ## How it's built
 
 ```text
-crates/fffinder-core   search engine wrapper, file model, listing, places, settings, terminals
+crates/fffinder-core   search engine wrapper, file model, listing, copy and move, places, settings, terminals
 src/                     the GPUI Kit app (src/finder/ holds the window and its views)
 src/server/              the local socket server and its client
 src/macos.rs             macOS integration through AppKit

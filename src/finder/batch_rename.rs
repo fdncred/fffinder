@@ -219,7 +219,7 @@ impl Finder {
                 for (from, _) in planned.iter().map(|p| (&p.from, ())) {
                     self.previews.remove(from);
                 }
-                self.load_listing(moved.first().cloned(), true, cx);
+                self.load_listing(moved.clone(), true, cx);
                 if self.is_searching() {
                     self.run_search(false, cx);
                 }
