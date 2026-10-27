@@ -19,6 +19,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 plist = "1"
 # Directory walks for folder sizes, in parallel.
 rayon = "1"
+# Compress and Extract: zip, and gzipped tar archives.
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs", "chrono"] }
+tar = "0.4"
+flate2 = "1"
 
 [target.'cfg(unix)'.dependencies]
 # Owner and group names for Get Info.

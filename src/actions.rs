@@ -49,6 +49,12 @@ actions!(
         EmptyTrash,
         GoTrash,
         NewFolder,
+        NewFile,
+        Duplicate,
+        MakeAlias,
+        MakeSymlink,
+        Compress,
+        Extract,
         Rename,
         OpenInNushell,
         ToggleNuPanel,
@@ -99,6 +105,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-alt-s", ToggleSidebar, finder),
         KeyBinding::new("secondary-shift-n", NewFolder, finder),
         KeyBinding::new("secondary-i", GetInfo, finder),
+        KeyBinding::new("secondary-alt-n", NewFile, finder),
         KeyBinding::new("secondary-shift-backspace", EmptyTrash, finder),
         KeyBinding::new("secondary-alt-c", CopyPath, finder),
         KeyBinding::new("secondary-shift-c", CopyAsNuon, finder),
@@ -140,6 +147,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-v", input::Paste, files),
         KeyBinding::new("secondary-alt-v", MoveItemsHere, files),
         KeyBinding::new("f2", Rename, files),
+        KeyBinding::new("secondary-d", Duplicate, files),
         KeyBinding::new("secondary-backspace", MoveToTrash, files),
         KeyBinding::new("secondary-alt-backspace", DeleteImmediately, files),
         KeyBinding::new("secondary-z", input::Undo, files),
@@ -188,7 +196,47 @@ fn ctrl_alias(binding: &KeyBinding) -> Option<KeyBinding> {
     .ok()
 }
 
+/// What Make Alias is called: Finder's "Make Alias", Explorer's "Create
+/// Shortcut", or nothing on Linux, where links are the aliases.
+pub fn alias_label() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("Make Alias")
+    } else if cfg!(windows) {
+        Some("Create Shortcut")
+    } else {
+        None
+    }
+}
+
 pub fn set_menus(cx: &mut App) {
+    // Finder aliases are macOS only; symbolic links work everywhere.
+    let mut file = vec![
+        MenuItem::action("New Window", NewWindow),
+        MenuItem::action("New Folder", NewFolder),
+        MenuItem::action("New File…", NewFile),
+        MenuItem::separator(),
+        MenuItem::action("Open", OpenSelected),
+        MenuItem::action("Open in Editor", OpenInEditor),
+        MenuItem::action("Quick Look", QuickLook),
+        MenuItem::action("Get Info", GetInfo),
+        MenuItem::action("Rename…", Rename),
+        MenuItem::action("Duplicate", Duplicate),
+    ];
+    // Finder aliases on macOS, shortcuts on Windows; Linux has symbolic links.
+    if let Some(label) = alias_label() {
+        file.push(MenuItem::action(label, MakeAlias));
+    }
+    file.extend([
+        MenuItem::action("Make Symbolic Link", MakeSymlink),
+        MenuItem::action("Compress", Compress),
+        MenuItem::action("Extract", Extract),
+        MenuItem::separator(),
+        MenuItem::action("Move to Trash", MoveToTrash),
+        MenuItem::action("Put Back", PutBack),
+        MenuItem::action("Delete Immediately…", DeleteImmediately),
+        MenuItem::separator(),
+        MenuItem::action("Close Window", CloseWindow),
+    ]);
     cx.set_menus([
         Menu::new("fffinder").items([
             MenuItem::action("Settings…", ShowSettings),
@@ -197,21 +245,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Quit fffinder", Quit),
         ]),
-        Menu::new("File").items([
-            MenuItem::action("New Window", NewWindow),
-            MenuItem::action("New Folder", NewFolder),
-            MenuItem::separator(),
-            MenuItem::action("Open", OpenSelected),
-            MenuItem::action("Open in Editor", OpenInEditor),
-            MenuItem::action("Quick Look", QuickLook),
-            MenuItem::action("Get Info", GetInfo),
-            MenuItem::action("Rename…", Rename),
-            MenuItem::action("Move to Trash", MoveToTrash),
-            MenuItem::action("Put Back", PutBack),
-            MenuItem::action("Delete Immediately…", DeleteImmediately),
-            MenuItem::separator(),
-            MenuItem::action("Close Window", CloseWindow),
-        ]),
+        Menu::new("File").items(file),
         Menu::new("Edit").items([
             MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
             MenuItem::os_action("Redo", input::Redo, OsAction::Redo),

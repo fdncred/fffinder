@@ -126,21 +126,21 @@ impl Progress {
             .unwrap_or_default()
     }
 
-    fn set_current(&self, name: String) {
+    pub(crate) fn set_current(&self, name: String) {
         if let Ok(mut current) = self.current.lock() {
             *current = name;
         }
     }
 
-    fn advance(&self, bytes: u64) {
+    pub(crate) fn advance(&self, bytes: u64) {
         self.done.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    fn expect(&self, bytes: u64) {
+    pub(crate) fn expect(&self, bytes: u64) {
         self.total.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    fn check(&self) -> Result<(), TransferError> {
+    pub(crate) fn check(&self) -> Result<(), TransferError> {
         if self.is_cancelled() {
             Err(TransferError::Cancelled)
         } else {

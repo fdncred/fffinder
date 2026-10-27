@@ -4,6 +4,7 @@
 mod common;
 
 use common::{Fixture, Ui, at, cmd, item_id};
+use fffinder::actions::*;
 use gpui_kit::{Modifiers, TestAppContext};
 
 #[gpui_kit::test]
@@ -332,5 +333,67 @@ fn open_with_lists_apps_and_sets_the_default(cx: &mut TestAppContext) {
     assert!(
         !ui.menu_labels().contains(&"Open With".to_string()),
         "folders have none"
+    );
+}
+
+#[gpui_kit::test]
+fn duplicate_new_file_links_and_archives(cx: &mut TestAppContext) {
+    let fx = Fixture::new("make");
+    let mut ui = Ui::open(cx, &fx.dir);
+
+    ui.select("notes.txt");
+    ui.press(&cmd("d"));
+    assert!(fx.path("notes copy.txt").exists());
+    assert_eq!(ui.selected(), ["notes copy.txt"]);
+
+    // New File selects the name before the extension.
+    ui.press(&cmd("alt-n"));
+    assert!(ui.dialog_open());
+    ui.type_text("todo");
+    ui.click("new-file-create");
+    assert!(fx.path("todo.txt").is_file());
+    assert_eq!(ui.selected(), ["todo.txt"]);
+    ui.press(&cmd("alt-n"));
+    ui.press(&cmd("a"));
+    ui.type_text("notes.txt");
+    ui.press("enter");
+    assert!(ui.dialog_open(), "a taken name is refused");
+    ui.click("new-file-cancel");
+
+    ui.select("Roadmap.md");
+    ui.dispatch(MakeSymlink);
+    let link = fx.path("Roadmap.md link");
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        std::path::Path::new("Roadmap.md")
+    );
+    assert_eq!(std::fs::read_to_string(&link).unwrap(), "# Roadmap\n");
+    #[cfg(target_os = "macos")]
+    {
+        ui.select("Roadmap.md");
+        ui.dispatch(MakeAlias);
+        assert!(fx.path("Roadmap.md alias").is_file(), "a Finder alias file");
+    }
+    #[cfg(windows)]
+    {
+        ui.select("Roadmap.md");
+        ui.dispatch(MakeAlias);
+        assert!(fx.path("Roadmap.md - Shortcut.lnk").is_file(), "an Explorer shortcut");
+    }
+
+    // Compress, then opening the zip extracts it beside itself.
+    ui.select("Projects");
+    ui.dispatch(Compress);
+    assert!(fx.path("Projects.zip").is_file());
+    assert_eq!(ui.selected(), ["Projects.zip"]);
+    let ix = ui.names().iter().position(|n| n == "Projects.zip").unwrap();
+    ui.update(|f, window, cx| f.click_row(ix, Default::default(), 2, window, cx));
+    let atlas = fx.path("Projects 2/atlas/Project Atlas.txt");
+    assert_eq!(std::fs::read_to_string(&atlas).unwrap(), "atlas");
+    assert_eq!(ui.selected(), ["Projects 2"]);
+    ui.press(&cmd("z"));
+    assert!(
+        !fx.path("Projects 2").exists(),
+        "Undo moves the extracted folder to the Trash"
     );
 }

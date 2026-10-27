@@ -2,6 +2,7 @@
 //! folder listing, copying and moving, sidebar places, settings, terminals,
 //! and formatting.
 
+pub mod archive;
 pub mod config;
 pub mod desktop_apps;
 pub mod engine;

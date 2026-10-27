@@ -38,7 +38,8 @@ fn key(path: &Path) -> String {
     }
 }
 
-fn name_problem(name: &str) -> Option<String> {
+/// Why `name` can't be a file name, if it can't.
+pub fn name_problem(name: &str) -> Option<String> {
     let bad_chars: &[char] = if cfg!(windows) {
         &['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     } else {

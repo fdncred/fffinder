@@ -8,6 +8,7 @@ mod editor;
 mod filter;
 mod fps;
 mod info;
+mod make;
 mod menus;
 mod nu_panel;
 mod open_with;
@@ -1412,7 +1413,13 @@ impl Finder {
             self.navigate(Location::Folder(folder.path.clone()), window, cx);
             return;
         }
-        self.open_files(entries.iter().map(|e| e.path.clone()).collect(), window, cx);
+        // Archives unpack beside themselves, as Finder's Archive Utility does.
+        let (archives, files): (Vec<PathBuf>, Vec<PathBuf>) = entries
+            .iter()
+            .map(|e| e.path.clone())
+            .partition(|p| make::is_archive(p));
+        self.extract_archives(archives, window, cx);
+        self.open_files(files, window, cx);
         let engine = self.engine.clone();
         let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
         cx.background_spawn(async move {
@@ -2253,6 +2260,12 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_recents))
             .on_action(cx.listener(Self::go_trash))
             .on_action(cx.listener(Self::get_info))
+            .on_action(cx.listener(Self::new_file))
+            .on_action(cx.listener(Self::duplicate))
+            .on_action(cx.listener(Self::make_alias))
+            .on_action(cx.listener(Self::make_symlink))
+            .on_action(cx.listener(Self::compress))
+            .on_action(cx.listener(Self::extract))
             .on_action(cx.listener(Self::undo_file_operation))
             .on_action(cx.listener(Self::put_back))
             .on_action(cx.listener(Self::delete_immediately))

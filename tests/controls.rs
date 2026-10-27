@@ -238,6 +238,12 @@ fn every_menu_bar_action_has_a_handler(cx: &mut TestAppContext) {
         EmptyTrash.boxed_clone(),
         GoTrash.boxed_clone(),
         GetInfo.boxed_clone(),
+        NewFile.boxed_clone(),
+        Duplicate.boxed_clone(),
+        MakeAlias.boxed_clone(),
+        MakeSymlink.boxed_clone(),
+        Compress.boxed_clone(),
+        Extract.boxed_clone(),
         gpui_kit::component::input::Undo.boxed_clone(),
     ];
     // Menus send actions to whatever has focus: the files, or a text field.

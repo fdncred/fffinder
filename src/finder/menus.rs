@@ -230,6 +230,42 @@ pub fn item_menu(
             .icon(Lucide::Pencil)
             .action(Box::new(Rename)),
         )
+        .item(
+            PopupMenuItem::new("Duplicate")
+                .icon(Lucide::CopyPlus)
+                .action(Box::new(Duplicate)),
+        )
+        .when_some(alias_label(), |menu, label| {
+            menu.item(
+                PopupMenuItem::new(label)
+                    .icon(Lucide::Link2)
+                    .action(Box::new(MakeAlias)),
+            )
+        })
+        .item(
+            PopupMenuItem::new("Make Symbolic Link")
+                .icon(Lucide::FileSymlink)
+                .action(Box::new(MakeSymlink)),
+        )
+        .item(
+            PopupMenuItem::new(if single {
+                format!("Compress “{}”", first.name)
+            } else {
+                format!("Compress {} Items", entries.len())
+            })
+            .icon(Lucide::FileArchive)
+            .action(Box::new(Compress)),
+        )
+        .when(
+            entries.iter().any(|e| super::make::is_archive(&e.path)),
+            |menu| {
+                menu.item(
+                    PopupMenuItem::new("Extract")
+                        .icon(Lucide::PackageOpen)
+                        .action(Box::new(Extract)),
+                )
+            },
+        )
         .when(single && first.is_navigable() && !is_favorite, |menu| {
             menu.item(
                 PopupMenuItem::new("Add to Sidebar")
@@ -332,6 +368,11 @@ pub fn background_menu(
             PopupMenuItem::new("New Folder")
                 .icon(Lucide::FolderPlus)
                 .action(Box::new(NewFolder)),
+        )
+        .item(
+            PopupMenuItem::new("New File…")
+                .icon(Lucide::FilePlus)
+                .action(Box::new(NewFile)),
         )
     })
     .when(pasteable > 0, |menu| {

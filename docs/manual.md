@@ -306,7 +306,7 @@ With Quick Look open, Cmd+= (or Cmd++) makes the text bigger, Cmd+- makes it sma
 
 ## Opening files
 
-**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button) opens a folder in the window, and opens a file or app with its default application. Opening several files opens each one.
+**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button) opens a folder in the window, and opens a file or app with its default application. Opening several files opens each one. Opening a zip, `.tar`, `.tar.gz`, or `.tgz` archive extracts it beside itself instead, as Finder's Archive Utility does; use Open With to hand it to another app.
 
 When no application is registered for a file (checked with LaunchServices on macOS and `xdg-mime` on Linux):
 
@@ -330,6 +330,12 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Command | What it does |
 | --- | --- |
 | New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and opens the Rename dialog for it. |
+| New File… (Cmd+Alt+N) | Asks for a name ("untitled.txt", with the part before the extension selected) and makes an empty file with it in the current folder. A taken or invalid name is refused. |
+| Duplicate (Cmd+D) | Copies each selected item beside itself as "name copy.ext", then "name copy 2.ext", and so on. |
+| Make Alias (macOS), Create Shortcut (Windows) | Makes a Finder alias to each selected item beside it, named "name alias", which Finder and other apps follow to the original even after the original moves. On Windows it makes an Explorer shortcut, "name - Shortcut.lnk". Linux has no aliases; use Make Symbolic Link. |
+| Make Symbolic Link | Makes a symbolic link to each selected item beside it, named "name link". The link points at the name, so it keeps working when the folder moves. On Windows, making links needs Developer Mode or an administrator. |
+| Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
+| Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
 | Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
@@ -367,7 +373,7 @@ A folder can't go inside itself, and an item can't replace the folder it's in. A
 
 Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
 
-A copy or move that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+A copy, move, Compress, or Extract that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
 
 ## Get Info
 
@@ -395,7 +401,7 @@ Undo (Cmd+Z with the files focused, or Edit › Undo) reverses the latest file o
 | --- | --- |
 | Rename, batch rename | Gives the items their old names. |
 | Move, paste with Move Items Here, drag to a folder | Moves the items back. |
-| Copy, paste, New Folder | Moves the new items to the Trash, as Finder does. |
+| Copy, paste, Duplicate, New Folder, New File, Make Alias, Make Symbolic Link, Compress, Extract | Moves the new items to the Trash, as Finder does. |
 | Move to Trash | Puts the items back. |
 
 Undo stops with a notification when it can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z undoes typing as usual.
@@ -583,7 +589,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | Menu | Items |
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| File | New Window (Cmd+N), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder… |
@@ -610,6 +616,11 @@ Right-click one or more items:
 - Run Nushell Pipeline…
 - Nushell Actions (submenu)
 - Rename…, or Rename N Items…
+- Duplicate
+- Make Alias (macOS), or Create Shortcut (Windows)
+- Make Symbolic Link
+- Compress "name", or Compress N Items
+- Extract (when an archive is selected)
 - Add to Sidebar (one folder that isn't a favorite)
 - Move to Trash
 
@@ -619,7 +630,7 @@ In the Trash, the item menu has Put Back, Quick Look, Show in Finder, Copy Path,
 
 Right-click empty space in a view:
 
-- New Folder (in a folder)
+- New Folder and New File… (in a folder)
 - Paste Item, or Paste N Items, and Move Item Here, or Move N Items Here (in a folder, when the clipboard holds files)
 - Open Nushell Here (in a folder)
 - Run Nushell Pipeline…
@@ -672,6 +683,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Alt+S | Toggle the sidebar |
 | Cmd+Shift+N | New folder |
 | Cmd+I | Get Info |
+| Cmd+Alt+N | New file |
 | Cmd+Shift+Backspace | Empty the Trash |
 | Cmd+Alt+C | Copy path |
 | Cmd+Shift+C | Copy as Nushell list |
@@ -694,6 +706,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+V | Paste items into the folder |
 | Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
+| Cmd+D | Duplicate |
 | Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
 | Cmd+Alt+Backspace | Delete immediately |
 | Cmd+Z | Undo the latest file operation |

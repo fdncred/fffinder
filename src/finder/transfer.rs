@@ -23,9 +23,44 @@ use std::time::{Duration, Instant};
 /// A transfer only gets a progress row once it has run this long.
 const SHOW_AFTER: Duration = Duration::from_millis(300);
 
-/// A copy or move under way.
+/// What a kind of background file job is called, in its progress row, in
+/// Undo, and when it fails.
+#[derive(Clone)]
+pub(super) struct JobKind {
+    verb: &'static str,
+    undo: &'static str,
+    failed: &'static str,
+    icon: IconName,
+}
+
+const COPY: JobKind = JobKind {
+    verb: "Copying",
+    undo: "Copy",
+    failed: "Couldn’t copy",
+    icon: IconName::Copy,
+};
+const MOVE: JobKind = JobKind {
+    verb: "Moving",
+    undo: "Move",
+    failed: "Couldn’t move",
+    icon: IconName::FolderOpen,
+};
+pub(super) const COMPRESS: JobKind = JobKind {
+    verb: "Compressing",
+    undo: "Compress",
+    failed: "Couldn’t compress",
+    icon: IconName::Inbox,
+};
+pub(super) const EXTRACT: JobKind = JobKind {
+    verb: "Extracting",
+    undo: "Extract",
+    failed: "Couldn’t extract",
+    icon: IconName::FolderOpen,
+};
+
+/// A copy, move, or archive job under way.
 pub(super) struct Job {
-    mode: Mode,
+    kind: JobKind,
     count: usize,
     progress: Arc<Progress>,
     started: Instant,
@@ -208,15 +243,12 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let progress = Arc::new(Progress::default());
         let mode = transfer.mode;
-        self.transfers.push(Job {
-            mode: transfer.mode,
-            count: transfer.sources.len(),
-            progress: progress.clone(),
-            started: cx.background_executor().now(),
-        });
-        self.poll_transfers(cx);
+        let kind = match mode {
+            Mode::Copy => COPY,
+            Mode::Move => MOVE,
+        };
+        let progress = self.start_job(kind, transfer.sources.len(), cx);
         cx.spawn_in(window, async move |this, cx| {
             let report = cx
                 .background_spawn({
@@ -228,6 +260,63 @@ impl Finder {
                 this.transfers
                     .retain(|job| !Arc::ptr_eq(&job.progress, &progress));
                 this.transfer_finished(mode, &report, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Add a progress row for a job, and keep it redrawn.
+    fn start_job(&mut self, kind: JobKind, count: usize, cx: &mut Context<Self>) -> Arc<Progress> {
+        let progress = Arc::new(Progress::default());
+        self.transfers.push(Job {
+            kind,
+            count,
+            progress: progress.clone(),
+            started: cx.background_executor().now(),
+        });
+        self.poll_transfers(cx);
+        progress
+    }
+
+    /// Run `work` on a background thread with a progress row. It returns
+    /// the items it made, which are selected, and Undo moves to the Trash.
+    pub(super) fn run_job(
+        &mut self,
+        kind: JobKind,
+        count: usize,
+        work: impl FnOnce(&Progress) -> Result<Vec<PathBuf>, String> + Send + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let progress = self.start_job(kind.clone(), count, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn({
+                    let progress = progress.clone();
+                    async move { work(&progress) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.transfers
+                    .retain(|job| !Arc::ptr_eq(&job.progress, &progress));
+                match result {
+                    Ok(made) => {
+                        undo::record(kind.undo, Change::Created(made.clone()), cx);
+                        this.files_changed(made, cx);
+                    }
+                    Err(_) if progress.is_cancelled() => {
+                        window.push_notification("Stopped", cx);
+                        this.files_changed(Vec::new(), cx);
+                    }
+                    Err(err) => {
+                        window.push_notification(
+                            (NotificationType::Error, format!("{}: {err}", kind.failed)),
+                            cx,
+                        );
+                        this.files_changed(Vec::new(), cx);
+                    }
+                }
             })
             .ok();
         })
@@ -302,10 +391,7 @@ impl Finder {
             .enumerate()
             .filter(|(_, job)| now.saturating_duration_since(job.started) >= SHOW_AFTER)
             .map(|(ix, job)| {
-                let verb = match job.mode {
-                    Mode::Copy => "Copying",
-                    Mode::Move => "Moving",
-                };
+                let verb = job.kind.verb;
                 let what = match job.count {
                     1 => format!("“{}”", job.progress.current()),
                     n => format!("{n} items: {}", job.progress.current()),
@@ -323,12 +409,9 @@ impl Finder {
                     .border_color(border)
                     .text_size(ui(12.))
                     .child(
-                        Icon::new(match job.mode {
-                            Mode::Copy => IconName::Copy,
-                            Mode::Move => IconName::FolderOpen,
-                        })
-                        .with_size(ui(14.))
-                        .text_color(muted),
+                        Icon::new(job.kind.icon.clone())
+                            .with_size(ui(14.))
+                            .text_color(muted),
                     )
                     .child(
                         div()

@@ -461,6 +461,12 @@ fn actions_menu(
             .action(Box::new(NewFolder)),
     )
     .item(
+        PopupMenuItem::new("New File…")
+            .icon(Lucide::FilePlus)
+            .disabled(!in_folder)
+            .action(Box::new(NewFile)),
+    )
+    .item(
         PopupMenuItem::new("Quick Look")
             .icon(IconName::Eye)
             .disabled(!has_selection)

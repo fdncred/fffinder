@@ -1,12 +1,13 @@
 //! Windows integration through the Win32 API: putting files on the
-//! clipboard the way Explorer does, and the apps registered for a file type
-//! (Explorer's Open with list), opened through the shell.
+//! clipboard the way Explorer does, the apps registered for a file type
+//! (Explorer's Open with list) opened through the shell, and shortcuts.
 
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::Com::{
-    COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IDataObject,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoTaskMemFree, IDataObject, IPersistFile,
 };
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -17,9 +18,9 @@ use windows::Win32::UI::Shell::DROPFILES;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR, ASSOCSTR_EXECUTABLE,
     ASSOCSTR_FRIENDLYAPPNAME, AssocQueryStringW, BHID_DataObject, IAssocHandler, IShellItem,
-    SHAssocEnumHandlers, SHCreateItemFromParsingName,
+    IShellLinkW, SHAssocEnumHandlers, SHCreateItemFromParsingName, ShellLink,
 };
-use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::core::{HSTRING, Interface as _, PCWSTR, PWSTR};
 
 /// `bytes` in movable global memory, which the clipboard takes over.
 fn global(bytes: &[u8]) -> Option<HGLOBAL> {
@@ -235,4 +236,23 @@ pub fn open_with(program: &Path, files: &[PathBuf]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// An Explorer shortcut (`.lnk`) at `link` that opens `target`.
+pub fn make_shortcut(target: &Path, link: &Path) -> Result<(), String> {
+    com();
+    // SAFETY: the shell link object lives until it's saved.
+    unsafe {
+        let shortcut: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message())?;
+        shortcut
+            .SetPath(&HSTRING::from(target.as_os_str()))
+            .map_err(|e| e.message())?;
+        if let Some(dir) = target.parent() {
+            let _ = shortcut.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()));
+        }
+        let file: IPersistFile = shortcut.cast().map_err(|e| e.message())?;
+        file.Save(&HSTRING::from(link.as_os_str()), true)
+            .map_err(|e| e.message())
+    }
 }

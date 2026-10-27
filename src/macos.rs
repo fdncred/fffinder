@@ -181,6 +181,23 @@ mod imp {
         })
     }
 
+    /// A Finder alias is a bookmark written to a file.
+    pub fn make_alias(target: &Path, alias: &Path) -> Result<(), String> {
+        use objc2_foundation::NSURLBookmarkCreationOptions;
+        let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+        autoreleasepool(|_| {
+            let data = url(target)
+                .bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
+                    NSURLBookmarkCreationOptions::SuitableForBookmarkFile,
+                    None,
+                    None,
+                )
+                .map_err(|e| e.localizedDescription().to_string())?;
+            NSURL::writeBookmarkData_toURL_options_error(&data, &url(alias), 0)
+                .map_err(|e| e.localizedDescription().to_string())
+        })
+    }
+
     pub fn apps_for(path: &Path) -> Vec<PathBuf> {
         autoreleasepool(|_| {
             let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
@@ -407,6 +424,12 @@ pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
 #[cfg(target_os = "macos")]
 pub fn default_app(path: &Path) -> Option<PathBuf> {
     imp::default_app(path)
+}
+
+/// Make a Finder alias to `target` at `alias`.
+#[cfg(target_os = "macos")]
+pub fn make_alias(target: &Path, alias: &Path) -> Result<(), String> {
+    imp::make_alias(target, alias)
 }
 
 /// Every app Launch Services says can open the file at `path`.
