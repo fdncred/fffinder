@@ -132,7 +132,10 @@ impl Drop for StepGuard {
 pub struct Ui<'a> {
     pub cx: &'a mut TestAppContext,
     pub handle: AnyWindowHandle,
+    /// The browser the test drives: the window's first tab, with tabs.
     pub view: Entity<Finder>,
+    /// The window's tabs, when opened with them.
+    pub workspace: Option<Entity<fffinder::workspace::Workspace>>,
     pub dir: PathBuf,
 }
 
@@ -145,6 +148,8 @@ pub struct Open {
     pub terminals: Vec<Terminal>,
     /// Frames per second in the status bar, as with `--fps`.
     pub fps: bool,
+    /// Open the window with tabs and split view, as the app does.
+    pub workspace: bool,
 }
 
 impl<'a> Ui<'a> {
@@ -186,16 +191,34 @@ impl<'a> Ui<'a> {
         });
         let start = Location::Folder(dir.to_path_buf());
         let picker = options.picker;
-        let (handle, view) = cx
-            .update(|cx| {
-                gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
-                    let view = cx.new(|cx| Finder::new(start, None, picker, window, cx));
-                    let focus = view.read(cx).files_focus_handle();
-                    focus.focus(window, cx);
-                    view
+        let (handle, view, workspace) = if options.workspace {
+            let (handle, workspace) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                        let view = cx.new(|cx| {
+                            fffinder::workspace::Workspace::new(start, None, picker, window, cx)
+                        });
+                        let focus = view.read(cx).active().read(cx).files_focus_handle();
+                        focus.focus(window, cx);
+                        view
+                    })
                 })
-            })
-            .unwrap();
+                .unwrap();
+            let view = workspace.read_with(cx, |w, _| w.active().clone());
+            (handle, view, Some(workspace))
+        } else {
+            let (handle, view) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                        let view = cx.new(|cx| Finder::new(start, None, picker, window, cx));
+                        let focus = view.read(cx).files_focus_handle();
+                        focus.focus(window, cx);
+                        view
+                    })
+                })
+                .unwrap();
+            (handle, view, None)
+        };
         let root = dir.to_path_buf();
         view.update(cx, |f, cx| {
             f.set_persist(false);
@@ -206,6 +229,7 @@ impl<'a> Ui<'a> {
             cx,
             handle,
             view,
+            workspace,
             dir: dir.to_path_buf(),
         };
         ui.settle();

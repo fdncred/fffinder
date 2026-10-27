@@ -539,3 +539,99 @@ fn volumes_eject_free_space_and_servers(cx: &mut TestAppContext) {
         ["smb://nas/share"]
     );
 }
+
+#[gpui_kit::test]
+fn tabs_and_split_view(cx: &mut TestAppContext) {
+    use common::Open;
+    use fffinder::model::Location;
+    let fx = Fixture::new("tabs");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            workspace: true,
+            ..Default::default()
+        },
+    );
+    let workspace = ui.workspace.clone().expect("opened with tabs");
+    let tabs = |ui: &Ui| workspace.read_with(ui.cx, |w, _| (w.tabs().len(), w.active_index()));
+    assert!(!ui.exists("tab-bar"), "one tab has no tab bar");
+    // Dialogs and notifications still work with tabs around the browser.
+    ui.select("notes.txt");
+    ui.press(&cmd("i"));
+    assert!(ui.dialog_open());
+    ui.click("info-done");
+    assert!(!ui.dialog_open());
+    ui.press(&cmd("shift-g"));
+    assert!(ui.dialog_open());
+    ui.click("goto-cancel");
+
+    ui.press(&cmd("t"));
+    assert_eq!(tabs(&ui), (2, 1));
+    assert!(ui.exists("tab-bar"));
+    // Each tab keeps its own place.
+    let second = workspace.read_with(ui.cx, |w, _| w.active().clone());
+    let projects = fx.path("Projects");
+    ui.window(|window, cx| {
+        second.update(cx, |f, cx| {
+            f.navigate(Location::Folder(projects), window, cx)
+        })
+    });
+    ui.settle();
+    // Drag the second tab in front of the first; it stays the active one.
+    ui.drag(("tab", 1usize), ("tab", 0usize), Modifiers::none());
+    assert_eq!(tabs(&ui), (2, 0));
+    assert_eq!(
+        workspace.read_with(ui.cx, |w, _| w.active().entity_id()),
+        second.entity_id()
+    );
+    ui.drag(("tab", 0usize), ("tab", 1usize), Modifiers::none());
+    assert_eq!(tabs(&ui), (2, 1));
+    ui.press("ctrl-tab");
+    assert_eq!(tabs(&ui), (2, 0));
+    assert_eq!(
+        ui.folder(),
+        Some(fx.dir.clone()),
+        "the first tab didn't move"
+    );
+    ui.click(("tab", 1usize));
+    assert_eq!(tabs(&ui).1, 1);
+    ui.press(&cmd("w"));
+    assert_eq!(tabs(&ui), (1, 0), "Cmd+W closes the tab, not the window");
+    // The toolbar's Actions menu has them too, for systems without a menu bar.
+    ui.click("actions");
+    ui.click_menu_item("New Tab");
+    assert_eq!(tabs(&ui), (2, 1));
+    ui.press(&cmd("w"));
+
+    // Split view: F5 copies and F6 moves into the other pane's folder.
+    ui.press(&cmd("\\"));
+    let pane = workspace
+        .read_with(ui.cx, |w, _| w.split_pane().cloned())
+        .expect("a second pane");
+    let projects = fx.path("Projects");
+    ui.window(|window, cx| {
+        pane.update(cx, |f, cx| {
+            f.navigate(Location::Folder(projects), window, cx)
+        })
+    });
+    ui.settle();
+    ui.select("notes.txt");
+    ui.press("f5");
+    assert!(fx.path("Projects/notes.txt").exists() && fx.path("notes.txt").exists());
+    ui.select("Budget.csv");
+    ui.press("f6");
+    assert!(fx.path("Projects/Budget.csv").exists() && !fx.path("Budget.csv").exists());
+    let shown: Vec<String> = pane.read_with(ui.cx, |f, _| {
+        f.rows_for_test()
+            .iter()
+            .map(|r| r.entry.name.clone())
+            .collect()
+    });
+    assert!(
+        shown.contains(&"Budget.csv".to_string()),
+        "the other pane reloads: {shown:?}"
+    );
+    ui.press(&cmd("\\"));
+    assert!(workspace.read_with(ui.cx, |w, _| w.split_pane().is_none()));
+}

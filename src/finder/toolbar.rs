@@ -154,8 +154,10 @@ impl Finder {
         let view = cx.entity();
         let mode = self.config.view_mode;
         // A terminal window has no traffic lights to make room for.
-        let traffic =
-            cfg!(target_os = "macos") && !self.config.show_sidebar && !crate::term::active();
+        let traffic = cfg!(target_os = "macos")
+            && !self.config.show_sidebar
+            && !crate::term::active()
+            && !self.split_pane;
         let can_back = self.history.can_back();
         let can_forward = self.history.can_forward();
 
@@ -460,6 +462,7 @@ fn actions_menu(
     let is_favorite = folder
         .as_ref()
         .is_some_and(|f| finder.config.favorites.contains(f));
+    let split = finder.has_split_view(cx);
     menu.item(
         PopupMenuItem::new("New Folder")
             .icon(Lucide::FolderPlus)
@@ -471,6 +474,20 @@ fn actions_menu(
             .icon(Lucide::FilePlus)
             .disabled(!in_folder)
             .action(Box::new(NewFile)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("New Tab")
+            .icon(Lucide::Plus)
+            .disabled(finder.picker.is_some())
+            .action(Box::new(NewTab)),
+    )
+    .item(
+        PopupMenuItem::new("Split View")
+            .icon(Lucide::Columns2)
+            .checked(split)
+            .disabled(finder.picker.is_some())
+            .action(Box::new(ToggleSplitView)),
     )
     .item(
         PopupMenuItem::new("Quick Look")

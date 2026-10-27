@@ -232,6 +232,7 @@ impl Finder {
             self.rebuild_rows(cx);
         }
         self.reload_columns(cx);
+        self.tell_others(cx);
     }
 
     /// The bar over the Trash, with its Empty button.

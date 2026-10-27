@@ -9,6 +9,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Starting fffinder](#starting-fffinder)
 - [The window](#the-window)
 - [Toolbar](#toolbar)
+- [Tabs and split view](#tabs-and-split-view)
 - [Sidebar](#sidebar)
 - [Views](#views)
 - [Selecting items](#selecting-items)
@@ -125,6 +126,14 @@ The status bar shows:
 - A spinner while a search or filter runs.
 - "Indexing N files…" while the index is being built, when the sidebar is hidden. The sidebar footer shows it otherwise.
 - In icon view, a slider for the icon size, from 32 to 128 points.
+
+## Tabs and split view
+
+**Tabs.** New Tab (Cmd+T, or File › New Tab) opens a tab at the folder the window shows. Each tab is a whole browser with its own history, search, filter, and selection. With two or more tabs, a tab bar appears under the toolbar: click a tab to show it, click its × to close it, drag it onto another tab to move it there, or click + for another tab. Ctrl+Tab and Cmd+Shift+] show the next tab, Ctrl+Shift+Tab and Cmd+Shift+[ the previous one, both wrapping around. Cmd+W closes the tab, and the window only when it's the last tab. Right-click a tab, or use Window › Move Tab to New Window, to give it a window of its own at the same folder and search; its back and forward history stays behind.
+
+**Split view.** Split View (Cmd+Backslash, or the Window menu) shows a second pane to the right of the current tab, starting at the same folder, without its own sidebar. It stays as you switch tabs, and Cmd+Backslash again (or Cmd+W in that pane) closes it. Each pane has its own toolbar. F5 (Window › Copy to Other Pane) copies the selected items into the other pane's folder and F6 (Move to Other Pane) moves them, as in Total Commander and Midnight Commander, with the same name-clash questions, progress, and Undo as any copy or move. The other pane must show a folder, not search results. Split view wants a wide window; in a narrow one the toolbars run out of room.
+
+When one tab or pane copies, moves, renames, or deletes files, the others in the window reload.
 
 ## Toolbar
 
@@ -645,10 +654,11 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | Menu | Items |
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
+| Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
 
 New Window opens a window at the folder you last had open.
@@ -706,7 +716,7 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 - **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files.
 - **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
-- **Actions** (…): New Folder, Quick Look, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Filter with Nushell…, Go to Folder…, Search Syntax…, Settings….
+- **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
 
 ## Keyboard shortcuts
 
@@ -724,7 +734,11 @@ Cmd on macOS, Ctrl elsewhere.
 
 | Keys | Action |
 | --- | --- |
-| Cmd+W | Close the window |
+| Cmd+W | Close the tab, or the window when it's the last tab |
+| Cmd+T | New tab |
+| Ctrl+Tab, Cmd+Shift+] | Next tab |
+| Ctrl+Shift+Tab, Cmd+Shift+[ | Previous tab |
+| Cmd+Backslash | Split view on or off |
 | Cmd+F | Search |
 | Cmd+Alt+F | Filter with Nushell |
 | Cmd+/ | Search syntax |
@@ -766,6 +780,8 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
 | Cmd+D | Duplicate |
+| F5 | In split view, copy the selection to the other pane |
+| F6 | In split view, move the selection to the other pane |
 | Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
 | Cmd+Alt+Backspace | Delete immediately |
 | Cmd+Z | Undo the latest file operation |
@@ -1079,7 +1095,7 @@ A step that runs longer than 20 seconds fails the run and names the step, so a h
 cargo run --example drive -- key:cmd-, click:show-hidden key:escape key:cmd-shift-g 'type:~/src' key:enter
 ```
 
-`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change can be checked without opening it. `examples/macos_colors.rs` prints the macOS colors the themes are based on, in light and dark.
+`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change can be checked without opening it. `--tabs N` opens N tabs, `--split` turns on split view, and `--info` opens Get Info. `examples/macos_colors.rs` prints the macOS colors the themes are based on, in light and dark.
 
 `examples/terminals.rs` lists the terminals found and what Automatic picks. With `--verify` it opens each one with a short script in place of `nu` that records the folder it started in, then closes it. Terminal and iTerm2 keep their windows open, so it checks them only when you name them.
 

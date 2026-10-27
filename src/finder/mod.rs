@@ -15,6 +15,7 @@ mod nu_panel;
 mod open_with;
 mod preview;
 mod sidebar;
+mod tab_bar;
 mod toolbar;
 mod transfer;
 mod trash;
@@ -280,6 +281,10 @@ pub struct Finder {
     column_resize: Option<(usize, Pixels, f32)>,
     /// Space left on the current folder's volume.
     free_space: Option<u64>,
+    /// The window's tabs, when this browser is one of them.
+    host: Option<WeakEntity<crate::workspace::Workspace>>,
+    /// This is split view's second pane.
+    split_pane: bool,
     /// What's in the Trash, while the Trash is showing.
     trashed: Vec<crate::trash_bin::Trashed>,
     /// Copies and moves under way, and the task redrawing their progress.
@@ -446,6 +451,8 @@ impl Finder {
             save_task: Task::ready(()),
             info: None,
             free_space: None,
+            host: None,
+            split_pane: false,
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
@@ -2400,7 +2407,18 @@ impl Render for Finder {
                     .collect();
                 this.open_in_editor(paths, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &CloseWindow, window, _| this.close_window(window)))
+            .on_action(
+                cx.listener(|this, _: &CloseWindow, window, cx| {
+                    this.close_tab_or_window(window, cx)
+                }),
+            )
+            .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::show_next_tab))
+            .on_action(cx.listener(Self::show_previous_tab))
+            .on_action(cx.listener(Self::move_tab_to_new_window))
+            .on_action(cx.listener(Self::toggle_split_view))
+            .on_action(cx.listener(Self::copy_to_other_pane))
+            .on_action(cx.listener(Self::move_to_other_pane))
             .on_action(
                 cx.listener(|this, _: &ViewIcons, _, cx| this.set_view_mode(ViewMode::Icons, cx)),
             )
@@ -2430,6 +2448,7 @@ impl Render for Finder {
                             .h_full()
                             .min_w_0()
                             .child(self.render_toolbar(window, cx))
+                            .children(self.render_tab_bar(cx))
                             .when(self.in_trash(), |this| {
                                 this.child(self.render_trash_bar(cx))
                             })

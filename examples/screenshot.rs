@@ -4,10 +4,12 @@
 //! cargo run --example screenshot -- out.png [--dir PATH] [--view icons|list|columns|gallery]
 //!     [--light|--dark] [--query TEXT] [--scope-folder] [--select N] [--quicklook]
 //!     [--nu PIPELINE] [--size 1100x700] [--no-sidebar] [--settings] [--info]
+//!     [--tabs N] [--split]
 //! ```
 
-use fffinder::finder::{AppState, Finder};
+use fffinder::finder::AppState;
 use fffinder::model::Location;
+use fffinder::workspace::Workspace;
 use fffinder::{assets, nushell};
 use fffinder_core::{Appearance, Config, Engine, EngineOptions, ViewMode};
 use gpui_kit::test::TestWindowExt as _;
@@ -29,6 +31,8 @@ struct Options {
     quick_look: bool,
     settings: bool,
     info: bool,
+    tabs: usize,
+    split: bool,
     scope_folder: bool,
     width: f32,
     height: f32,
@@ -48,6 +52,8 @@ fn parse() -> Options {
         quick_look: false,
         settings: false,
         info: false,
+        tabs: 1,
+        split: false,
         scope_folder: false,
         width: 1100.,
         height: 700.,
@@ -73,6 +79,8 @@ fn parse() -> Options {
             "--quicklook" => o.quick_look = true,
             "--settings" => o.settings = true,
             "--info" => o.info = true,
+            "--tabs" => o.tabs = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
+            "--split" => o.split = true,
             "--scope-folder" => o.scope_folder = true,
             "--size" => {
                 let s = args.next().expect("--size WxH");
@@ -119,7 +127,7 @@ fn main() {
     });
 
     let dir = o.dir.clone();
-    let (handle, view) = cx
+    let (handle, workspace) = cx
         .update(|cx| {
             gpui_kit::open_window(
                 WindowOptions {
@@ -133,11 +141,12 @@ fn main() {
                 },
                 cx,
                 move |window, cx| {
-                    cx.new(|cx| Finder::new(Location::Folder(dir), None, None, window, cx))
+                    cx.new(|cx| Workspace::new(Location::Folder(dir), None, None, window, cx))
                 },
             )
         })
         .expect("open window");
+    let view = cx.update(|cx| workspace.read(cx).active().clone());
 
     let settle = |cx: &mut HeadlessAppContext| {
         for _ in 0..30 {
@@ -165,6 +174,25 @@ fn main() {
     })
     .ok();
     settle(&mut cx);
+    let extra: Vec<Box<dyn gpui_kit::Action>> = (1..o.tabs)
+        .map(|_| Box::new(fffinder::actions::NewTab) as Box<dyn gpui_kit::Action>)
+        .chain(
+            o.split
+                .then(|| Box::new(fffinder::actions::ToggleSplitView) as _),
+        )
+        .collect();
+    for action in extra {
+        cx.update_window(handle, |_, window, cx| {
+            // A new tab takes over the window; send the next action to it.
+            let active = workspace.read(cx).active().clone();
+            active.update(cx, |finder, cx| finder.focus_files(window, cx));
+            window.dispatch_action(action, cx);
+        })
+        .ok();
+        settle(&mut cx);
+    }
+    // The rest acts on the tab that shows.
+    let view = cx.update(|cx| workspace.read(cx).active().clone());
     if let Some(ix) = o.select {
         cx.update_window(handle, |_, window, cx| {
             view.update(cx, |finder, cx| {
