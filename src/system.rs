@@ -32,6 +32,10 @@ pub enum SystemCall {
         app: PathBuf,
         file: PathBuf,
     },
+    /// Ejected or unmounted a volume.
+    Eject(PathBuf),
+    /// Connected to a server (Connect to Server), by the address typed.
+    Connect(String),
 }
 
 /// When set as a global, calls are recorded here and not performed.
@@ -42,6 +46,8 @@ pub struct Recorder {
     no_app: Rc<RefCell<HashSet<PathBuf>>>,
     /// What Open With lists, for every file.
     apps: Rc<RefCell<Vec<crate::apps::OpenApp>>>,
+    /// Where Connect to Server says a server was mounted.
+    mount_point: Rc<RefCell<Option<PathBuf>>>,
 }
 
 impl Global for Recorder {}
@@ -59,6 +65,11 @@ impl Recorder {
     /// Have Open With list `apps` for every file.
     pub fn set_apps(&self, apps: Vec<crate::apps::OpenApp>) {
         *self.apps.borrow_mut() = apps;
+    }
+
+    /// Have Connect to Server succeed, mounting at `path`.
+    pub fn set_mount_point(&self, path: impl Into<PathBuf>) {
+        *self.mount_point.borrow_mut() = Some(path.into());
     }
 
     pub(crate) fn apps(&self) -> Vec<crate::apps::OpenApp> {
@@ -316,6 +327,150 @@ pub fn clipboard_files(cx: &App) -> Vec<PathBuf> {
         // Other apps' copies, on Linux, and paths copied as text anywhere.
         (_, Some(text)) => paths_in_text(&text),
         _ => Vec::new(),
+    }
+}
+
+/// Eject a removable disk, or unmount a server, at `path`.
+pub fn eject(path: &Path, cx: &mut App) -> Task<std::io::Result<()>> {
+    if let Some(recorder) = cx.try_global::<Recorder>() {
+        recorder.record(SystemCall::Eject(path.into()));
+        return Task::ready(Ok(()));
+    }
+    let path = path.to_path_buf();
+    cx.background_spawn(async move { volumes::eject(&path) })
+}
+
+/// Mount the server at `address` the way the system does, and say where.
+pub fn connect(address: &str, cx: &mut App) -> Task<Result<PathBuf, String>> {
+    if let Some(recorder) = cx.try_global::<Recorder>() {
+        recorder.record(SystemCall::Connect(address.into()));
+        let mounted = recorder.mount_point.borrow().clone();
+        return Task::ready(mounted.ok_or_else(|| "The server didn’t answer".to_string()));
+    }
+    let server = fffinder_core::servers::Server::parse(address);
+    cx.background_spawn(async move { volumes::connect(&server?) })
+}
+
+/// Run a command; its error output becomes the error.
+fn run(command: &mut std::process::Command) -> std::io::Result<String> {
+    let out = command.stdin(std::process::Stdio::null()).output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(std::io::Error::other(if err.is_empty() {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        } else {
+            err
+        }))
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod volumes {
+    use super::run;
+    use fffinder_core::servers::Server;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// `eject` takes a whole removable disk away; servers and disk images
+    /// only unmount.
+    pub fn eject(path: &Path) -> std::io::Result<()> {
+        run(Command::new("diskutil").arg("eject").arg(path))
+            .or_else(|_| run(Command::new("diskutil").arg("unmount").arg(path)))
+            .map(drop)
+    }
+
+    /// AppleScript's `mount volume` asks for a password in the system's own
+    /// dialog when the server needs one, and keeps it in the keychain.
+    pub fn connect(server: &Server) -> Result<PathBuf, String> {
+        let url = server.mac_url().ok_or(
+            "macOS can’t mount SFTP servers itself. Mount them with a tool such as macFUSE’s sshfs, then open the folder.",
+        )?;
+        let out = run(Command::new("osascript")
+            .args(["-e", "on run argv"])
+            .args(["-e", "return POSIX path of (mount volume (item 1 of argv))"])
+            .args(["-e", "end run"])
+            .arg(url))
+        .map_err(|e| e.to_string())?;
+        Ok(PathBuf::from(out.trim()))
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+mod volumes {
+    use super::run;
+    use fffinder_core::servers::{Server, gio_local_path};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// GIO ejects disks and unmounts servers; plain `umount` is the fallback.
+    pub fn eject(path: &Path) -> std::io::Result<()> {
+        run(Command::new("gio").args(["mount", "-e"]).arg(path))
+            .or_else(|_| run(Command::new("umount").arg(path)))
+            .map(drop)
+    }
+
+    /// `gio mount` mounts under `$XDG_RUNTIME_DIR/gvfs`, and `gio info`
+    /// says where. Passwords come from the keyring, since there's no
+    /// terminal to ask in.
+    pub fn connect(server: &Server) -> Result<PathBuf, String> {
+        let uri = server
+            .gio_uri()
+            .ok_or("This kind of server isn’t supported")?;
+        // Already mounted is fine.
+        let mounted = run(Command::new("gio").args(["mount", &uri]));
+        let info = run(Command::new("gio").args(["info", &uri]));
+        match (gio_local_path(info.as_deref().unwrap_or_default()), mounted) {
+            (Some(path), _) => Ok(path),
+            (None, Err(err)) => Err(err.to_string()),
+            (None, Ok(_)) => Err("GIO mounted the server but didn’t say where".into()),
+        }
+    }
+}
+
+#[cfg(windows)]
+mod volumes {
+    use super::run;
+    use fffinder_core::servers::{Server, net_use_drive};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// A mapped network drive is disconnected with `net use`; a removable
+    /// or optical drive is ejected with Explorer's own Eject command.
+    pub fn eject(path: &Path) -> std::io::Result<()> {
+        let drive: String = path
+            .to_string_lossy()
+            .chars()
+            .take_while(|c| *c != '\\')
+            .collect();
+        if fffinder_core::places::is_network_drive(path) {
+            return run(Command::new("net").args(["use", &drive, "/delete", "/y"])).map(drop);
+        }
+        let script = format!(
+            "(New-Object -ComObject Shell.Application).Namespace(17).ParseName('{drive}\\').InvokeVerb('Eject')"
+        );
+        run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]))
+            .map(drop)
+    }
+
+    /// File shares open as `\\server\share` paths; WebDAV gets a drive
+    /// letter from `net use`.
+    pub fn connect(server: &Server) -> Result<PathBuf, String> {
+        if let Some(unc) = server.unc_path() {
+            let path = PathBuf::from(unc);
+            return match path.is_dir() {
+                true => Ok(path),
+                false => Err(format!("{} can’t be reached", path.display())),
+            };
+        }
+        let url = server
+            .webdav_url()
+            .ok_or("Windows can connect to SMB file shares and WebDAV servers")?;
+        let out = run(Command::new("net").args(["use", "*", &url])).map_err(|e| e.to_string())?;
+        net_use_drive(&out)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("net use didn’t say which drive it used: {out}"))
     }
 }
 

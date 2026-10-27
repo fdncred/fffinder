@@ -17,6 +17,7 @@ actions!(
         GoHome,
         GoRecents,
         GoToFolder,
+        ConnectToServer,
         OpenSelected,
         QuickLook,
         GetInfo,
@@ -97,6 +98,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-h", GoHome, finder),
         KeyBinding::new("secondary-shift-f", GoRecents, finder),
         KeyBinding::new("secondary-shift-g", GoToFolder, finder),
+        KeyBinding::new("secondary-k", ConnectToServer, finder),
         KeyBinding::new("secondary-1", ViewIcons, finder),
         KeyBinding::new("secondary-2", ViewList, finder),
         KeyBinding::new("secondary-3", ViewColumns, finder),
@@ -285,6 +287,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Home", GoHome),
             MenuItem::action("Trash", GoTrash),
             MenuItem::action("Go to Folder…", GoToFolder),
+            MenuItem::action("Connect to Server…", ConnectToServer),
         ]),
         Menu::new("Nushell").items([
             MenuItem::action("Pipeline Panel", ToggleNuPanel),

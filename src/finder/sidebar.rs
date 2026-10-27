@@ -35,6 +35,7 @@ fn finder_sidebar_icon(icon: PlaceIcon) -> &'static str {
         PlaceIcon::Drive => "SidebarInternalDisk",
         PlaceIcon::External => "SidebarExternalDisk",
         PlaceIcon::Folder => "SidebarGenericFolder",
+        PlaceIcon::Network => "SidebarServerDrive",
     }
 }
 
@@ -72,6 +73,7 @@ pub fn place_icon(icon: PlaceIcon) -> Icon {
         PlaceIcon::Drive => Icon::new(IconName::HardDrive),
         PlaceIcon::External => Icon::new(Lucide::Usb),
         PlaceIcon::Folder => Icon::new(IconName::Folder),
+        PlaceIcon::Network => Icon::new(Lucide::Server),
     }
 }
 
@@ -231,6 +233,28 @@ impl Finder {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let view = cx.entity();
+        let eject = place
+            .as_ref()
+            .filter(|(p, _)| p.ejectable)
+            .map(|(p, _)| p.path.clone());
+        let eject_button = eject.clone().map(|path| {
+            div()
+                .id(("eject", super::views::path_id(&path)))
+                .p(ui(2.))
+                .rounded(ui(4.))
+                .hover(|s| s.bg(theme.list_hover))
+                .child(
+                    Icon::new(Lucide::Eject)
+                        .with_size(ui(13.))
+                        .text_color(theme.muted_foreground),
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.eject(path.clone(), window, cx);
+                }))
+                .test_support()
+        });
         let row = h_flex()
             .id(id)
             .h(ui(28.))
@@ -243,6 +267,7 @@ impl Finder {
             .when(!active, |this| this.hover(|s| s.bg(theme.list_hover)))
             .child(icon)
             .child(div().flex_1().truncate().child(label))
+            .children(eject_button)
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.navigate(target.clone(), window, cx);
             }))
@@ -278,6 +303,18 @@ impl Finder {
                             .icon(IconName::ExternalLink)
                             .on_click(move |_, _, cx| crate::system::reveal(&reveal, cx)),
                     );
+                if let Some(path) = eject.clone() {
+                    menu = menu.separator().item(
+                        PopupMenuItem::new("Eject").icon(Lucide::Eject).on_click(
+                            window.listener_for(
+                                &view,
+                                move |this: &mut Finder, _: &ClickEvent, window, cx| {
+                                    this.eject(path.clone(), window, cx)
+                                },
+                            ),
+                        ),
+                    );
+                }
                 if is_favorite {
                     menu =
                         menu.separator()

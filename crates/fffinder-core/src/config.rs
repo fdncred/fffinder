@@ -168,6 +168,8 @@ pub struct Config {
     pub list_columns: Vec<ColumnSetting>,
     /// Show folder sizes, added up from the index ("Calculate All Sizes").
     pub folder_sizes: bool,
+    /// Servers connected to with Connect to Server, newest first.
+    pub recent_servers: Vec<String>,
     pub icon_size: f32,
     pub show_sidebar: bool,
     pub appearance: Appearance,
@@ -214,6 +216,7 @@ impl Default for Config {
             folders_first: false,
             list_columns: default_list_columns(),
             folder_sizes: true,
+            recent_servers: Vec::new(),
             icon_size: 64.0,
             show_sidebar: true,
             appearance: Appearance::System,

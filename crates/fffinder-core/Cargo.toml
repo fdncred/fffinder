@@ -23,6 +23,8 @@ rayon = "1"
 zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs", "chrono"] }
 tar = "0.4"
 flate2 = "1"
+# Free space on a volume, for the status bar.
+fs4 = "1"
 
 [target.'cfg(unix)'.dependencies]
 # Owner and group names for Get Info.
@@ -30,11 +32,12 @@ uzers = "0.12"
 # Extended attributes: where a download came from, and macOS's last opened date.
 xattr = "1"
 
-# Get Info's owner and size on disk.
+# Get Info's owner and size on disk, and drive kinds and names.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming",
 ] }

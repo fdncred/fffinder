@@ -14,6 +14,7 @@ pub mod listing;
 pub mod media;
 pub mod ops;
 pub mod places;
+pub mod servers;
 pub mod terminals;
 pub mod thumbnailers;
 

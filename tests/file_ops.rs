@@ -475,3 +475,67 @@ fn list_view_columns_folders_and_tree(cx: &mut TestAppContext) {
     ui.press("left");
     assert!(!ui.names().contains(&"atlas".to_string()));
 }
+
+#[gpui_kit::test]
+fn volumes_eject_free_space_and_servers(cx: &mut TestAppContext) {
+    use fffinder::system::{Recorder, SystemCall};
+    use fffinder_core::places::{Place, PlaceIcon};
+    let fx = Fixture::new("volumes");
+    let mut ui = Ui::open(cx, &fx.dir);
+
+    let status = ui
+        .snapshot("status-text")
+        .label()
+        .unwrap_or_default()
+        .to_string();
+    assert!(status.ends_with(" available"), "{status}");
+
+    // An ejectable place has an eject button and an Eject menu item.
+    let disk = fx.path("Projects");
+    let place = Place {
+        name: "Backup".into(),
+        path: disk.clone(),
+        icon: PlaceIcon::External,
+        ejectable: true,
+    };
+    let show = |ui: &mut Ui| {
+        let place = place.clone();
+        ui.update(|f, _, cx| {
+            f.set_locations_for_test(vec![place]);
+            cx.notify();
+        })
+    };
+    show(&mut ui);
+    ui.click(item_id("eject", &disk));
+    assert_eq!(ui.system_calls(), [SystemCall::Eject(disk.clone())]);
+    // Ejecting rereads the machine's volumes.
+    show(&mut ui);
+    ui.right_click(("loc", 0usize));
+    ui.click_menu_item("Eject");
+    assert_eq!(ui.system_calls().len(), 2);
+
+    // Connect to Server opens where the server mounted, and remembers it.
+    ui.cx.read(|cx| {
+        cx.global::<Recorder>()
+            .set_mount_point(fx.path("Projects/atlas"))
+    });
+    ui.press(&cmd("k"));
+    assert!(ui.dialog_open());
+    ui.press(&cmd("a"));
+    ui.type_text("gopher://old");
+    ui.click("server-connect");
+    assert!(ui.dialog_open(), "an unsupported address is refused");
+    ui.press(&cmd("a"));
+    ui.type_text("smb://nas/share");
+    ui.click("server-connect");
+    assert!(!ui.dialog_open());
+    assert_eq!(
+        ui.system_calls().last(),
+        Some(&SystemCall::Connect("smb://nas/share".into()))
+    );
+    assert_eq!(ui.folder(), Some(fx.path("Projects/atlas")));
+    assert_eq!(
+        ui.read(|f| f.config().recent_servers.clone()),
+        ["smb://nas/share"]
+    );
+}

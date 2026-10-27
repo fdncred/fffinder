@@ -249,6 +249,7 @@ fn every_menu_bar_action_has_a_handler(cx: &mut TestAppContext) {
         GoTrash.boxed_clone(),
         GetInfo.boxed_clone(),
         ToggleFoldersFirst.boxed_clone(),
+        ConnectToServer.boxed_clone(),
         NewFile.boxed_clone(),
         Duplicate.boxed_clone(),
         MakeAlias.boxed_clone(),

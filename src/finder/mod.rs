@@ -19,6 +19,7 @@ mod toolbar;
 mod transfer;
 mod trash;
 mod views;
+mod volumes;
 
 use crate::actions::*;
 use crate::model::{History, Location, Selection};
@@ -277,6 +278,8 @@ pub struct Finder {
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
     /// A list column being resized: which, where the drag began, its width then.
     column_resize: Option<(usize, Pixels, f32)>,
+    /// Space left on the current folder's volume.
+    free_space: Option<u64>,
     /// What's in the Trash, while the Trash is showing.
     trashed: Vec<crate::trash_bin::Trashed>,
     /// Copies and moves under way, and the task redrawing their progress.
@@ -442,6 +445,7 @@ impl Finder {
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
             info: None,
+            free_space: None,
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
@@ -495,6 +499,12 @@ impl Finder {
     #[doc(hidden)]
     pub fn has_preview_for_test(&self, path: &Path) -> bool {
         self.previews.contains_key(path)
+    }
+
+    /// Show these sidebar Locations instead of the machine's (tests).
+    #[doc(hidden)]
+    pub fn set_locations_for_test(&mut self, locations: Vec<Place>) {
+        self.locations = locations;
     }
 
     #[doc(hidden)]
@@ -801,6 +811,7 @@ impl Finder {
                         if let Some(dir) = this.current_folder().map(Path::to_path_buf) {
                             this.load_folder_stats(dir, cx);
                         }
+                        this.load_free_space(cx);
                     }
                     Err(err) => {
                         this.listing.clear();
@@ -2348,6 +2359,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_trash))
             .on_action(cx.listener(Self::get_info))
             .on_action(cx.listener(Self::toggle_folders_first))
+            .on_action(cx.listener(Self::connect_to_server))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::duplicate))
             .on_action(cx.listener(Self::make_alias))

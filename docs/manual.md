@@ -22,6 +22,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Get Info](#get-info)
 - [Undo](#undo)
 - [The Trash](#the-trash)
+- [Volumes and servers](#volumes-and-servers)
 - [Dragging and dropping](#dragging-and-dropping)
 - [The Nushell panel](#the-nushell-panel)
 - [Filters and Smart Folders](#filters-and-smart-folders)
@@ -117,7 +118,7 @@ The path bar shows the current folder as a row of crumbs, from the volume down. 
 
 The status bar shows:
 
-- How many items are shown, or "N of M selected".
+- How many items are shown, or "N of M selected", and in a folder how much space is left on its volume: "12 items, 214 GB available".
 - With a filter on, "N of M items pass the filter".
 - A `+` after the count when a search stopped at the result limit.
 - The time the search took, in milliseconds.
@@ -149,7 +150,7 @@ The sidebar has four sections:
 - **Recents** lists files you used recently. See [Recents](#recents).
 - **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar.
 - **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
-- **Locations** lists your home folder, iCloud Drive or other cloud drives, and mounted volumes, and ends with the **Trash**. See [The Trash](#the-trash).
+- **Locations** lists your home folder, iCloud Drive or other cloud drives, mounted volumes and servers, and ends with the **Trash**. Removable disks and servers have an eject button. See [Volumes and servers](#volumes-and-servers) and [The Trash](#the-trash).
 
 Click a row to open it. The current folder's row is highlighted.
 
@@ -157,6 +158,7 @@ Right-click a Favorites or Locations row for:
 
 - **Open Nushell Here**: open `nu` in that folder in your terminal.
 - **Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux).
+- **Eject**: removable disks and servers.
 - **Remove from Sidebar**: Favorites only.
 
 Right-click a Smart Folder for **Remove from Sidebar**.
@@ -456,6 +458,20 @@ The Trash row at the end of the sidebar's Locations shows what is in the Trash, 
 
 On macOS, fffinder asks Finder to move items to the Trash, so Finder's own Put Back still works for them, and remembers where each one came from in `trash.json` in the data folder. fffinder can put back only items it trashed itself; for others, Put Back is unavailable, and Finder's Put Back still works. The Trash view lists your home folder's Trash, `~/.Trash`, which macOS shows only to apps with Full Disk Access. Without it, the view says so. On Linux and Windows, fffinder uses the system trash (the freedesktop.org Trash, or the Recycle Bin), which records where every item came from, so Put Back works for all of them.
 
+## Volumes and servers
+
+**Eject.** Removable disks, disk images, and servers in the sidebar's Locations have an eject button, and Eject in their right-click menu. On macOS fffinder ejects with `diskutil eject`, or unmounts with `diskutil unmount` when there's no disk to eject (a server). On Linux it uses `gio mount -e`, then `umount`. A window showing a folder on the volume goes to your home folder. On Windows, removable and optical drives are ejected with Explorer's own Eject command, and mapped network drives are disconnected with `net use /delete`. Locations names Windows drives by their volume labels, as Explorer does: "Backup (E:)", or "Removable Disk (E:)" with no label.
+
+**Free space.** The status bar ends with the space left on the current folder's volume, read when the folder loads.
+
+**Connect to Server…** (Cmd+K, or the Go menu) asks for a server's address and mounts it the way the system does, then opens it in the window. The server goes to the top of the dialog's **Recent servers**, up to ten; click one to fill in the address. An address with no scheme, such as `nas/media`, is SMB.
+
+| System | Servers | How |
+| --- | --- | --- |
+| macOS | `smb://`, `afp://`, `nfs://`, `ftp://`, and WebDAV as `https://` or `http://` | AppleScript's `mount volume`, as Finder's Connect to Server does. macOS asks for a password in its own dialog when the server needs one, and can keep it in the keychain. Servers mount in `/Volumes`. macOS can't mount `sftp://` by itself. |
+| Linux | `smb://`, `sftp://`, WebDAV (`https://`, `davs://`, `dav://`), `afp://`, `nfs://`, `ftp://` | `gio mount`, as GNOME Files does, under `$XDG_RUNTIME_DIR/gvfs`, where the sidebar finds them. There's no terminal to type a password in, so give the user name in the address and keep the password in your keyring, or mount once from a terminal. |
+| Windows | `smb://server/share` or `\\server\share`, and WebDAV as `https://` | A share opens as its `\\server\share` path, with the credentials Windows already has. WebDAV is mapped to a drive letter with `net use`. |
+
 ## Dragging and dropping
 
 - Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder.
@@ -632,7 +648,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | File | New Window (Cmd+N), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Toggle Light/Dark, Refresh |
-| Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder… |
+| Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
 
 New Window opens a window at the folder you last had open.
@@ -718,6 +734,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Shift+H | Home |
 | Cmd+Shift+F | Recents |
 | Cmd+Shift+G | Go to folder |
+| Cmd+K | Connect to server |
 | Cmd+1, Cmd+2, Cmd+3, Cmd+4 | Icons, list, columns, gallery |
 | Cmd+Shift+. | Show hidden files |
 | Cmd+R | Refresh |
@@ -837,6 +854,7 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `folders_first` | `false` | Keep Folders on Top. |
 | `list_columns` | Date Modified 170, Size 90, Kind 160 | The list view's columns after Name, in order: `column` (`modified`, `created`, `last_opened`, `size`, `kind`, `permissions`, `git`) and `width` in points, at least 50. |
 | `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
+| `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |
 | `show_sidebar` | `true` | Show the sidebar. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |

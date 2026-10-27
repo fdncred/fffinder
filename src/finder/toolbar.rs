@@ -540,6 +540,11 @@ fn actions_menu(
             .action(Box::new(ToggleFilter)),
     )
     .item(PopupMenuItem::new("Go to Folder…").action(Box::new(GoToFolder)))
+    .item(
+        PopupMenuItem::new("Connect to Server…")
+            .icon(Lucide::Server)
+            .action(Box::new(ConnectToServer)),
+    )
     .item(PopupMenuItem::new("Search Syntax…").action(Box::new(SearchHelp)))
     .item(
         PopupMenuItem::new("Settings…")
