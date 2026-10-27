@@ -6,6 +6,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 authors = ["Darren Schroeder"]
+repository = "https://github.com/fdncred/fffinder"
 
 [workspace.dependencies]
 fffinder-core = { path = "crates/fffinder-core" }
@@ -22,6 +23,7 @@ description = "A fast, cross-platform Finder-style file search app built on fff-
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 
 [lib]
 name = "fffinder"
@@ -94,6 +96,10 @@ debug = "limited"
 [profile.release]
 lto = "thin"
 codegen-units = 16
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
 
 [profile.dev.package]
 gpui-pre = { opt-level = 3 }
