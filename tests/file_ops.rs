@@ -131,3 +131,113 @@ fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
     assert!(fx.path("Projects/Budget.csv").exists());
     assert!(fx.path("Budget.csv").exists(), "the copy key copies");
 }
+
+#[gpui_kit::test]
+fn undo_reverses_file_operations(cx: &mut TestAppContext) {
+    let fx = Fixture::new("undo");
+    let mut ui = Ui::open(cx, &fx.dir);
+
+    ui.select("Roadmap.md");
+    ui.press("f2");
+    ui.type_text("Plan");
+    ui.press("enter");
+    assert!(fx.path("Plan.md").exists());
+    ui.press(&cmd("z"));
+    assert!(fx.path("Roadmap.md").exists() && !fx.path("Plan.md").exists());
+    assert_eq!(ui.selected(), ["Roadmap.md"], "the item is selected again");
+
+    ui.press(&cmd("shift-n"));
+    ui.click("rename-cancel");
+    assert!(fx.path("untitled folder").is_dir());
+    ui.press(&cmd("z"));
+    assert!(
+        !fx.path("untitled folder").exists(),
+        "a new folder goes to the Trash"
+    );
+
+    ui.select("notes.txt");
+    ui.press(&cmd("c"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("notes copy.txt").exists());
+    ui.press(&cmd("z"));
+    assert!(
+        !fx.path("notes copy.txt").exists(),
+        "a copy goes to the Trash"
+    );
+
+    ui.select("notes.txt");
+    ui.press(&cmd("c"));
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("alt-v"));
+    assert!(fx.path("Projects/notes.txt").exists());
+    ui.press(&cmd("z"));
+    assert!(fx.path("notes.txt").exists() && !fx.path("Projects/notes.txt").exists());
+
+    // Undo with nothing left to undo changes nothing.
+    ui.press(&cmd("z"));
+    ui.press(&cmd("z"));
+    assert!(fx.path("notes.txt").exists() && fx.path("Roadmap.md").exists());
+}
+
+#[gpui_kit::test]
+fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-view");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    ui.press(&cmd("backspace"));
+    ui.click("ok");
+    assert!(!fx.path("notes.txt").exists());
+
+    ui.click("trash");
+    assert_eq!(ui.names(), ["notes.txt"]);
+    ui.select("notes.txt");
+    ui.right_click(item_id(
+        "row",
+        &common::trash_dir(&fx.dir).join("notes.txt"),
+    ));
+    ui.click_menu_item("Put Back");
+    assert!(fx.path("notes.txt").exists(), "Put Back restores it");
+    assert!(ui.names().is_empty());
+
+    // Trash by dragging onto the sidebar, then Cmd+Z puts it back.
+    ui.go_to(&fx.dir);
+    ui.drag(
+        item_id("row", &fx.path("Budget.csv")),
+        "trash",
+        Modifiers::none(),
+    );
+    assert!(!fx.path("Budget.csv").exists());
+    ui.press(&cmd("z"));
+    assert!(fx.path("Budget.csv").exists());
+
+    ui.select("Roadmap.md");
+    ui.press(&cmd("backspace"));
+    ui.click("ok");
+    ui.click("trash");
+    ui.click("empty-trash");
+    ui.click("ok");
+    assert!(ui.names().is_empty());
+    assert!(
+        !common::trash_dir(&fx.dir).join("Roadmap.md").exists(),
+        "emptied for good"
+    );
+}
+
+#[gpui_kit::test]
+fn delete_immediately_asks_first(cx: &mut TestAppContext) {
+    let fx = Fixture::new("delete-now");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.press(&cmd("alt-backspace"));
+    assert!(ui.dialog_open());
+    ui.click("cancel");
+    assert!(fx.path("notes.txt").exists());
+    ui.press(&cmd("alt-backspace"));
+    ui.click("ok");
+    assert!(!fx.path("notes.txt").exists());
+    assert!(
+        !common::trash_dir(&fx.dir).join("notes.txt").exists(),
+        "not in the Trash"
+    );
+}

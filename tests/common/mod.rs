@@ -52,9 +52,17 @@ impl Fixture {
     }
 }
 
+/// Where a window opened on `dir` puts trashed items, instead of the real Trash.
+pub fn trash_dir(dir: &Path) -> PathBuf {
+    let mut name = dir.as_os_str().to_os_string();
+    name.push("-trash");
+    PathBuf::from(name)
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_dir_all(trash_dir(&self.dir));
     }
 }
 
@@ -166,6 +174,9 @@ impl<'a> Ui<'a> {
                 Appearance::Light,
             );
             cx.set_global(Recorder::default());
+            cx.set_global(fffinder::trash_bin::TrashOverride(std::sync::Arc::new(
+                fffinder::trash_bin::FolderBin::new(trash_dir(dir)),
+            )));
             if options.fps {
                 cx.set_global(fffinder::finder::ShowFps);
             }

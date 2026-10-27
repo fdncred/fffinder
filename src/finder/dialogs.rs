@@ -742,6 +742,11 @@ impl Finder {
             notify(Error, format!("Couldn’t rename: {err}"));
             return false;
         }
+        crate::undo::record(
+            "Rename",
+            crate::undo::Change::Moved(vec![(path.to_path_buf(), target.clone())]),
+            cx,
+        );
         self.previews.remove(path);
         for row in self.results.iter_mut().filter(|r| r.entry.path == path) {
             if let Some(entry) = FileEntry::from_path(&target) {
@@ -860,8 +865,8 @@ impl Finder {
                 .description("You can restore items from the Trash.")
                 .ok_text("Move to Trash")
                 .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.trash_now(paths.clone(), cx));
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |this, cx| this.trash_now(paths.clone(), window, cx));
                     true
                 })
         });

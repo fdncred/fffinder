@@ -19,6 +19,8 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Opening files](#opening-files)
 - [Working with files](#working-with-files)
 - [Copying and moving](#copying-and-moving)
+- [Undo](#undo)
+- [The Trash](#the-trash)
 - [Dragging and dropping](#dragging-and-dropping)
 - [The Nushell panel](#the-nushell-panel)
 - [Filters and Smart Folders](#filters-and-smart-folders)
@@ -146,7 +148,7 @@ The sidebar has four sections:
 - **Recents** lists files you used recently. See [Recents](#recents).
 - **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar.
 - **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
-- **Locations** lists your home folder, iCloud Drive or other cloud drives, and mounted volumes.
+- **Locations** lists your home folder, iCloud Drive or other cloud drives, and mounted volumes, and ends with the **Trash**. See [The Trash](#the-trash).
 
 Click a row to open it. The current folder's row is highlighted.
 
@@ -324,7 +326,9 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | --- | --- |
 | New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and opens the Rename dialog for it. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
-| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. You can restore items from the Trash. |
+| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
+| Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
+| Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo](#undo). |
 | Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
 | Paste (Cmd+V in the files) | Copies the items on the clipboard into the folder shown. |
 | Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
@@ -358,6 +362,29 @@ A folder can't go inside itself, and an item can't replace the folder it's in. A
 Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
 
 A copy or move that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+
+## Undo
+
+Undo (Cmd+Z with the files focused, or Edit › Undo) reverses the latest file operation, then the one before it, and so on, up to the last 100. There is one list for all windows, so Undo in any window reverses the latest operation anywhere. A notification says what was undone, such as "Undid Rename".
+
+| Operation | Undo |
+| --- | --- |
+| Rename, batch rename | Gives the items their old names. |
+| Move, paste with Move Items Here, drag to a folder | Moves the items back. |
+| Copy, paste, New Folder | Moves the new items to the Trash, as Finder does. |
+| Move to Trash | Puts the items back. |
+
+Undo stops with a notification when it can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z undoes typing as usual.
+
+## The Trash
+
+The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash at once, without the question.
+
+- **Put Back** (Cmd+Backspace, the item menu, or File › Put Back) moves the selected items back where they came from. It stops with a notification when the folder is gone or another item has the name.
+- **Delete Immediately…** (Cmd+Alt+Backspace, or the item menu) deletes the selected items for good.
+- **Empty…** in the bar above the items, Empty Trash… in the empty-space menu or the fffinder menu, or Cmd+Shift+Backspace, asks, then deletes everything in the Trash for good.
+
+On macOS, fffinder asks Finder to move items to the Trash, so Finder's own Put Back still works for them, and remembers where each one came from in `trash.json` in the data folder. fffinder can put back only items it trashed itself; for others, Put Back is unavailable, and Finder's Put Back still works. The Trash view lists your home folder's Trash, `~/.Trash`, which macOS shows only to apps with Full Disk Access. Without it, the view says so. On Linux and Windows, fffinder uses the system trash (the freedesktop.org Trash, or the Recycle Bin), which records where every item came from, so Put Back works for all of them.
 
 ## Dragging and dropping
 
@@ -531,11 +558,11 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 
 | Menu | Items |
 | --- | --- |
-| fffinder | Settings… (Cmd+,), Rescan Index, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Rename…, Move to Trash, Close Window (Cmd+W) |
-| Edit | Undo, Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
+| fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
+| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Rename…, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
-| Go | Back, Forward, Enclosing Folder, Recents, Home, Go to Folder… |
+| Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder… |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
 
 New Window opens a window at the folder you last had open.
@@ -560,6 +587,8 @@ Right-click one or more items:
 - Add to Sidebar (one folder that isn't a favorite)
 - Move to Trash
 
+In the Trash, the item menu has Put Back, Quick Look, Show in Finder, Copy Path, and Delete Immediately….
+
 ### Empty-space menu
 
 Right-click empty space in a view:
@@ -571,6 +600,8 @@ Right-click empty space in a view:
 - Add Folder to Sidebar (when the folder isn't a favorite)
 - Show Hidden Files
 - Refresh
+
+In the Trash, the empty-space menu has Empty Trash….
 
 ### Nushell Actions submenu
 
@@ -613,6 +644,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+R | Refresh |
 | Cmd+Alt+S | Toggle the sidebar |
 | Cmd+Shift+N | New folder |
+| Cmd+Shift+Backspace | Empty the Trash |
 | Cmd+Alt+C | Copy path |
 | Cmd+Shift+C | Copy as Nushell list |
 | Cmd+Alt+T | Open Nushell here |
@@ -634,7 +666,9 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+V | Paste items into the folder |
 | Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
-| Cmd+Backspace, Delete | Move to Trash |
+| Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
+| Cmd+Alt+Backspace | Delete immediately |
+| Cmd+Z | Undo the latest file operation |
 | Letters | Type to select |
 
 ### In Quick Look
@@ -818,6 +852,7 @@ The settings folder holds `settings.json` and `actions.nu`. The data folder hold
 - `run/`: the socket and `server.json`, removed on a normal quit.
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
 - `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
+- `trash.json`: on macOS, where each item fffinder moved to the Trash came from, for Put Back.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
 - `term.log`: stderr from the last `fffinder --term`.
 

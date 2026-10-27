@@ -504,6 +504,17 @@ fn actions_menu(
             .disabled(!has_selection)
             .action(Box::new(MoveToTrash)),
     )
+    .item(
+        PopupMenuItem::new("Delete Immediately…")
+            .disabled(!has_selection)
+            .action(Box::new(DeleteImmediately)),
+    )
+    // The menu bar's Edit › Undo, for systems without one.
+    .item(
+        PopupMenuItem::new("Undo")
+            .icon(Lucide::Undo2)
+            .action(Box::new(gpui_kit::component::input::Undo)),
+    )
     .separator()
     .item(
         PopupMenuItem::new("Filter with Nushell…")

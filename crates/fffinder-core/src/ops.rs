@@ -223,6 +223,12 @@ pub fn run(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
     report
 }
 
+/// Move one item to exactly `target`, which must be free: a rename, or a
+/// copy and delete across volumes.
+pub fn move_item(source: &Path, target: &Path) -> Result<(), TransferError> {
+    transfer_one(source, target, Mode::Move, false, &Progress::default())
+}
+
 fn transfer_one(
     source: &Path,
     target: &Path,

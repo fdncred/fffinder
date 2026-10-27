@@ -13,6 +13,7 @@ mod preview;
 mod sidebar;
 mod toolbar;
 mod transfer;
+mod trash;
 mod views;
 
 use crate::actions::*;
@@ -235,6 +236,8 @@ pub struct Finder {
     search_settings_task: Task<()>,
     watch_task: Task<()>,
     save_task: Task<()>,
+    /// What's in the Trash, while the Trash is showing.
+    trashed: Vec<crate::trash_bin::Trashed>,
     /// Copies and moves under way, and the task redrawing their progress.
     transfers: Vec<transfer::Job>,
     transfers_task: Task<()>,
@@ -395,6 +398,7 @@ impl Finder {
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
+            trashed: Vec::new(),
             transfers: Vec::new(),
             transfers_task: Task::ready(()),
             fps: None,
@@ -564,6 +568,7 @@ impl Finder {
                 Location::Folder(_) => "folder",
                 Location::Recents => "recents",
                 Location::Results { .. } => "results",
+                Location::Trash => "trash",
             }
         };
         let items: Vec<FileEntry> = if all {
@@ -674,6 +679,10 @@ impl Finder {
         self.navigate(Location::Recents, window, cx);
     }
 
+    fn go_trash(&mut self, _: &GoTrash, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Location::Trash, window, cx);
+    }
+
     /// Open a folder and select `item` in it.
     pub fn reveal_in_place(&mut self, item: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(parent) = item.parent() else { return };
@@ -690,6 +699,7 @@ impl Finder {
         let location = self.history.current().clone();
         let show_hidden = self.config.show_hidden;
         let engine = self.engine.clone();
+        let bin = crate::trash_bin::bin(cx);
         if !quiet {
             self.loading = true;
         }
@@ -698,31 +708,45 @@ impl Finder {
                 .background_spawn(async move {
                     match &location {
                         Location::Folder(dir) => listing::list_dir(dir, show_hidden)
-                            .map(|entries| (entries, dir_stamp(dir)))
+                            .map(|entries| (entries, dir_stamp(dir), Vec::new()))
                             .map_err(|e| e.to_string()),
                         Location::Recents => {
                             engine.wait_ready(Duration::from_secs(60));
-                            Ok((engine.recents(500), None))
+                            Ok((engine.recents(500), None, Vec::new()))
                         }
                         Location::Results { paths, .. } => Ok((
                             paths.iter().filter_map(FileEntry::from_path).collect(),
                             None,
+                            Vec::new(),
                         )),
+                        Location::Trash => bin.list().map(|items| {
+                            let entries = items
+                                .iter()
+                                .filter_map(|item| {
+                                    let mut entry = FileEntry::from_path(&item.path)?;
+                                    entry.name = item.name();
+                                    Some(entry)
+                                })
+                                .collect();
+                            (entries, None, items)
+                        }),
                     }
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok((entries, stamp)) => {
+                    Ok((entries, stamp, trashed)) => {
                         this.listing = entries;
                         this.listing_error = None;
                         this.listing_stamp = stamp;
+                        this.trashed = trashed;
                     }
                     Err(err) => {
                         this.listing.clear();
                         this.listing_error = Some(err);
                         this.listing_stamp = None;
+                        this.trashed.clear();
                     }
                 }
                 this.rebuild_rows(cx);
@@ -799,16 +823,25 @@ impl Finder {
         let mut rows: Vec<Row> = if self.is_searching() {
             self.results.clone()
         } else {
+            // Items in the Trash show the folder they came from.
+            let came_from: HashMap<&Path, String> = self
+                .trashed
+                .iter()
+                .map(|t| (t.path.as_path(), trash::original_folder(t)))
+                .collect();
             self.listing
                 .iter()
-                .map(|e| Row::new(e.clone(), Vec::new(), None))
+                .map(|e| {
+                    let detail = came_from.get(e.path.as_path()).cloned();
+                    Row::new(e.clone(), Vec::new(), detail)
+                })
                 .collect()
         };
         let order = self.sort_order();
         // Recents and sent results keep their own order until a sort is chosen.
         let keep_order = matches!(
             self.history.current(),
-            Location::Recents | Location::Results { .. }
+            Location::Recents | Location::Results { .. } | Location::Trash
         ) && order == SortOrder::default();
         if order.key != SortKey::Relevance && !keep_order {
             rows.sort_by(|a, b| listing::compare(&a.entry, &b.entry, order));
@@ -1974,6 +2007,11 @@ impl Finder {
         let path = dir.join(&name);
         match std::fs::create_dir(&path) {
             Ok(()) => {
+                crate::undo::record(
+                    "New Folder",
+                    crate::undo::Change::Created(vec![path.clone()]),
+                    cx,
+                );
                 self.end_search(window, cx);
                 self.load_listing(vec![path.clone()], true, cx);
                 self.open_rename_dialog(path, window, cx);
@@ -1995,34 +2033,6 @@ impl Finder {
         } else if let Some(entry) = self.primary_entry() {
             self.open_rename_dialog(entry.path, window, cx);
         }
-    }
-
-    fn move_to_trash(&mut self, _: &MoveToTrash, window: &mut Window, cx: &mut Context<Self>) {
-        let entries = self.selected_entries();
-        if !entries.is_empty() {
-            self.confirm_trash(entries, window, cx);
-        }
-    }
-
-    pub fn trash_now(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { trash::delete_all(&paths).map(|_| paths.len()) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.selection.clear();
-                this.load_listing(Vec::new(), true, cx);
-                if this.is_searching() {
-                    this.results.retain(|r| r.entry.path.exists());
-                    this.rebuild_rows(cx);
-                }
-                if let Err(err) = result {
-                    log::warn!("trash: {err}");
-                }
-            })
-            .ok();
-        })
-        .detach();
     }
 
     // ----- columns ----------------------------------------------------------------
@@ -2236,6 +2246,11 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_up))
             .on_action(cx.listener(Self::go_home))
             .on_action(cx.listener(Self::go_recents))
+            .on_action(cx.listener(Self::go_trash))
+            .on_action(cx.listener(Self::undo_file_operation))
+            .on_action(cx.listener(Self::put_back))
+            .on_action(cx.listener(Self::delete_immediately))
+            .on_action(cx.listener(Self::empty_trash))
             .on_action(cx.listener(Self::focus_search))
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(Self::toggle_hidden))
@@ -2296,6 +2311,9 @@ impl Render for Finder {
                             .h_full()
                             .min_w_0()
                             .child(self.render_toolbar(window, cx))
+                            .when(self.in_trash(), |this| {
+                                this.child(self.render_trash_bar(cx))
+                            })
                             .when(self.is_searching(), |this| {
                                 this.child(self.render_scope_bar(window, cx))
                             })
@@ -2321,8 +2339,11 @@ impl Finder {
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.effective_view();
         let body = if let Some(err) = self.listing_error.clone().filter(|_| !self.is_searching()) {
-            self.render_message("Can’t open this folder", &err, cx)
-                .into_any_element()
+            let title = match self.history.current() {
+                Location::Trash => "Can’t show the Trash",
+                _ => "Can’t open this folder",
+            };
+            self.render_message(title, &err, cx).into_any_element()
         } else if self.rows.is_empty() && !self.loading && !self.searching {
             let (title, detail) = if self.is_searching() {
                 match self.indexing_progress() {
@@ -2342,6 +2363,11 @@ impl Finder {
                 (
                     "No Recent Files".into(),
                     "Files you change appear here.".into(),
+                )
+            } else if matches!(self.history.current(), Location::Trash) {
+                (
+                    "The Trash Is Empty".into(),
+                    "Items you move to the Trash appear here.".into(),
                 )
             } else {
                 ("No Items".into(), "This folder is empty.".into())

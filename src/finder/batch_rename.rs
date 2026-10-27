@@ -215,6 +215,12 @@ impl Finder {
         };
         match rename::apply(&planned) {
             Ok(moved) => {
+                let pairs = planned
+                    .iter()
+                    .filter(|p| p.outcome == rename::Outcome::Rename)
+                    .map(|p| (p.from.clone(), p.to()))
+                    .collect();
+                crate::undo::record("Rename", crate::undo::Change::Moved(pairs), cx);
                 window.close_dialog(cx);
                 for (from, _) in planned.iter().map(|p| (&p.from, ())) {
                     self.previews.remove(from);

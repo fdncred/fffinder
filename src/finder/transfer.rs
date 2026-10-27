@@ -6,6 +6,7 @@ use super::Finder;
 use super::views::DraggedFiles;
 use crate::actions::MoveItemsHere;
 use crate::theme::ui;
+use crate::undo::{self, Change};
 use fffinder_core::entry::display_name;
 use fffinder_core::ops::{self, Clash, Mode, Progress, Report, Transfer};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -208,6 +209,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         let progress = Arc::new(Progress::default());
+        let mode = transfer.mode;
         self.transfers.push(Job {
             mode: transfer.mode,
             count: transfer.sources.len(),
@@ -225,7 +227,7 @@ impl Finder {
             this.update_in(cx, |this, window, cx| {
                 this.transfers
                     .retain(|job| !Arc::ptr_eq(&job.progress, &progress));
-                this.transfer_finished(&report, window, cx);
+                this.transfer_finished(mode, &report, window, cx);
             })
             .ok();
         })
@@ -252,19 +254,19 @@ impl Finder {
         });
     }
 
-    fn transfer_finished(&mut self, report: &Report, window: &mut Window, cx: &mut Context<Self>) {
+    fn transfer_finished(
+        &mut self,
+        mode: Mode,
+        report: &Report,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let landed: Vec<PathBuf> = report.done.iter().map(|(_, to)| to.clone()).collect();
-        let here: Vec<PathBuf> = landed
-            .iter()
-            .filter(|p| p.parent() == self.current_folder())
-            .cloned()
-            .collect();
-        self.load_listing(here, true, cx);
-        if self.is_searching() {
-            self.results.retain(|r| r.entry.path.exists());
-            self.rebuild_rows(cx);
+        match mode {
+            Mode::Copy => undo::record("Copy", Change::Created(landed.clone()), cx),
+            Mode::Move => undo::record("Move", Change::Moved(report.done.clone()), cx),
         }
-        self.reload_columns(cx);
+        self.files_changed(landed, cx);
         if let Some((path, why)) = report.failed.first() {
             let more = match report.failed.len() {
                 1 => String::new(),

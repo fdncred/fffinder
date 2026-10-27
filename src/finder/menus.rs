@@ -104,6 +104,9 @@ pub fn item_menu(
     let Some(first) = entries.first().cloned() else {
         return menu;
     };
+    if finder.in_trash() {
+        return trash_item_menu(finder, &entries, menu);
+    }
     let single = entries.len() == 1;
     let searching = finder.is_searching() || finder.current_folder().is_none();
     let folder_for_nu: Option<PathBuf> = if first.is_dir {
@@ -236,6 +239,43 @@ pub fn item_menu(
         .min_w(ui(230.))
 }
 
+/// Right-click on items in the Trash.
+fn trash_item_menu(
+    finder: &Finder,
+    entries: &[fffinder_core::FileEntry],
+    menu: PopupMenu,
+) -> PopupMenu {
+    let single = entries.len() == 1;
+    menu.item(
+        PopupMenuItem::new("Put Back")
+            .icon(Lucide::Undo2)
+            .disabled(!super::trash::can_put_back(&finder.trashed, entries))
+            .action(Box::new(PutBack)),
+    )
+    .item(
+        PopupMenuItem::new("Quick Look")
+            .icon(IconName::Eye)
+            .action(Box::new(QuickLook)),
+    )
+    .item(
+        PopupMenuItem::new(reveal_label())
+            .icon(IconName::ExternalLink)
+            .action(Box::new(RevealInFileManager)),
+    )
+    .item(
+        PopupMenuItem::new(if single { "Copy Path" } else { "Copy Paths" })
+            .icon(Lucide::Link)
+            .action(Box::new(CopyPath)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Delete Immediately…")
+            .icon(Lucide::Trash)
+            .action(Box::new(DeleteImmediately)),
+    )
+    .min_w(ui(220.))
+}
+
 /// Right-click on empty space in a view.
 pub fn background_menu(
     view: &Entity<Finder>,
@@ -250,6 +290,16 @@ pub fn background_menu(
         return menu;
     }
     let finder = view.read(cx);
+    if finder.in_trash() {
+        return menu
+            .item(
+                PopupMenuItem::new("Empty Trash…")
+                    .icon(Lucide::Trash)
+                    .disabled(finder.rows_for_test().is_empty())
+                    .action(Box::new(EmptyTrash)),
+            )
+            .min_w(ui(220.));
+    }
     let folder = finder.current_folder().map(Path::to_path_buf);
     let hidden = finder.config.show_hidden;
     let is_favorite = folder

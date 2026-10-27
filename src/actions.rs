@@ -43,6 +43,10 @@ actions!(
         MoveItemsHere,
         RevealInFileManager,
         MoveToTrash,
+        PutBack,
+        DeleteImmediately,
+        EmptyTrash,
+        GoTrash,
         NewFolder,
         Rename,
         OpenInNushell,
@@ -93,6 +97,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-r", Refresh, finder),
         KeyBinding::new("secondary-alt-s", ToggleSidebar, finder),
         KeyBinding::new("secondary-shift-n", NewFolder, finder),
+        KeyBinding::new("secondary-shift-backspace", EmptyTrash, finder),
         KeyBinding::new("secondary-alt-c", CopyPath, finder),
         KeyBinding::new("secondary-shift-c", CopyAsNuon, finder),
         KeyBinding::new("secondary-alt-t", OpenInNushell, finder),
@@ -134,6 +139,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-alt-v", MoveItemsHere, files),
         KeyBinding::new("f2", Rename, files),
         KeyBinding::new("secondary-backspace", MoveToTrash, files),
+        KeyBinding::new("secondary-alt-backspace", DeleteImmediately, files),
+        KeyBinding::new("secondary-z", input::Undo, files),
         KeyBinding::new("delete", MoveToTrash, files),
     ];
     // Terminals keep most Cmd shortcuts for themselves, so in one every Cmd
@@ -184,6 +191,7 @@ pub fn set_menus(cx: &mut App) {
         Menu::new("fffinder").items([
             MenuItem::action("Settings…", ShowSettings),
             MenuItem::action("Rescan Index", Rescan),
+            MenuItem::action("Empty Trash…", EmptyTrash),
             MenuItem::separator(),
             MenuItem::action("Quit fffinder", Quit),
         ]),
@@ -196,6 +204,8 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Quick Look", QuickLook),
             MenuItem::action("Rename…", Rename),
             MenuItem::action("Move to Trash", MoveToTrash),
+            MenuItem::action("Put Back", PutBack),
+            MenuItem::action("Delete Immediately…", DeleteImmediately),
             MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),
         ]),
@@ -234,6 +244,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Recents", GoRecents),
             MenuItem::action("Home", GoHome),
+            MenuItem::action("Trash", GoTrash),
             MenuItem::action("Go to Folder…", GoToFolder),
         ]),
         Menu::new("Nushell").items([

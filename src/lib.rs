@@ -18,6 +18,8 @@ pub mod server;
 pub mod system;
 pub mod term;
 pub mod theme;
+pub mod trash_bin;
+pub mod undo;
 pub mod user_actions;
 pub mod watchdog;
 #[cfg(windows)]

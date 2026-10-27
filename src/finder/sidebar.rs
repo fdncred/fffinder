@@ -148,6 +148,24 @@ impl Finder {
             ));
         }
 
+        // Drop items on the Trash to trash them.
+        let trash = self.sidebar_row(
+            "trash",
+            Icon::new(Lucide::Trash)
+                .with_size(ui(16.))
+                .text_color(pal.sidebar_icon)
+                .into_any_element(),
+            "Trash".into(),
+            current == Location::Trash,
+            Location::Trash,
+            None,
+            cx,
+        );
+        list = list.child(super::trash::trash_drop_target(
+            div().id("trash-drop").child(trash),
+            cx,
+        ));
+
         div()
             .w(ui(SIDEBAR_WIDTH))
             .h_full()

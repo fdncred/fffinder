@@ -233,6 +233,11 @@ fn every_menu_bar_action_has_a_handler(cx: &mut TestAppContext) {
         ToggleFilter.boxed_clone(),
         OpenInEditor.boxed_clone(),
         MoveItemsHere.boxed_clone(),
+        PutBack.boxed_clone(),
+        DeleteImmediately.boxed_clone(),
+        EmptyTrash.boxed_clone(),
+        GoTrash.boxed_clone(),
+        gpui_kit::component::input::Undo.boxed_clone(),
     ];
     // Menus send actions to whatever has focus: the files, or a text field.
     for focus in ["files", "search"] {
@@ -923,8 +928,7 @@ fn rename_dialog(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn trash_confirmation_cancel(cx: &mut TestAppContext) {
-    // Confirming would move a file into the real Trash, so only Cancel and
-    // Escape are exercised here.
+    // Confirming is covered in file_ops.rs, with a stand-in for the Trash.
     let fx = Fixture::new("trash");
     let mut ui = Ui::open(cx, &fx.dir);
     ui.select("notes.txt");

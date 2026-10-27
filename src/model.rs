@@ -16,13 +16,15 @@ pub enum Location {
         title: String,
         paths: Arc<Vec<PathBuf>>,
     },
+    /// What's in the Trash.
+    Trash,
 }
 
 impl Location {
     pub fn folder(&self) -> Option<&Path> {
         match self {
             Location::Folder(path) => Some(path),
-            Location::Recents | Location::Results { .. } => None,
+            Location::Recents | Location::Results { .. } | Location::Trash => None,
         }
     }
 
@@ -31,6 +33,7 @@ impl Location {
             Location::Folder(path) => fffinder_core::entry::display_name(path),
             Location::Recents => "Recents".into(),
             Location::Results { title, .. } => title.clone(),
+            Location::Trash => "Trash".into(),
         }
     }
 }

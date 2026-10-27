@@ -14,7 +14,7 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
 - Browses folders as icons, a list, columns, or a gallery, with a sidebar, back and forward history, and a clickable path bar.
 - Previews files in the gallery, the column view, and Quick Look (Space). CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
-- Handles everyday file work: open, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, copy paths, rename one item or many, new folder, and move to Trash.
+- Handles everyday file work: open, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, undo, copy paths, rename one item or many, new folder, and a Trash view with Put Back and Empty.
 - Has light and dark themes that follow the system, and a text size setting for the whole window.
 - Runs inside a terminal with `fffinder --term`, drawn with the kitty graphics protocol so it looks the same as the window. It needs a build with `--features term` and a terminal like kitty, Ghostty, or WezTerm.
 
