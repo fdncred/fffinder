@@ -173,6 +173,14 @@ mod imp {
         })
     }
 
+    pub fn default_app(path: &Path) -> Option<PathBuf> {
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
+            app.path().map(|p| PathBuf::from(p.to_string()))
+        })
+    }
+
     fn rgba(color: &NSColor) -> Option<u32> {
         let c = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
         let byte = |v: f64| (v.clamp(0., 1.) * 255.).round() as u32;
@@ -355,6 +363,12 @@ pub fn system_colors() -> Option<SystemColors> {
 #[cfg(target_os = "macos")]
 pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
     imp::write_file_clipboard(paths, text)
+}
+
+/// The app bundle Launch Services opens the file at `path` with.
+#[cfg(target_os = "macos")]
+pub fn default_app(path: &Path) -> Option<PathBuf> {
+    imp::default_app(path)
 }
 
 /// Whether Launch Services knows an app that opens the file at `path`.

@@ -139,6 +139,11 @@ pub fn item_menu(
                 .icon(IconName::Eye)
                 .action(Box::new(QuickLook)),
         )
+        .item(
+            PopupMenuItem::new("Get Info")
+                .icon(IconName::Info)
+                .action(Box::new(GetInfo)),
+        )
         .when(entries.iter().any(|e| !e.is_dir), |menu| {
             menu.item(
                 PopupMenuItem::new("Open in Editor")
@@ -351,6 +356,13 @@ pub fn background_menu(
             .icon(Lucide::Terminal)
             .action(Box::new(ToggleNuPanel)),
     )
+    .when(folder.is_some(), |menu| {
+        menu.item(
+            PopupMenuItem::new("Get Info")
+                .icon(IconName::Info)
+                .action(Box::new(GetInfo)),
+        )
+    })
     .separator()
     .when_some(folder.filter(|_| !is_favorite), |menu, folder| {
         menu.item(

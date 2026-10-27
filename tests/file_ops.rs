@@ -241,3 +241,48 @@ fn delete_immediately_asks_first(cx: &mut TestAppContext) {
         "not in the Trash"
     );
 }
+
+#[gpui_kit::test]
+fn get_info_shows_details_and_changes_permissions(cx: &mut TestAppContext) {
+    let fx = Fixture::new("info");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let label = |ui: &mut Ui, id: &'static str| {
+        ui.snapshot(id)
+            .label()
+            .map(|l| l.to_string())
+            .unwrap_or_default()
+    };
+    ui.select("notes.txt");
+    ui.press(&cmd("i"));
+    assert!(ui.dialog_open());
+    assert!(
+        label(&mut ui, "info-size").starts_with("12 bytes, "),
+        "{}",
+        label(&mut ui, "info-size")
+    );
+    assert_eq!(label(&mut ui, "info-where"), fx.dir.display().to_string());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        ui.click("perm-everyone-write");
+        let mode = std::fs::metadata(fx.path("notes.txt"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o002, 0, "the box sets the bit on disk");
+        assert!(label(&mut ui, "info-mode").contains("rw-"));
+    }
+    ui.click("info-done");
+    assert!(!ui.dialog_open());
+
+    // A folder's size fills in once it's added up.
+    ui.select("Projects");
+    ui.press(&cmd("i"));
+    assert!(label(&mut ui, "info-size").ends_with("for 2 items"));
+    ui.click("info-done");
+
+    ui.select("notes.txt");
+    ui.select_also("Budget.csv");
+    ui.press(&cmd("i"));
+    assert!(label(&mut ui, "info-size").starts_with("20 bytes, "));
+}

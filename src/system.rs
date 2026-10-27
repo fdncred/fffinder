@@ -78,17 +78,52 @@ pub fn has_default_app(path: &Path, cx: &App) -> Option<bool> {
 /// Asks `xdg-mime` for the file's type and the app set for that type.
 #[cfg(not(any(target_os = "macos", windows)))]
 fn xdg_has_default_app(path: &Path) -> Option<bool> {
-    let query = |args: &[&std::ffi::OsStr]| {
-        let out = std::process::Command::new("xdg-mime")
-            .arg("query")
-            .args(args)
-            .output()
-            .ok()
-            .filter(|out| out.status.success())?;
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
-    let mime = query(&["filetype".as_ref(), path.as_os_str()]).filter(|m| !m.is_empty())?;
-    Some(!query(&["default".as_ref(), mime.as_ref()])?.is_empty())
+    Some(xdg_default_entry(path)?.is_some())
+}
+
+/// `xdg-mime query …`, trimmed; `None` when it fails or isn't installed.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn xdg_query(args: &[&std::ffi::OsStr]) -> Option<String> {
+    let out = std::process::Command::new("xdg-mime")
+        .arg("query")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// The `.desktop` entry set to open the file's type: `Some(None)` when the
+/// type has none, `None` when `xdg-mime` can't tell.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn xdg_default_entry(path: &Path) -> Option<Option<String>> {
+    let mime = xdg_query(&["filetype".as_ref(), path.as_os_str()]).filter(|m| !m.is_empty())?;
+    let entry = xdg_query(&["default".as_ref(), mime.as_ref()])?;
+    Some((!entry.is_empty()).then_some(entry))
+}
+
+/// The name of the app that opens `path` by default, when the system says.
+/// It may start a process, so call it off the UI thread.
+pub fn default_app_name(path: &Path) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos::default_app(path)
+            .and_then(|app| app.file_stem().map(|s| s.to_string_lossy().into_owned()))
+    }
+    #[cfg(windows)]
+    {
+        crate::win::default_app(path).map(|(name, _)| name)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let id = xdg_default_entry(path)??;
+        let name = fffinder_core::terminals::desktop_dirs()
+            .iter()
+            .find_map(|dir| std::fs::read_to_string(dir.join(&id)).ok())
+            .and_then(|text| fffinder_core::terminals::parse_desktop_entry(&text))
+            .map(|entry| entry.name);
+        Some(name.unwrap_or_else(|| id.trim_end_matches(".desktop").to_string()))
+    }
 }
 
 /// Open `path` in the system's text editor: whatever opens plain text on

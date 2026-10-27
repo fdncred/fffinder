@@ -6,6 +6,7 @@ pub mod config;
 pub mod engine;
 pub mod entry;
 pub mod format;
+pub mod info;
 pub mod kind;
 pub mod listing;
 pub mod ops;

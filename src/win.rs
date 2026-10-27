@@ -1,8 +1,8 @@
 //! Windows integration through the Win32 API: putting files on the
-//! clipboard the way Explorer does.
+//! clipboard the way Explorer does, and the apps registered for a file type.
 
 use std::os::windows::ffi::OsStrExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
@@ -10,6 +10,11 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::UI::Shell::DROPFILES;
+use windows::Win32::UI::Shell::{
+    ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR, ASSOCSTR_EXECUTABLE, ASSOCSTR_FRIENDLYAPPNAME,
+    AssocQueryStringW,
+};
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 /// `bytes` in movable global memory, which the clipboard takes over.
 fn global(bytes: &[u8]) -> Option<HGLOBAL> {
@@ -79,4 +84,53 @@ pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
         let _ = CloseClipboard();
         ok
     }
+}
+
+/// `.ext` for `path`, how Windows names a file type.
+fn extension(path: &Path) -> Option<HSTRING> {
+    let ext = path.extension()?;
+    let mut dotted = std::ffi::OsString::from(".");
+    dotted.push(ext);
+    Some(HSTRING::from(dotted.as_os_str()))
+}
+
+/// One string about the app registered for a file type.
+fn assoc_query(what: ASSOCSTR, ext: &HSTRING) -> Option<String> {
+    let mut len = 0u32;
+    // SAFETY: the first call only reports the length; the buffer for the
+    // second holds that many UTF-16 units, the NUL included.
+    unsafe {
+        let _ = AssocQueryStringW(
+            ASSOCF_INIT_IGNOREUNKNOWN,
+            what,
+            ext,
+            PCWSTR::null(),
+            None,
+            &mut len,
+        );
+        if len == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize];
+        AssocQueryStringW(
+            ASSOCF_INIT_IGNOREUNKNOWN,
+            what,
+            ext,
+            PCWSTR::null(),
+            Some(PWSTR(buf.as_mut_ptr())),
+            &mut len,
+        )
+        .ok()
+        .ok()?;
+        let text = String::from_utf16_lossy(&buf[..(len as usize).saturating_sub(1)]);
+        (!text.is_empty()).then_some(text)
+    }
+}
+
+/// The app Windows opens `path` with: its name, and its program.
+pub fn default_app(path: &Path) -> Option<(String, PathBuf)> {
+    let ext = extension(path)?;
+    let name = assoc_query(ASSOCSTR_FRIENDLYAPPNAME, &ext)?;
+    let program = assoc_query(ASSOCSTR_EXECUTABLE, &ext).map(PathBuf::from)?;
+    Some((name, program))
 }

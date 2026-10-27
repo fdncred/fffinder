@@ -585,7 +585,9 @@ pub fn detect_mac(app_dirs: &[PathBuf], extra: &[PathBuf], path: &[PathBuf]) -> 
 
 // Linux ------------------------------------------------------------------------
 
-fn desktop_dirs() -> Vec<PathBuf> {
+/// Where `.desktop` entries live: `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`
+/// `applications` folders, and snap's.
+pub fn desktop_dirs() -> Vec<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

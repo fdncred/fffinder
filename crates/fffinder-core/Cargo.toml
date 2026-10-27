@@ -17,3 +17,20 @@ thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Reads app bundles' Info.plist to find terminals; pure Rust, so it builds everywhere.
 plist = "1"
+# Directory walks for folder sizes, in parallel.
+rayon = "1"
+
+[target.'cfg(unix)'.dependencies]
+# Owner and group names for Get Info.
+uzers = "0.12"
+# Extended attributes: where a download came from, and macOS's last opened date.
+xattr = "1"
+
+# Get Info's owner and size on disk.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }

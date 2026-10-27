@@ -7,6 +7,7 @@ mod dialogs;
 mod editor;
 mod filter;
 mod fps;
+mod info;
 mod menus;
 mod nu_panel;
 mod preview;
@@ -236,6 +237,8 @@ pub struct Finder {
     search_settings_task: Task<()>,
     watch_task: Task<()>,
     save_task: Task<()>,
+    /// The open Get Info panel's contents.
+    info: Option<info::InfoPanel>,
     /// What's in the Trash, while the Trash is showing.
     trashed: Vec<crate::trash_bin::Trashed>,
     /// Copies and moves under way, and the task redrawing their progress.
@@ -398,6 +401,7 @@ impl Finder {
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
+            info: None,
             trashed: Vec::new(),
             transfers: Vec::new(),
             transfers_task: Task::ready(()),
@@ -2247,6 +2251,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_home))
             .on_action(cx.listener(Self::go_recents))
             .on_action(cx.listener(Self::go_trash))
+            .on_action(cx.listener(Self::get_info))
             .on_action(cx.listener(Self::undo_file_operation))
             .on_action(cx.listener(Self::put_back))
             .on_action(cx.listener(Self::delete_immediately))

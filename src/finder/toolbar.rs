@@ -467,6 +467,12 @@ fn actions_menu(
             .action(Box::new(QuickLook)),
     )
     .item(
+        PopupMenuItem::new("Get Info")
+            .icon(IconName::Info)
+            .disabled(!has_selection && !in_folder)
+            .action(Box::new(GetInfo)),
+    )
+    .item(
         PopupMenuItem::new("Rename…")
             .icon(Lucide::Pencil)
             .disabled(!has_selection)

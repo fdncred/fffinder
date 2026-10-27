@@ -19,6 +19,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Opening files](#opening-files)
 - [Working with files](#working-with-files)
 - [Copying and moving](#copying-and-moving)
+- [Get Info](#get-info)
 - [Undo](#undo)
 - [The Trash](#the-trash)
 - [Dragging and dropping](#dragging-and-dropping)
@@ -328,6 +329,7 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
 | Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
+| Get Info (Cmd+I) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
 | Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo](#undo). |
 | Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
 | Paste (Cmd+V in the files) | Copies the items on the clipboard into the folder shown. |
@@ -362,6 +364,24 @@ A folder can't go inside itself, and an item can't replace the folder it's in. A
 Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
 
 A copy or move that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+
+## Get Info
+
+Get Info (Cmd+I, File › Get Info, or the item and empty-space menus) shows a panel about the selected item, or about the folder the window shows when nothing is selected:
+
+| Field | What it shows |
+| --- | --- |
+| Kind | The kind, as the list view's Kind column shows it. |
+| Size | The size in bytes, and the space it takes on disk. For a folder, everything inside it, added up in the background ("Calculating…" until then), and how many items that is. |
+| Where | The folder it's in. |
+| Created, Modified, Last opened | Dates. Last opened is the date macOS records when a file is opened, and elsewhere the last access time, which many systems update rarely. |
+| Original | Where a symbolic link points. The other fields describe what it points at. |
+| Where from | The web addresses a browser recorded for a download: the file's address and the page it came from. macOS keeps them in `kMDItemWhereFroms`, Linux in the `user.xdg.origin.url` and `user.xdg.referrer.url` attributes, and Windows in the file's `Zone.Identifier` stream. |
+| Opens with | The app that opens the file by default. |
+| Owner, Group | The item's owner, and on macOS and Linux its group. Windows shows the owning account as `DOMAIN\user`. |
+| Permissions | On macOS and Linux, Read, Write, and Execute boxes for the owner, the group, and everyone, and the mode they add up to, such as `rw-r--r-- (644)`. Clicking a box changes the item's permissions at once. On Windows, a Read-only box. |
+
+With several items selected, the panel shows how many there are, their kinds, their total size (folders included), and the folder they're in when they share one.
 
 ## Undo
 
@@ -559,7 +579,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | Menu | Items |
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Rename…, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder… |
@@ -574,6 +594,7 @@ Right-click one or more items:
 - Choose, or Choose Items (only in `--pick` mode)
 - Open
 - Quick Look
+- Get Info
 - Open in Editor (when a file is selected)
 - Show in Enclosing Folder (one search result)
 - Show in Finder (Show in Explorer, Show in File Manager)
@@ -597,6 +618,7 @@ Right-click empty space in a view:
 - Paste Item, or Paste N Items, and Move Item Here, or Move N Items Here (in a folder, when the clipboard holds files)
 - Open Nushell Here (in a folder)
 - Run Nushell Pipeline…
+- Get Info (in a folder)
 - Add Folder to Sidebar (when the folder isn't a favorite)
 - Show Hidden Files
 - Refresh
@@ -644,6 +666,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+R | Refresh |
 | Cmd+Alt+S | Toggle the sidebar |
 | Cmd+Shift+N | New folder |
+| Cmd+I | Get Info |
 | Cmd+Shift+Backspace | Empty the Trash |
 | Cmd+Alt+C | Copy path |
 | Cmd+Shift+C | Copy as Nushell list |

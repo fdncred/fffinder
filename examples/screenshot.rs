@@ -3,7 +3,7 @@
 //! ```text
 //! cargo run --example screenshot -- out.png [--dir PATH] [--view icons|list|columns|gallery]
 //!     [--light|--dark] [--query TEXT] [--scope-folder] [--select N] [--quicklook]
-//!     [--nu PIPELINE] [--size 1100x700] [--no-sidebar] [--settings]
+//!     [--nu PIPELINE] [--size 1100x700] [--no-sidebar] [--settings] [--info]
 //! ```
 
 use fffinder::finder::{AppState, Finder};
@@ -28,6 +28,7 @@ struct Options {
     nu: Option<String>,
     quick_look: bool,
     settings: bool,
+    info: bool,
     scope_folder: bool,
     width: f32,
     height: f32,
@@ -46,6 +47,7 @@ fn parse() -> Options {
         nu: None,
         quick_look: false,
         settings: false,
+        info: false,
         scope_folder: false,
         width: 1100.,
         height: 700.,
@@ -70,6 +72,7 @@ fn parse() -> Options {
             "--no-sidebar" => o.sidebar = false,
             "--quicklook" => o.quick_look = true,
             "--settings" => o.settings = true,
+            "--info" => o.info = true,
             "--scope-folder" => o.scope_folder = true,
             "--size" => {
                 let s = args.next().expect("--size WxH");
@@ -181,10 +184,14 @@ fn main() {
         settle(&mut cx);
         settle(&mut cx);
     }
-    if o.settings {
+    let dialogs: [(bool, Box<dyn gpui_kit::Action>); 2] = [
+        (o.settings, Box::new(fffinder::actions::ShowSettings)),
+        (o.info, Box::new(fffinder::actions::GetInfo)),
+    ];
+    for (_, action) in dialogs.into_iter().filter(|(on, _)| *on) {
         cx.update_window(handle, |_, window, cx| {
             view.update(cx, |finder, cx| finder.focus_files(window, cx));
-            window.dispatch_action(Box::new(fffinder::actions::ShowSettings), cx);
+            window.dispatch_action(action, cx);
         })
         .ok();
         settle(&mut cx);
