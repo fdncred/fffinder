@@ -142,6 +142,15 @@ pub struct SearchRequest {
     pub files_only: bool,
 }
 
+/// What the index knows about one folder's items: see [`Engine::folder_stats`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FolderStats {
+    /// Bytes under each subfolder.
+    pub sizes: std::collections::HashMap<PathBuf, u64>,
+    /// Git status of each file that isn't clean: `modified`, `untracked`, …
+    pub git: std::collections::HashMap<PathBuf, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub entry: FileEntry,
@@ -975,6 +984,73 @@ impl Engine {
         items
     }
 
+    /// Folder sizes and git statuses for the items directly in `dir`, read
+    /// from the index without touching the disk: each subfolder's total is
+    /// every indexed file under it, and each file's git status is what the
+    /// index last saw. Folders and files the index skips aren't included.
+    pub fn folder_stats(&self, dir: &Path) -> FolderStats {
+        let mut stats = FolderStats::default();
+        for root in &self.read_indexes().roots {
+            let Ok(guard) = root.picker.read() else {
+                continue;
+            };
+            let Some(picker) = guard.as_ref() else {
+                continue;
+            };
+            let base = picker.base_path();
+            let files = || {
+                picker
+                    .get_files()
+                    .iter()
+                    .chain(picker.get_overflow_files())
+                    .filter(|f| !f.is_deleted())
+            };
+            // A root inside `dir` adds up as one of its subfolders.
+            if let Ok(below) = base.strip_prefix(dir)
+                && let Some(first) = below.components().next()
+            {
+                let total: u64 = files().map(|f| f.size).sum();
+                *stats.sizes.entry(dir.join(first)).or_default() += total;
+                continue;
+            }
+            let Ok(rel) = dir.strip_prefix(base) else {
+                continue;
+            };
+            // fff-search's relative paths use `/` on every system.
+            let mut prefix = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            for file in files() {
+                if file.relative_path_len() <= prefix.len() {
+                    continue;
+                }
+                let path = file.relative_path(picker);
+                let Some(rest) = path.strip_prefix(&prefix) else {
+                    continue;
+                };
+                match rest.split_once('/') {
+                    Some((child, _)) => {
+                        *stats.sizes.entry(dir.join(child)).or_default() += file.size;
+                    }
+                    None => {
+                        if let Some(status) =
+                            fff_search::git::format_git_status_opt(file.git_status)
+                                .filter(|s| *s != "clean" && *s != "unknown")
+                        {
+                            stats.git.insert(dir.join(rest), status.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        stats
+    }
+
     /// Subscribe to changes under the roots. `pattern` is a glob relative to
     /// each root, an absolute path, or empty for everything. Events arrive in
     /// debounced batches until the returned [`Watch`] is dropped.
@@ -1114,6 +1190,10 @@ impl RawHit {
                 size: Some(self.size),
                 modified: meta_modified,
                 is_symlink: false,
+                created: None,
+                mode: None,
+                last_opened: None,
+                readonly: false,
                 path: self.path,
             }
         };
@@ -1406,6 +1486,36 @@ mod tests {
     #[test]
     fn fuzzy_text_drops_constraints() {
         assert_eq!(fuzzy_text("main *.rs /src/ !test git:m"), "main");
+    }
+
+    #[test]
+    fn adds_up_folders_from_the_index() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-stats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("a/one.txt"), "12345").unwrap();
+        std::fs::write(dir.join("a/deep/two.txt"), "123").unwrap();
+        std::fs::write(dir.join("b/three.txt"), "1").unwrap();
+        std::fs::write(dir.join("top.txt"), "xx").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone()],
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        let stats = engine.folder_stats(&dir);
+        assert_eq!(stats.sizes.get(&dir.join("a")), Some(&8));
+        assert_eq!(stats.sizes.get(&dir.join("b")), Some(&1));
+        assert_eq!(stats.sizes.len(), 2, "files at the top aren't folders");
+        let above = engine.folder_stats(dir.parent().unwrap());
+        assert_eq!(
+            above.sizes.get(&dir),
+            Some(&11),
+            "a root inside counts whole"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

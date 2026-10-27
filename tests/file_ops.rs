@@ -400,3 +400,78 @@ fn duplicate_new_file_links_and_archives(cx: &mut TestAppContext) {
         "Undo moves the extracted folder to the Trash"
     );
 }
+
+#[gpui_kit::test]
+fn list_view_columns_folders_and_tree(cx: &mut TestAppContext) {
+    let fx = Fixture::new("list-view");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    // Folder sizes come from the index: Projects holds "atlas" (5 bytes).
+    let projects = ui.read(|f| {
+        f.rows_for_test()
+            .iter()
+            .find(|r| r.entry.name == "Projects")
+            .map(|r| r.size.to_string())
+    });
+    assert_eq!(projects.as_deref(), Some("5 bytes"));
+
+    // The column chooser adds a column after the others; it sorts.
+    ui.right_click("Size");
+    ui.click_menu_item("Date Created");
+    assert!(ui.exists("Date Created"));
+    ui.click("Date Created");
+    assert_eq!(
+        ui.read(|f| f.current_sort().key),
+        fffinder_core::SortKey::Created
+    );
+    ui.right_click("Size");
+    ui.click_menu_item("Permissions");
+    assert!(ui.exists("Permissions"));
+    let columns = |ui: &Ui| {
+        ui.read(|f| {
+            f.config()
+                .list_columns
+                .iter()
+                .map(|c| c.column)
+                .collect::<Vec<_>>()
+        })
+    };
+    use fffinder_core::ListColumn::*;
+    assert_eq!(columns(&ui), [Modified, Size, Kind, Created, Permissions]);
+
+    // Drag a header onto another to move it, and a header's edge to resize it.
+    ui.drag("Kind", "Date Modified", Modifiers::none());
+    assert_eq!(columns(&ui), [Kind, Modified, Size, Created, Permissions]);
+    let width = ui.read(|f| f.config().list_columns[2].width);
+    ui.drag("resize-Size", "Kind", Modifiers::none());
+    assert_ne!(
+        ui.read(|f| f.config().list_columns[2].width),
+        width,
+        "Size was resized"
+    );
+
+    // Folders open in place, and Right and Left open and close them.
+    ui.click(item_id("disclosure", &fx.path("Projects")));
+    assert!(ui.names().contains(&"atlas".to_string()));
+    let depth = ui.read(|f| {
+        f.rows_for_test()
+            .iter()
+            .find(|r| r.entry.name == "atlas")
+            .map(|r| r.depth)
+    });
+    assert_eq!(depth, Some(1));
+    ui.select("atlas");
+    ui.press("right");
+    assert!(ui.names().contains(&"Project Atlas.txt".to_string()));
+    ui.press("left");
+    assert!(!ui.names().contains(&"Project Atlas.txt".to_string()));
+    ui.press("left");
+    assert_eq!(
+        ui.selected(),
+        ["Projects"],
+        "Left goes up to the open folder"
+    );
+    ui.press("left");
+    assert!(!ui.names().contains(&"atlas".to_string()));
+}

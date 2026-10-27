@@ -40,12 +40,16 @@ pub enum SortKey {
     Modified,
     Size,
     Kind,
+    Created,
+    #[serde(rename = "last_opened")]
+    LastOpened,
 }
 
 impl SortKey {
-    pub const BROWSE: [SortKey; 4] = [
+    pub const BROWSE: [SortKey; 5] = [
         SortKey::Name,
         SortKey::Modified,
+        SortKey::Created,
         SortKey::Size,
         SortKey::Kind,
     ];
@@ -57,6 +61,8 @@ impl SortKey {
             SortKey::Modified => "Date Modified",
             SortKey::Size => "Size",
             SortKey::Kind => "Kind",
+            SortKey::Created => "Date Created",
+            SortKey::LastOpened => "Date Last Opened",
         }
     }
 }
@@ -121,12 +127,23 @@ fn take_number(it: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
     s
 }
 
-/// Sort entries in place. `Relevance` keeps the incoming order.
-pub fn sort_entries(entries: &mut [FileEntry], order: SortOrder) {
+/// Sort entries in place, folders first when `folders_first`. `Relevance`
+/// keeps the incoming order.
+pub fn sort_entries(entries: &mut [FileEntry], order: SortOrder, folders_first: bool) {
     if order.key == SortKey::Relevance {
         return;
     }
-    entries.sort_by(|a, b| compare(a, b, order));
+    entries.sort_by(|a, b| folders_on_top(a, b, folders_first).then_with(|| compare(a, b, order)));
+}
+
+/// With `folders_first`, folders before everything else, whichever way the
+/// rest is sorted ("Keep Folders on Top").
+pub fn folders_on_top(a: &FileEntry, b: &FileEntry, folders_first: bool) -> Ordering {
+    if folders_first {
+        b.is_navigable().cmp(&a.is_navigable())
+    } else {
+        Ordering::Equal
+    }
 }
 
 /// Compare two entries for `order`; `Relevance` compares equal.
@@ -145,6 +162,8 @@ pub fn compare(a: &FileEntry, b: &FileEntry, order: SortOrder) -> Ordering {
                 .kind_label()
                 .cmp(&b.kind_label())
                 .then_with(|| natural_cmp(&a.name, &b.name)),
+            SortKey::Created => a.created.cmp(&b.created),
+            SortKey::LastOpened => a.last_opened.cmp(&b.last_opened),
         };
         let ord = ord.then_with(|| natural_cmp(&a.name, &b.name));
         if order.ascending { ord } else { ord.reverse() }
@@ -169,12 +188,15 @@ mod tests {
         std::fs::write(dir.join("b.txt"), "hello").unwrap();
         std::fs::write(dir.join(".hidden"), "x").unwrap();
         let mut entries = list_dir(&dir, false).unwrap();
-        sort_entries(&mut entries, SortOrder::default());
+        sort_entries(&mut entries, SortOrder::default(), false);
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["b.txt", "sub"]);
         assert_eq!(entries[0].size, Some(5));
         assert!(entries[1].is_dir);
         assert_eq!(list_dir(&dir, true).unwrap().len(), 3);
+        sort_entries(&mut entries, SortOrder::default(), true);
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["sub", "b.txt"], "folders on top");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

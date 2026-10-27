@@ -359,6 +359,7 @@ fn sort_menu(
     let sort = finder.current_sort();
     let searching = finder.is_searching();
     let hidden = finder.config.show_hidden;
+    let folders_first = finder.config.folders_first;
     let mut keys: Vec<SortKey> = Vec::new();
     if searching {
         keys.push(SortKey::Relevance);
@@ -398,6 +399,11 @@ fn sort_menu(
                 ),
         )
         .separator()
+        .item(
+            PopupMenuItem::new("Keep Folders on Top")
+                .checked(folders_first)
+                .action(Box::new(ToggleFoldersFirst)),
+        )
         .item(
             PopupMenuItem::new("Show Hidden Files")
                 .checked(hidden)

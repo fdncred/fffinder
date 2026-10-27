@@ -168,11 +168,33 @@ The footer shows "N files indexed", or "Indexing… N" with a spinner while scan
 Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is saved.
 
 - **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
-- **List** (Cmd+2) shows Name, Date Modified, Size, and Kind columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder.
+- **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. See [The list view](#the-list-view).
 - **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns. Selecting a folder opens it in a new column to the right. Selecting a file shows a preview card with its kind, size, modification date, and location in the last column. Search results and Recents always use the list in this view, as Finder does.
 - **Gallery** (Cmd+4) shows a large preview of the selected item above a strip of everything in the folder. Left and Right arrows move along the strip. The gallery always shows an item, so it selects the first one when nothing is selected.
 
-Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB.
+Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB, and on macOS PDFs, videos, and documents (see [Thumbnails](#thumbnails)).
+
+### The list view
+
+**Folders open in place.** In a folder, each subfolder has a disclosure triangle. Click it, or select the folder and press Right, to show what's inside, indented below it; Left closes it again. Left on an item inside an open folder selects that folder. Open folders can be opened further, every level is sorted the same way, and they all close when you go to another folder. Search results, Recents, and the Trash are flat lists.
+
+**Columns.** Right-click the header to choose the columns after Name:
+
+| Column | Shows |
+| --- | --- |
+| Date Modified | When the item last changed. |
+| Date Created | When the item was made, where the file system records it. |
+| Date Last Opened | On macOS, the date macOS records when a file is opened; elsewhere the last access time, which many systems update rarely. Read only while the column is shown or the list is sorted by it. |
+| Size | A file's size, and with Calculate All Sizes on, a folder's. |
+| Kind | The item's kind. |
+| Permissions | The Unix permission bits, as `rwxr-xr-x`. On Windows, `read-only` or `read-write` for files. |
+| Git | The git status the index last saw for a file: `modified`, `untracked`, `staged`, and so on. Clean files are blank. Search results show it too. |
+
+Drag a header onto another header to move it there. Drag the right edge of a header to make the column wider or narrower. **Reset Columns** in the header menu goes back to Date Modified, Size, and Kind. Columns, their order, and their widths are saved.
+
+**Calculate All Sizes** (in the header menu, on by default) shows each folder's size: everything the index holds under it, added up without reading the disk. Folders the index skips, such as `node_modules` and caches (see [What the index skips](#what-the-index-skips)), and folders outside the search locations show `--`. Sorting by Size sorts folders by these sizes too.
+
+**Keep Folders on Top** (the header menu, the Sort menu, or View › Keep Folders on Top) lists folders before files whatever the sort, in every view. It is saved.
 
 ## Selecting items
 
@@ -198,11 +220,12 @@ As in Finder, typing letters while the files have focus selects the first item w
 
 The Sort and View Options menu has:
 
-- **Sort By**: Relevance (only while searching), Name, Date Modified, Size, and Kind. Choosing the current key again reverses the order.
+- **Sort By**: Relevance (only while searching), Name, Date Modified, Date Created, Size, and Kind. Choosing the current key again reverses the order. The list view's Date Last Opened header sorts by that date too.
 - **Ascending** and **Descending**. Both are disabled for Relevance.
+- **Keep Folders on Top**. See [The list view](#the-list-view).
 - **Show Hidden Files**.
 
-Name sorting is natural, so `file2` comes before `file10`. Date Modified and Size start with the newest and largest items. Kind sorts by kind, then name.
+Name sorting is natural, so `file2` comes before `file10`. Date Modified, Date Created, and Size start with the newest and largest items. Kind sorts by kind, then name.
 
 The folder sort is saved. A search has its own sort, which starts at Relevance and isn't saved.
 
@@ -608,7 +631,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
-| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
+| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder… |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
 
@@ -664,7 +687,8 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 
 ### Toolbar menus
 
-- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Size, Kind), Ascending, Descending, Show Hidden Files.
+- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files.
+- **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
 - **Actions** (…): New Folder, Quick Look, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Filter with Nushell…, Go to Folder…, Search Syntax…, Settings….
 
@@ -717,6 +741,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Home, End | First or last item |
 | Return, Cmd+Down, Cmd+O | Open |
 | Space, Cmd+Y | Quick Look |
+| Right, Left | In the list view, open or close the selected folder in place |
 | Escape | Clear the selection, end the search, or cancel `--pick` |
 | Cmd+A | Select all |
 | Cmd+C | Copy the selected items |
@@ -808,7 +833,10 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `favorites` | The standard folders that exist | Sidebar Favorites, in order. |
 | `show_hidden` | `false` | Show hidden files in folders. |
 | `view_mode` | `"icons"` | `icons`, `list`, `columns`, or `gallery`. |
-| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `size`, `kind`. |
+| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `created`, `last_opened`, `size`, `kind`. |
+| `folders_first` | `false` | Keep Folders on Top. |
+| `list_columns` | Date Modified 170, Size 90, Kind 160 | The list view's columns after Name, in order: `column` (`modified`, `created`, `last_opened`, `size`, `kind`, `permissions`, `git`) and `width` in points, at least 50. |
+| `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |
 | `show_sidebar` | `true` | Show the sidebar. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |

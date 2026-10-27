@@ -62,7 +62,7 @@ pub fn read(path: &Path) -> io::Result<Info> {
         on_disk: on_disk.filter(|_| !is_dir),
         created: meta.created().ok(),
         modified: meta.modified().ok(),
-        last_opened: last_used(path).or_else(|| meta.accessed().ok()),
+        last_opened: last_opened(path),
         link_target,
         mode,
         readonly: meta.permissions().readonly(),
@@ -175,6 +175,11 @@ fn ownership(
     _: &fs::Metadata,
 ) -> (Option<u32>, Option<u64>, Option<String>, Option<String>) {
     (None, None, None, None)
+}
+
+/// When an item was last opened: what macOS records, else its access time.
+pub fn last_opened(path: &Path) -> Option<SystemTime> {
+    last_used(path).or_else(|| fs::metadata(path).and_then(|m| m.accessed()).ok())
 }
 
 /// macOS records the last time an item was opened in this attribute: a

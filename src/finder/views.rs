@@ -4,7 +4,7 @@
 use super::{Finder, Row};
 use crate::macos::IconLookup;
 use crate::theme::{Palette, palette, ui};
-use fffinder_core::{FileEntry, FileKind, SortKey, ViewMode};
+use fffinder_core::{FileEntry, FileKind, ListColumn, SortKey, ViewMode};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
@@ -424,31 +424,16 @@ impl Finder {
         let visible = (f32::from(self.content_height) / row).ceil() as usize;
         let filler = visible.saturating_sub(len + 1);
         let active = self.files_focused(window);
-
-        let header_cell = |label: &'static str, key: SortKey, cx: &mut Context<Self>| {
-            let sorted = sort.key == key;
-            h_flex()
-                .id(label)
-                .h_full()
-                .px(ui(6.))
-                .gap(ui(4.))
-                .hover(|s| s.bg(cx.theme().list_hover))
-                .child(label)
-                .when(sorted, |this| {
-                    this.child(
-                        Icon::new(if sort.ascending {
-                            IconName::ChevronUp
-                        } else {
-                            IconName::ChevronDown
-                        })
-                        .with_size(ui(12.)),
-                    )
-                })
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sort(key, cx)))
-                .test_support()
+        let parent_title = if self.search_contents && self.is_searching() {
+            "Match"
+        } else if self.in_trash() {
+            "Original Folder"
+        } else {
+            "Folder"
         };
 
         let header = h_flex()
+            .id("list-header")
             .h(ui(28.))
             .flex_shrink_0()
             .px(ui(10.))
@@ -457,37 +442,33 @@ impl Finder {
             .text_size(ui(12.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(header_color)
-            .child(div().flex_1().min_w(ui(160.)).h_full().child(header_cell(
-                "Name",
-                SortKey::Name,
-                cx,
-            )))
-            .when(searching, |this| {
-                this.child(div().w(ui(220.)).px(ui(6.)).child(
-                    if self.search_contents && self.is_searching() {
-                        "Match"
-                    } else {
-                        "Folder"
-                    },
-                ))
-            })
-            .child(div().w(ui(170.)).h_full().child(header_cell(
-                "Date Modified",
-                SortKey::Modified,
-                cx,
-            )))
             .child(
-                div()
-                    .w(ui(90.))
-                    .h_full()
-                    .child(header_cell("Size", SortKey::Size, cx)),
+                div().flex_1().min_w(ui(160.)).h_full().child(
+                    self.header_cell("Name", Some(SortKey::Name), false, sort, cx)
+                        .test_support(),
+                ),
             )
-            .child(
-                div()
-                    .w(ui(160.))
-                    .h_full()
-                    .child(header_cell("Kind", SortKey::Kind, cx)),
-            );
+            .when(searching, |this| {
+                this.child(div().w(ui(220.)).px(ui(6.)).child(parent_title))
+            })
+            .children(
+                self.config
+                    .list_columns
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, setting)| self.column_header(ix, setting, sort, cx)),
+            )
+            .on_drag_move(cx.listener(
+                |this, event: &DragMoveEvent<super::list::ColumnResize>, _, cx| {
+                    let ix = event.drag(cx).0;
+                    this.resize_column(ix, event.event.position.x, cx);
+                },
+            ))
+            .context_menu({
+                let view = cx.entity();
+                move |menu, window, cx| super::list::header_menu(&view, menu, window, cx)
+            });
 
         let body = uniform_list(
             "list",
@@ -523,6 +504,102 @@ impl Finder {
         )
     }
 
+    /// A header label that sorts by `key` when clicked, with an arrow when
+    /// the list is sorted by it.
+    fn header_cell(
+        &self,
+        label: &'static str,
+        key: Option<SortKey>,
+        right: bool,
+        sort: fffinder_core::SortOrder,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let sorted = key == Some(sort.key);
+        h_flex()
+            .id(label)
+            .size_full()
+            .px(ui(6.))
+            .gap(ui(4.))
+            .when(right, |this| this.justify_end())
+            .hover(|s| s.bg(cx.theme().list_hover))
+            .child(div().truncate().child(label))
+            .when(sorted, |this| {
+                this.child(
+                    Icon::new(if sort.ascending {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .with_size(ui(12.)),
+                )
+            })
+            .when_some(key, |this, key| {
+                this.on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sort(key, cx)),
+                )
+            })
+    }
+
+    /// One column's header: drag it onto another to move it, or drag its
+    /// right edge to resize it.
+    fn column_header(
+        &self,
+        ix: usize,
+        setting: fffinder_core::ColumnSetting,
+        sort: fffinder_core::SortOrder,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let column = setting.column;
+        let title = column.title();
+        let highlight = cx.theme().drop_target;
+        let cell = self
+            .header_cell(
+                title,
+                column.sort_key(),
+                column == ListColumn::Size,
+                sort,
+                cx,
+            )
+            .on_drag(super::list::ColumnMove(ix), move |_, _, _, cx| {
+                cx.new(|_| super::list::ColumnPreview(title.into()))
+            })
+            .drag_over::<super::list::ColumnMove>(move |style, _, _, _| style.bg(highlight))
+            .on_drop(
+                cx.listener(move |this, moved: &super::list::ColumnMove, _, cx| {
+                    this.move_column(moved.0, ix, cx)
+                }),
+            )
+            .test_support();
+        let handle = div()
+            .id(SharedString::from(format!("resize-{title}")))
+            .absolute()
+            .top_0()
+            .right_0()
+            .h_full()
+            .w(ui(6.))
+            .cursor(CursorStyle::ResizeLeftRight)
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.start_column_resize(ix, event.position.x);
+                }),
+            )
+            .on_drag(super::list::ColumnResize(ix), |_, _, _, cx| {
+                cx.new(|_| EmptyView)
+            })
+            .test_support();
+        div()
+            .relative()
+            .w(ui(setting.width))
+            .h_full()
+            .flex_shrink_0()
+            .child(cell)
+            .child(handle)
+            .into_any_element()
+    }
+
     fn render_list_row(
         &self,
         ix: usize,
@@ -551,6 +628,59 @@ impl Finder {
         } else {
             (theme.foreground, theme.muted_foreground)
         };
+        let tree = self.tree_mode();
+        let disclosure = tree.then(|| {
+            let spacer = div().w(ui(14.)).flex_shrink_0();
+            if !row.entry.is_navigable() {
+                return spacer.into_any_element();
+            }
+            let path = row.entry.path.clone();
+            let open = self.expanded.contains(&path);
+            spacer
+                .id(("disclosure", path_id(&path)))
+                .child(
+                    Icon::new(if open {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .with_size(ui(12.))
+                    .text_color(muted),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_expanded(path.clone(), cx);
+                    }),
+                )
+                .test_support()
+                .into_any_element()
+        });
+        let cells = self.config.list_columns.iter().map(|setting| {
+            let text = match setting.column {
+                ListColumn::Modified => row.date.clone(),
+                ListColumn::Created => row.created.clone(),
+                ListColumn::LastOpened => row.opened.clone(),
+                ListColumn::Size => row.size.clone(),
+                ListColumn::Kind => row.kind.clone(),
+                ListColumn::Permissions => row.permissions.clone(),
+                ListColumn::Git => row.git.clone(),
+            };
+            div()
+                .w(ui(setting.width))
+                .flex_shrink_0()
+                .px(ui(6.))
+                .truncate()
+                .text_color(muted)
+                .when(setting.column == ListColumn::Size, |this| {
+                    this.flex().justify_end()
+                })
+                .when(setting.column == ListColumn::Permissions, |this| {
+                    this.font_family(theme.mono_font_family.clone())
+                })
+                .child(text)
+        });
         let el = base
             .id(("row", super::views::path_id(&row.entry.path)))
             .text_color(fg)
@@ -566,8 +696,10 @@ impl Finder {
                     .flex_1()
                     .min_w(ui(160.))
                     .gap(ui(6.))
-                    .px(ui(6.))
+                    .pl(ui(6. + 16. * row.depth as f32))
+                    .pr(ui(6.))
                     .overflow_hidden()
+                    .children(disclosure)
                     .child(file_icon(&row.entry, ui(16.), false, &pal))
                     .child(name_text(row, selected, &pal)),
             )
@@ -581,31 +713,7 @@ impl Finder {
                         .child(row.detail.clone()),
                 )
             })
-            .child(
-                div()
-                    .w(ui(170.))
-                    .px(ui(6.))
-                    .truncate()
-                    .text_color(muted)
-                    .child(row.date.clone()),
-            )
-            .child(
-                div()
-                    .w(ui(90.))
-                    .px(ui(6.))
-                    .flex()
-                    .justify_end()
-                    .text_color(muted)
-                    .child(row.size.clone()),
-            )
-            .child(
-                div()
-                    .w(ui(160.))
-                    .px(ui(10.))
-                    .truncate()
-                    .text_color(muted)
-                    .child(row.kind.clone()),
-            )
+            .children(cells)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         self.item_interactions(el, ix, div().w_full().px(ui(8.)), cx)
     }

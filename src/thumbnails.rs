@@ -73,6 +73,13 @@ pub fn wanted(entry: &FileEntry) -> bool {
 pub fn image(entry: &FileEntry, px: u32) -> ImageSource {
     let key: Key = (entry.path.clone(), entry.modified, px);
     ImageSource::Custom(Arc::new(move |window, cx| {
+        // UI tests run on a deterministic executor that our worker threads
+        // would wake from outside, so they keep the icons.
+        if cx.has_global::<crate::system::Recorder>() {
+            return Some(Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
+                "no thumbnails in tests"
+            )))));
+        }
         match window.use_asset::<Thumbnail>(&key, cx)? {
             Some(png) => window.use_asset::<ImgResourceLoader>(&Resource::Path(png.into()), cx),
             None => Some(Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(

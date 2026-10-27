@@ -17,10 +17,13 @@ pub mod places;
 pub mod terminals;
 pub mod thumbnailers;
 
-pub use config::{Appearance, Config, SearchCase, SearchSettings, SmartFolder, ViewMode};
+pub use config::{
+    Appearance, ColumnSetting, Config, ListColumn, SearchCase, SearchSettings, SmartFolder,
+    ViewMode,
+};
 pub use engine::{
-    Engine, EngineOptions, GrepHit, GrepModeKind, GrepRequest, GrepResponse, IndexedItem,
-    RootStatus, SearchHit, SearchRequest, SearchResponse, Watch,
+    Engine, EngineOptions, FolderStats, GrepHit, GrepModeKind, GrepRequest, GrepResponse,
+    IndexedItem, RootStatus, SearchHit, SearchRequest, SearchResponse, Watch,
 };
 pub use entry::FileEntry;
 pub use kind::{FileKind, KindFilter};

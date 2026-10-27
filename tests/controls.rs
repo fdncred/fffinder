@@ -82,10 +82,12 @@ fn sort_menu_items(cx: &mut TestAppContext) {
             "Sort By",
             "Name",
             "Date Modified",
+            "Date Created",
             "Size",
             "Kind",
             "Ascending",
             "Descending",
+            "Keep Folders on Top",
             "Show Hidden Files"
         ]
     );
@@ -105,6 +107,14 @@ fn sort_menu_items(cx: &mut TestAppContext) {
     ui.click_menu_item("Show Hidden Files");
     assert!(ui.read(|f| f.config().show_hidden));
     assert!(ui.names().contains(&".secret".to_string()));
+
+    // Sorted by name, descending: Projects is in the middle until folders go on top.
+    ui.click("sort");
+    ui.click_menu_item("Name");
+    assert_ne!(ui.names()[0], "Projects");
+    ui.click("sort");
+    ui.click_menu_item("Keep Folders on Top");
+    assert_eq!(ui.names()[0], "Projects");
 }
 
 #[gpui_kit::test]
@@ -238,6 +248,7 @@ fn every_menu_bar_action_has_a_handler(cx: &mut TestAppContext) {
         EmptyTrash.boxed_clone(),
         GoTrash.boxed_clone(),
         GetInfo.boxed_clone(),
+        ToggleFoldersFirst.boxed_clone(),
         NewFile.boxed_clone(),
         Duplicate.boxed_clone(),
         MakeAlias.boxed_clone(),

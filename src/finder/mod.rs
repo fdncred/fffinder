@@ -8,6 +8,7 @@ mod editor;
 mod filter;
 mod fps;
 mod info;
+mod list;
 mod make;
 mod menus;
 mod nu_panel;
@@ -86,6 +87,14 @@ pub struct Row {
     pub highlights: Vec<(usize, usize)>,
     /// How `LS_COLORS` draws the name, when that option is on.
     pub name_style: Option<crate::nu_env::NameStyle>,
+    /// The list view's other columns.
+    pub created: SharedString,
+    pub opened: SharedString,
+    pub permissions: SharedString,
+    /// Git status (`modified`, `untracked`, …), or empty when clean.
+    pub git: SharedString,
+    /// How deep inside open folders the row is, in the list view's tree.
+    pub depth: usize,
 }
 
 impl Row {
@@ -104,6 +113,26 @@ impl Row {
                 .unwrap_or_else(|| "--".into())
                 .into(),
             kind: entry.kind_label().into(),
+            created: entry
+                .created
+                .map(format::human_date)
+                .unwrap_or_default()
+                .into(),
+            opened: entry
+                .last_opened
+                .map(format::human_date)
+                .unwrap_or_default()
+                .into(),
+            // Windows has no permission bits, only read-only files.
+            permissions: match (entry.mode, entry.is_dir, entry.readonly) {
+                (Some(mode), _, _) => fffinder_core::info::mode_string(mode),
+                (None, true, _) => "--".into(),
+                (None, false, true) => "read-only".into(),
+                (None, false, false) => "read-write".into(),
+            }
+            .into(),
+            git: SharedString::default(),
+            depth: 0,
             detail: detail.into(),
             highlights,
             name_style: None,
@@ -241,6 +270,13 @@ pub struct Finder {
     save_task: Task<()>,
     /// The open Get Info panel's contents.
     info: Option<info::InfoPanel>,
+    /// Folders open in the list view's tree, and what they hold.
+    expanded: HashSet<PathBuf>,
+    children: HashMap<PathBuf, Vec<FileEntry>>,
+    /// Folder sizes and git statuses from the index, by folder.
+    folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
+    /// A list column being resized: which, where the drag began, its width then.
+    column_resize: Option<(usize, Pixels, f32)>,
     /// What's in the Trash, while the Trash is showing.
     trashed: Vec<crate::trash_bin::Trashed>,
     /// Copies and moves under way, and the task redrawing their progress.
@@ -406,6 +442,10 @@ impl Finder {
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
             info: None,
+            expanded: HashSet::new(),
+            children: HashMap::new(),
+            folder_stats: HashMap::new(),
+            column_resize: None,
             trashed: Vec::new(),
             transfers: Vec::new(),
             transfers_task: Task::ready(()),
@@ -636,6 +676,9 @@ impl Finder {
         self.selection.clear();
         self.columns.clear();
         self.active_column = 0;
+        self.expanded.clear();
+        self.children.clear();
+        self.folder_stats.clear();
         self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
         if let Some(folder) = self.current_folder() {
@@ -706,6 +749,7 @@ impl Finder {
     fn load_listing(&mut self, select: Vec<PathBuf>, quiet: bool, cx: &mut Context<Self>) {
         let location = self.history.current().clone();
         let show_hidden = self.config.show_hidden;
+        let last_opened = self.wants_last_opened();
         let engine = self.engine.clone();
         let bin = crate::trash_bin::bin(cx);
         if !quiet {
@@ -716,7 +760,12 @@ impl Finder {
                 .background_spawn(async move {
                     match &location {
                         Location::Folder(dir) => listing::list_dir(dir, show_hidden)
-                            .map(|entries| (entries, dir_stamp(dir), Vec::new()))
+                            .map(|mut entries| {
+                                if last_opened {
+                                    entries.iter_mut().for_each(FileEntry::read_last_opened);
+                                }
+                                (entries, dir_stamp(dir), Vec::new())
+                            })
                             .map_err(|e| e.to_string()),
                         Location::Recents => {
                             engine.wait_ready(Duration::from_secs(60));
@@ -749,6 +798,9 @@ impl Finder {
                         this.listing_error = None;
                         this.listing_stamp = stamp;
                         this.trashed = trashed;
+                        if let Some(dir) = this.current_folder().map(Path::to_path_buf) {
+                            this.load_folder_stats(dir, cx);
+                        }
                     }
                     Err(err) => {
                         this.listing.clear();
@@ -815,6 +867,7 @@ impl Finder {
             self.run_search(false, cx);
         }
         self.reload_columns(cx);
+        self.reload_children(cx);
     }
 
     /// Reload the column view's panes after the first, which mirrors the rows.
@@ -828,8 +881,14 @@ impl Finder {
     /// Rebuild the displayed rows from the listing or search results.
     pub fn rebuild_rows(&mut self, cx: &mut Context<Self>) {
         let old: Vec<PathBuf> = self.rows.iter().map(|r| r.entry.path.clone()).collect();
+        let order = self.sort_order();
+        let tree = self.tree_mode();
         let mut rows: Vec<Row> = if self.is_searching() {
             self.results.clone()
+        } else if tree {
+            let mut rows = Vec::with_capacity(self.listing.len());
+            self.tree_rows(self.listing.clone(), 0, &mut rows);
+            rows
         } else {
             // Items in the Trash show the folder they came from.
             let came_from: HashMap<&Path, String> = self
@@ -841,18 +900,26 @@ impl Finder {
                 .iter()
                 .map(|e| {
                     let detail = came_from.get(e.path.as_path()).cloned();
-                    Row::new(e.clone(), Vec::new(), detail)
+                    let mut entry = e.clone();
+                    let git = self.decorate(&mut entry);
+                    let mut row = Row::new(entry, Vec::new(), detail);
+                    row.git = git.unwrap_or_default().into();
+                    row
                 })
                 .collect()
         };
-        let order = self.sort_order();
         // Recents and sent results keep their own order until a sort is chosen.
         let keep_order = matches!(
             self.history.current(),
             Location::Recents | Location::Results { .. } | Location::Trash
         ) && order == SortOrder::default();
-        if order.key != SortKey::Relevance && !keep_order {
-            rows.sort_by(|a, b| listing::compare(&a.entry, &b.entry, order));
+        // The tree sorts each folder's items as it builds them.
+        if order.key != SortKey::Relevance && !keep_order && !tree {
+            let folders_first = self.config.folders_first;
+            rows.sort_by(|a, b| {
+                listing::folders_on_top(&a.entry, &b.entry, folders_first)
+                    .then_with(|| listing::compare(&a.entry, &b.entry, order))
+            });
         }
         self.unfiltered_len = rows.len();
         self.apply_filter_to(&mut rows, cx);
@@ -994,7 +1061,11 @@ impl Finder {
                         let rows = response
                             .hits
                             .into_iter()
-                            .map(|hit| Row::new(hit.entry, hit.highlights, None))
+                            .map(|hit| {
+                                let mut row = Row::new(hit.entry, hit.highlights, None);
+                                row.git = hit.git_status.unwrap_or_default().into();
+                                row
+                            })
                             .collect();
                         let stats = SearchStats {
                             elapsed: response.elapsed,
@@ -1089,6 +1160,7 @@ impl Finder {
                             if matches!(this.history.current(), Location::Recents) {
                                 this.load_listing(Vec::new(), true, cx);
                             }
+                            this.reload_folder_stats(cx);
                         }
                         cx.notify();
                         scanning
@@ -1278,6 +1350,9 @@ impl Finder {
             self.move_in_columns(dx, dy, window, cx);
             return;
         }
+        if dy == 0 && !extend && self.tree_key(dx, cx) {
+            return;
+        }
         let delta = match view {
             ViewMode::Icons => dx + dy * self.grid_cols.max(1) as isize,
             ViewMode::Gallery => dx + dy,
@@ -1455,6 +1530,8 @@ impl Finder {
             return;
         }
         self.config.view_mode = mode;
+        // Only the list shows open folders' items.
+        self.rebuild_rows(cx);
         if mode == ViewMode::Columns {
             self.columns.clear();
             self.sync_root_column();
@@ -1486,6 +1563,10 @@ impl Finder {
         } else {
             self.config.sort = order;
             self.schedule_save(cx);
+            if key == SortKey::LastOpened {
+                // Last-opened dates are only read when something needs them.
+                self.load_listing(Vec::new(), true, cx);
+            }
         }
         self.rebuild_rows(cx);
     }
@@ -1516,6 +1597,7 @@ impl Finder {
         self.schedule_save(cx);
         self.load_listing(Vec::new(), true, cx);
         self.reload_columns(cx);
+        self.reload_children(cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
@@ -2128,13 +2210,14 @@ impl Finder {
     fn load_column(&mut self, col: usize, dir: PathBuf, cx: &mut Context<Self>) {
         let show_hidden = self.config.show_hidden;
         let sort = self.config.sort;
+        let folders_first = self.config.folders_first;
         cx.spawn(async move |this, cx| {
             let entries = cx
                 .background_spawn({
                     let dir = dir.clone();
                     async move {
                         let mut entries = listing::list_dir(&dir, show_hidden).unwrap_or_default();
-                        listing::sort_entries(&mut entries, sort);
+                        listing::sort_entries(&mut entries, sort, folders_first);
                         entries
                     }
                 })
@@ -2264,6 +2347,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_recents))
             .on_action(cx.listener(Self::go_trash))
             .on_action(cx.listener(Self::get_info))
+            .on_action(cx.listener(Self::toggle_folders_first))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::duplicate))
             .on_action(cx.listener(Self::make_alias))
