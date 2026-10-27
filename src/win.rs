@@ -1,9 +1,13 @@
 //! Windows integration through the Win32 API: putting files on the
-//! clipboard the way Explorer does, and the apps registered for a file type.
+//! clipboard the way Explorer does, and the apps registered for a file type
+//! (Explorer's Open with list), opened through the shell.
 
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+use windows::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, IDataObject,
+};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -11,8 +15,9 @@ use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, Glo
 use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::UI::Shell::DROPFILES;
 use windows::Win32::UI::Shell::{
-    ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR, ASSOCSTR_EXECUTABLE, ASSOCSTR_FRIENDLYAPPNAME,
-    AssocQueryStringW,
+    ASSOC_FILTER_RECOMMENDED, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR, ASSOCSTR_EXECUTABLE,
+    ASSOCSTR_FRIENDLYAPPNAME, AssocQueryStringW, BHID_DataObject, IAssocHandler, IShellItem,
+    SHAssocEnumHandlers, SHCreateItemFromParsingName,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
@@ -133,4 +138,101 @@ pub fn default_app(path: &Path) -> Option<(String, PathBuf)> {
     let name = assoc_query(ASSOCSTR_FRIENDLYAPPNAME, &ext)?;
     let program = assoc_query(ASSOCSTR_EXECUTABLE, &ext).map(PathBuf::from)?;
     Some((name, program))
+}
+
+/// Start COM on this thread for the shell's objects; a thread that already
+/// has it keeps what it has.
+fn com() {
+    // SAFETY: called before any COM object is made on this thread.
+    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+}
+
+/// A string the shell allocated, copied and freed.
+fn take(text: windows::core::Result<PWSTR>) -> Option<String> {
+    let text = text.ok()?;
+    // SAFETY: the shell returned a NUL-terminated string from the COM
+    // allocator, which is freed once copied.
+    unsafe {
+        let copy = text.to_string().ok();
+        CoTaskMemFree(Some(text.0.cast_const().cast()));
+        copy
+    }
+}
+
+/// Explorer's Open with list for `path`'s type, in its order, with each
+/// app's name and program.
+fn handlers(path: &Path) -> Vec<(IAssocHandler, String, PathBuf)> {
+    let Some(ext) = extension(path) else {
+        return Vec::new();
+    };
+    com();
+    let mut found = Vec::new();
+    // SAFETY: the enumerator hands out one handler at a time, owned by us.
+    unsafe {
+        let Ok(list) = SHAssocEnumHandlers(&ext, ASSOC_FILTER_RECOMMENDED) else {
+            return found;
+        };
+        loop {
+            let mut slot = [None];
+            let mut fetched = 0u32;
+            if list.Next(&mut slot, Some(&mut fetched)).is_err() || fetched == 0 {
+                break;
+            }
+            let Some(handler) = slot[0].take() else {
+                break;
+            };
+            if let (Some(name), Some(program)) =
+                (take(handler.GetUIName()), take(handler.GetName()))
+            {
+                found.push((handler, name, PathBuf::from(program)));
+            }
+        }
+    }
+    found
+}
+
+/// The apps that can open `path`: name, program, and whether it's the default.
+pub fn apps_for(path: &Path) -> Vec<(String, PathBuf, bool)> {
+    let default = default_app(path).map(|(_, program)| program);
+    handlers(path)
+        .into_iter()
+        .map(|(_, name, program)| {
+            let is_default = default
+                .as_ref()
+                .is_some_and(|d| d.as_os_str().eq_ignore_ascii_case(program.as_os_str()));
+            (name, program, is_default)
+        })
+        .collect()
+}
+
+/// Open `files` with the app whose program is `program`, through the shell,
+/// so Store apps open too; a program not in the list is run directly.
+pub fn open_with(program: &Path, files: &[PathBuf]) -> Result<(), String> {
+    let Some(first) = files.first() else {
+        return Ok(());
+    };
+    let handler = handlers(first)
+        .into_iter()
+        .find(|(_, _, p)| p.as_os_str().eq_ignore_ascii_case(program.as_os_str()))
+        .map(|(handler, _, _)| handler);
+    let Some(handler) = handler else {
+        return std::process::Command::new(program)
+            .args(files)
+            .spawn()
+            .map(drop)
+            .map_err(|e| e.to_string());
+    };
+    for file in files {
+        let name = HSTRING::from(file.as_os_str());
+        // SAFETY: the item and its data object live until Invoke returns.
+        unsafe {
+            let item: IShellItem =
+                SHCreateItemFromParsingName(&name, None).map_err(|e| e.message())?;
+            let data: IDataObject = item
+                .BindToHandler(None, &BHID_DataObject)
+                .map_err(|e| e.message())?;
+            handler.Invoke(&data).map_err(|e| e.message())?;
+        }
+    }
+    Ok(())
 }

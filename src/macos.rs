@@ -181,6 +181,44 @@ mod imp {
         })
     }
 
+    pub fn apps_for(path: &Path) -> Vec<PathBuf> {
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            NSWorkspace::sharedWorkspace()
+                .URLsForApplicationsToOpenURL(&url)
+                .iter()
+                .filter_map(|app| app.path().map(|p| PathBuf::from(p.to_string())))
+                .collect()
+        })
+    }
+
+    /// Launch Services answers on another thread, after the user confirms
+    /// the change, so this waits for it.
+    pub fn set_default_app(app: &Path, file: &Path) -> Result<(), String> {
+        use objc2_foundation::NSError;
+        let (tx, rx) = std::sync::mpsc::channel();
+        autoreleasepool(|_| {
+            let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+            let done = block2::RcBlock::new(move |error: *mut NSError| {
+                // SAFETY: Launch Services passes a valid error or null.
+                let message =
+                    unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+                let _ = tx.send(message);
+            });
+            NSWorkspace::sharedWorkspace()
+                .setDefaultApplicationAtURL_toOpenContentTypeOfFileAtURL_completionHandler(
+                    &url(app),
+                    &url(file),
+                    Some(&done),
+                );
+        });
+        match rx.recv_timeout(Duration::from_secs(300)) {
+            Ok(None) => Ok(()),
+            Ok(Some(message)) => Err(message),
+            Err(_) => Err("macOS didn’t answer".into()),
+        }
+    }
+
     fn rgba(color: &NSColor) -> Option<u32> {
         let c = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
         let byte = |v: f64| (v.clamp(0., 1.) * 255.).round() as u32;
@@ -369,6 +407,18 @@ pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
 #[cfg(target_os = "macos")]
 pub fn default_app(path: &Path) -> Option<PathBuf> {
     imp::default_app(path)
+}
+
+/// Every app Launch Services says can open the file at `path`.
+#[cfg(target_os = "macos")]
+pub fn apps_for(path: &Path) -> Vec<PathBuf> {
+    imp::apps_for(path)
+}
+
+/// Make `app` the default for files of `file`'s type.
+#[cfg(target_os = "macos")]
+pub fn set_default_app(app: &Path, file: &Path) -> Result<(), String> {
+    imp::set_default_app(app, file)
 }
 
 /// Whether Launch Services knows an app that opens the file at `path`.

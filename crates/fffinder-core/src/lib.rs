@@ -3,6 +3,7 @@
 //! and formatting.
 
 pub mod config;
+pub mod desktop_apps;
 pub mod engine;
 pub mod entry;
 pub mod format;

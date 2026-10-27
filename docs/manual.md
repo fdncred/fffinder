@@ -315,6 +315,10 @@ When no application is registered for a file (checked with LaunchServices on mac
 
 Windows has its own "Open with" chooser, so there the file goes to Windows as usual.
 
+**Open With** in the item menu lists the apps that can open the selected files, with the default app first and marked "(default)". Choose one to open the files with it. **Other…** picks an app with the file chooser (an app bundle on macOS, a `.desktop` file or a program on Linux). **Always Open With**, for one file, lists the same apps; choosing one makes it the default for every file of that type, then opens the file with it. macOS may ask you to confirm the change. Folders don't get these menus.
+
+The apps come from Launch Services on macOS, and on Linux from the `.desktop` entries in the XDG data folders that list the file's MIME type, with the default from `xdg-mime`. On Linux, an app's `Exec` line decides how the files are passed: `%f` and `%u` open one file per app, `%F` and `%U` all of them at once. On Windows, Open With lists the apps Explorer's Open with menu lists, with the default from the file type's association, and opens the files through the shell the way Explorer does, so Microsoft Store apps work too. **Other…** shows Windows' own "Open with" dialog, which is also where Windows lets you choose a new default, so there is no Always Open With there.
+
 **Open in Editor** (File menu or item menu) opens files in Nushell's editor when that option is on and an editor is set. Otherwise it uses the file's default app, or the system text editor when there is none. Terminal editors open in your chosen terminal. See [Using your Nushell environment](#using-your-nushell-environment).
 
 **Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux) reveals the selected items in the system file manager.
@@ -593,6 +597,7 @@ Right-click one or more items:
 
 - Choose, or Choose Items (only in `--pick` mode)
 - Open
+- Open With and Always Open With (files only; see [Opening files](#opening-files))
 - Quick Look
 - Get Info
 - Open in Editor (when a file is selected)

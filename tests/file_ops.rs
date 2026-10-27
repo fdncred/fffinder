@@ -286,3 +286,51 @@ fn get_info_shows_details_and_changes_permissions(cx: &mut TestAppContext) {
     ui.press(&cmd("i"));
     assert!(label(&mut ui, "info-size").starts_with("20 bytes, "));
 }
+
+#[gpui_kit::test]
+fn open_with_lists_apps_and_sets_the_default(cx: &mut TestAppContext) {
+    use fffinder::apps::OpenApp;
+    use fffinder::system::{Recorder, SystemCall};
+    let fx = Fixture::new("open-with");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let app = |name: &str, is_default: bool| OpenApp {
+        name: name.into(),
+        path: format!("/Apps/{name}.app").into(),
+        is_default,
+    };
+    ui.cx.read(|cx| {
+        cx.global::<Recorder>()
+            .set_apps(vec![app("Editor", true), app("Viewer", false)])
+    });
+    ui.click("view-list");
+    let notes = item_id("row", &fx.path("notes.txt"));
+
+    ui.right_click(notes.clone());
+    ui.click_menu_item("Open With");
+    let labels = ui.menu_labels();
+    for label in ["Editor (default)", "Viewer", "Other…"] {
+        assert!(labels.contains(&label.to_string()), "{label} in {labels:?}");
+    }
+    ui.click_menu_item("Viewer");
+    let opened = SystemCall::OpenWith {
+        app: "/Apps/Viewer.app".into(),
+        paths: vec![fx.path("notes.txt")],
+    };
+    assert_eq!(ui.system_calls(), std::slice::from_ref(&opened));
+
+    ui.right_click(notes);
+    ui.click_menu_item("Always Open With");
+    ui.click_menu_item("Viewer");
+    let calls = ui.system_calls();
+    assert!(calls.contains(&SystemCall::SetDefaultApp {
+        app: "/Apps/Viewer.app".into(),
+        file: fx.path("notes.txt"),
+    }));
+    assert_eq!(calls.last(), Some(&opened), "and opens the file with it");
+
+    ui.right_click(item_id("row", &fx.path("Projects")));
+    assert!(
+        !ui.menu_labels().contains(&"Open With".to_string()),
+        "folders have none"
+    );
+}

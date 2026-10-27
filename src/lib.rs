@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod ansi;
+pub mod apps;
 pub mod args;
 pub mod assets;
 pub mod finder;

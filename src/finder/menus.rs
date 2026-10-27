@@ -120,6 +120,7 @@ pub fn item_menu(
     let enclosing = first.path.clone();
     let nu_dir = folder_for_nu.clone();
     let favorite = first.path.clone();
+    let opens_files = !picker && entries.iter().all(|e| !e.is_dir);
 
     let menu = menu
         .when(picker, |menu| {
@@ -133,7 +134,13 @@ pub fn item_menu(
             PopupMenuItem::new("Open")
                 .icon(IconName::FolderOpen)
                 .action(Box::new(OpenSelected)),
-        )
+        );
+    let menu = if opens_files {
+        super::open_with::open_with_submenus(view, first.path.clone(), single, menu, window, cx)
+    } else {
+        menu
+    };
+    let menu = menu
         .item(
             PopupMenuItem::new("Quick Look")
                 .icon(IconName::Eye)

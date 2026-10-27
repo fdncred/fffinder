@@ -10,6 +10,7 @@ mod fps;
 mod info;
 mod menus;
 mod nu_panel;
+mod open_with;
 mod preview;
 mod sidebar;
 mod toolbar;

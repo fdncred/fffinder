@@ -21,6 +21,17 @@ pub enum SystemCall {
         program: PathBuf,
         args: Vec<String>,
     },
+    /// Opened with a chosen app (Open With). An empty `app` is Windows'
+    /// own chooser.
+    OpenWith {
+        app: PathBuf,
+        paths: Vec<PathBuf>,
+    },
+    /// Made the default app for a file's type (Always Open With).
+    SetDefaultApp {
+        app: PathBuf,
+        file: PathBuf,
+    },
 }
 
 /// When set as a global, calls are recorded here and not performed.
@@ -29,6 +40,8 @@ pub struct Recorder {
     calls: Rc<RefCell<Vec<SystemCall>>>,
     /// Files that no app claims.
     no_app: Rc<RefCell<HashSet<PathBuf>>>,
+    /// What Open With lists, for every file.
+    apps: Rc<RefCell<Vec<crate::apps::OpenApp>>>,
 }
 
 impl Global for Recorder {}
@@ -43,7 +56,16 @@ impl Recorder {
         self.no_app.borrow_mut().insert(path.into());
     }
 
-    fn record(&self, call: SystemCall) {
+    /// Have Open With list `apps` for every file.
+    pub fn set_apps(&self, apps: Vec<crate::apps::OpenApp>) {
+        *self.apps.borrow_mut() = apps;
+    }
+
+    pub(crate) fn apps(&self) -> Vec<crate::apps::OpenApp> {
+        self.apps.borrow().clone()
+    }
+
+    pub(crate) fn record(&self, call: SystemCall) {
         self.calls.borrow_mut().push(call);
     }
 }
@@ -83,7 +105,7 @@ fn xdg_has_default_app(path: &Path) -> Option<bool> {
 
 /// `xdg-mime query …`, trimmed; `None` when it fails or isn't installed.
 #[cfg(not(any(target_os = "macos", windows)))]
-fn xdg_query(args: &[&std::ffi::OsStr]) -> Option<String> {
+pub(crate) fn xdg_query(args: &[&std::ffi::OsStr]) -> Option<String> {
     let out = std::process::Command::new("xdg-mime")
         .arg("query")
         .args(args)
