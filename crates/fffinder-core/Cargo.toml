@@ -4,6 +4,7 @@ description = "Search engine, file model, and settings behind the fffinder app"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 fff-search.workspace = true
