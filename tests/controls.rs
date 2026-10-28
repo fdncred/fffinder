@@ -174,8 +174,16 @@ fn actions_menu_items(cx: &mut TestAppContext) {
         [SystemCall::Reveal(fx.path("Roadmap.md"))]
     );
 
+    ui.click("actions");
+    ui.click_menu_item("Quick Look");
+    assert!(
+        ui.read(|f| f.quick_look_window()).is_some(),
+        "Quick Look opens its window"
+    );
+    ui.close_quick_look();
+    assert!(ui.files_focused(), "focus stays with the files");
+
     for (item, close) in [
-        ("Quick Look", "dialog-close"),
         ("Rename…", "rename-cancel"),
         ("Move to Trash", "cancel"),
         ("Go to Folder…", "goto-cancel"),
@@ -185,11 +193,7 @@ fn actions_menu_items(cx: &mut TestAppContext) {
         ui.click("actions");
         ui.click_menu_item(item);
         assert!(ui.dialog_open(), "{item} opens a dialog");
-        if close == "dialog-close" {
-            ui.close_dialog();
-        } else {
-            ui.click(close);
-        }
+        ui.click(close);
         assert!(!ui.dialog_open(), "{close} closes the {item} dialog");
         assert!(
             ui.files_focused(),
@@ -973,19 +977,31 @@ fn trash_confirmation_cancel(cx: &mut TestAppContext) {
 fn quick_look_buttons_and_keys(cx: &mut TestAppContext) {
     let fx = Fixture::new("quick-look");
     let mut ui = Ui::open(cx, &fx.dir);
+    let open = |ui: &Ui| ui.read(|f| f.quick_look_is_open() && f.quick_look_window().is_some());
     ui.select("Roadmap.md");
     ui.press("space");
-    assert!(ui.read(|f| f.quick_look_is_open()) && ui.dialog_open());
+    assert!(open(&ui), "Quick Look opens a window of its own");
+    assert!(!ui.dialog_open());
     assert!(ui.read(|f| f.has_preview_for_test(&fx.path("Roadmap.md"))));
-    ui.press("space");
-    assert!(!ui.dialog_open(), "Space closes it again");
-    assert!(!ui.read(|f| f.quick_look_is_open()));
+    assert!(ui.in_quick_look(|ui| ui.exists("ql-open")));
+    ui.in_quick_look(|ui| ui.press("space"));
+    assert!(!open(&ui), "Space in Quick Look closes it again");
 
     ui.press("space");
-    ui.click("ql-reveal");
-    assert!(ui.dialog_open(), "Show in Finder keeps the preview open");
-    ui.click("ql-open");
-    assert!(!ui.dialog_open() && !ui.read(|f| f.quick_look_is_open()));
+    ui.in_quick_look(|ui| ui.press("escape"));
+    assert!(!open(&ui), "so does Escape");
+
+    // Arrows in Quick Look move the browser's selection.
+    ui.press("space");
+    ui.in_quick_look(|ui| ui.press("left"));
+    assert_ne!(ui.selected(), ["Roadmap.md"], "Left picks the item before");
+    ui.in_quick_look(|ui| ui.press("right"));
+    assert_eq!(ui.selected(), ["Roadmap.md"]);
+
+    ui.in_quick_look(|ui| ui.click("ql-reveal"));
+    assert!(open(&ui), "Show in Finder keeps the preview open");
+    ui.in_quick_look(|ui| ui.click("ql-open"));
+    assert!(!open(&ui));
     let roadmap = fx.path("Roadmap.md");
     assert_eq!(
         ui.system_calls(),
@@ -995,17 +1011,18 @@ fn quick_look_buttons_and_keys(cx: &mut TestAppContext) {
         ]
     );
     ui.press("space");
-    assert!(ui.dialog_open(), "one Space reopens it after Open");
+    assert!(open(&ui), "one Space reopens it after Open");
     ui.press("space");
+    assert!(!open(&ui), "Space in the browser closes it too");
 
     ui.press(&cmd("y"));
-    ui.close_dialog();
+    ui.close_quick_look();
     assert!(
         !ui.read(|f| f.quick_look_is_open()),
-        "the close button resets the state"
+        "closing its window resets the state"
     );
     ui.press("space");
-    assert!(ui.dialog_open(), "and Space opens it again");
+    assert!(open(&ui), "and Space opens it again");
 }
 
 #[gpui_kit::test]
@@ -1025,8 +1042,8 @@ fn files_no_app_claims_open_in_an_editor(cx: &mut TestAppContext) {
     // Quick Look's Open hands an unclaimed text file to the text editor.
     ui.select("Roadmap.md");
     ui.press("space");
-    ui.click("ql-open");
-    assert!(!ui.dialog_open());
+    ui.in_quick_look(|ui| ui.click("ql-open"));
+    assert!(ui.read(|f| f.quick_look_window()).is_none());
     assert_eq!(ui.system_calls(), [SystemCall::EditText(roadmap.clone())]);
 
     // A file with an app opens in it; a binary no app claims doesn't open.
@@ -1072,40 +1089,47 @@ fn quick_look_text_size(cx: &mut TestAppContext) {
     let fx = Fixture::new("quick-look-text");
     let mut ui = Ui::open(cx, &fx.dir);
     let size = |ui: &Ui| ui.read(|f| f.config().preview_font_size);
+    let open = |ui: &Ui| ui.read(|f| f.quick_look_window().is_some());
     ui.select("Roadmap.md");
     ui.press("space");
     assert_eq!(size(&ui), 11.5);
-    assert_eq!(ui.snapshot("ql-text-reset").label(), Some("11.5 pt"));
-
-    ui.click("ql-text-bigger");
-    assert_eq!(size(&ui), 12.5);
-    assert_eq!(ui.snapshot("ql-text-reset").label(), Some("12.5 pt"));
-    ui.press(&cmd("="));
-    assert_eq!(size(&ui), 13.5);
-    ui.press(&cmd("-"));
-    ui.click("ql-text-smaller");
-    assert_eq!(size(&ui), 11.5);
-    ui.press(&cmd("="));
-    ui.click("ql-text-reset");
-    assert_eq!(size(&ui), 11.5, "the size label resets it");
-    ui.press(&cmd("="));
-    ui.press(&cmd("0"));
-    assert_eq!(size(&ui), 11.5, "and so does Cmd-0");
+    ui.in_quick_look(|ui| {
+        assert_eq!(ui.snapshot("ql-text-reset").label(), Some("11.5 pt"));
+        ui.click("ql-text-bigger");
+        assert_eq!(size(ui), 12.5);
+        assert_eq!(ui.snapshot("ql-text-reset").label(), Some("12.5 pt"));
+        ui.press(&cmd("="));
+        assert_eq!(size(ui), 13.5);
+        ui.press(&cmd("-"));
+        ui.click("ql-text-smaller");
+        assert_eq!(size(ui), 11.5);
+        ui.press(&cmd("="));
+        ui.click("ql-text-reset");
+        assert_eq!(size(ui), 11.5, "the size label resets it");
+        ui.press(&cmd("="));
+        ui.press(&cmd("0"));
+        assert_eq!(size(ui), 11.5, "and so does Cmd-0");
+    });
 
     ui.update(|f, _, cx| f.set_preview_font_size(Some(31.5), cx));
-    ui.press(&cmd("="));
-    ui.press(&cmd("="));
+    ui.in_quick_look(|ui| {
+        ui.press(&cmd("="));
+        ui.press(&cmd("="));
+    });
     assert_eq!(size(&ui), 32., "it stops at the largest size");
 
-    assert!(ui.dialog_open());
-    ui.press("space");
-    assert!(!ui.dialog_open(), "Space still closes it after the clicks");
+    assert!(open(&ui));
+    ui.in_quick_look(|ui| ui.press("space"));
+    assert!(!open(&ui), "Space still closes it after the clicks");
 
     ui.select("Projects");
     ui.press("space");
-    assert!(ui.dialog_open());
-    assert!(!ui.exists("ql-text-bigger"), "a folder has no text to size");
-    ui.press("space");
+    assert!(open(&ui));
+    assert!(
+        !ui.in_quick_look(|ui| ui.exists("ql-text-bigger")),
+        "a folder has no text to size"
+    );
+    ui.in_quick_look(|ui| ui.press("space"));
     assert_eq!(size(&ui), 32., "the size stays for the next preview");
 }
 
@@ -1116,54 +1140,57 @@ fn quick_look_arrows_move_through_items(cx: &mut TestAppContext) {
     ui.click("view-list");
     let names = ui.names();
     let shown = |ui: &Ui| ui.read(|f| f.primary_entry().map(|e| e.name));
+    let open = |ui: &Ui| ui.read(|f| f.quick_look_window().is_some());
     ui.select(&names[0]);
     ui.press("space");
-    ui.press("down");
-    assert!(ui.dialog_open(), "the arrows keep Quick Look open");
+    ui.in_quick_look(|ui| ui.press("down"));
+    assert!(open(&ui), "the arrows keep Quick Look open");
     assert_eq!(ui.selected(), [names[1].as_str()]);
     assert!(ui.read(|f| f.has_preview_for_test(&fx.path(&names[1]))));
-    ui.press("right");
+    ui.in_quick_look(|ui| ui.press("right"));
     assert_eq!(
         ui.selected(),
         [names[2].as_str()],
         "Right is next in the list"
     );
-    ui.press("left");
-    ui.press("up");
+    ui.in_quick_look(|ui| {
+        ui.press("left");
+        ui.press("up");
+    });
     assert_eq!(ui.selected(), [names[0].as_str()]);
-    ui.press("space");
-    assert!(!ui.dialog_open(), "Space still closes it");
+    ui.in_quick_look(|ui| ui.press("space"));
+    assert!(!open(&ui), "Space still closes it");
 
     // With several items selected, the arrows step through just those.
     ui.select(&names[0]);
     ui.select_also(&names[2]);
     ui.press("space");
     assert_eq!(shown(&ui).as_deref(), Some(names[2].as_str()));
-    ui.press("right");
+    ui.in_quick_look(|ui| ui.press("right"));
     assert_eq!(
         shown(&ui).as_deref(),
         Some(names[0].as_str()),
         "wraps around"
     );
-    ui.press("up");
+    ui.in_quick_look(|ui| ui.press("up"));
     assert_eq!(shown(&ui).as_deref(), Some(names[2].as_str()));
     assert_eq!(ui.selected(), [names[0].as_str(), names[2].as_str()]);
     assert!(ui.read(|f| f.has_preview_for_test(&fx.path(&names[0]))));
-    ui.press("space");
+    ui.in_quick_look(|ui| ui.press("space"));
 
     // In columns, the arrows stay in the active column, even after opening
     // a folder, which moves the focus to the files.
     ui.click("view-columns");
     ui.click(item_id("crow", &fx.path("notes.txt")));
     ui.press("space");
-    ui.press("down");
+    ui.in_quick_look(|ui| ui.press("down"));
     assert_eq!(ui.selected(), ["Projects"]);
     assert!(ui.read(|f| f.has_preview_for_test(&fx.path("Projects"))));
-    ui.press("right");
+    ui.in_quick_look(|ui| ui.press("right"));
     assert_eq!(ui.selected(), ["Roadmap.md"]);
-    ui.press("left");
+    ui.in_quick_look(|ui| ui.press("left"));
     assert_eq!(shown(&ui).as_deref(), Some("Projects"));
-    assert!(ui.dialog_open());
+    assert!(open(&ui));
 }
 
 // ----- Nushell panel -----------------------------------------------------------------

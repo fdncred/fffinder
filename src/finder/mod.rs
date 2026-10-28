@@ -16,6 +16,7 @@ mod nu_panel;
 mod open_with;
 mod pdf;
 mod preview;
+mod quick_look;
 mod sidebar;
 mod tab_bar;
 mod toolbar;
@@ -222,6 +223,8 @@ pub struct Finder {
     pdf: Option<pdf::PdfView>,
     quick_look_open: bool,
     quick_look_focus: FocusHandle,
+    /// Quick Look's own window, while it's open (outside `--term` mode).
+    quick_look_window: Option<AnyWindowHandle>,
     /// Type-to-select: the letters typed so far and when the last arrived.
     type_select: String,
     type_select_at: Option<std::time::Instant>,
@@ -424,6 +427,7 @@ impl Finder {
             pdf: None,
             quick_look_open: false,
             quick_look_focus: cx.focus_handle(),
+            quick_look_window: None,
             item_menu_at: None,
             type_select: String::new(),
             type_select_at: None,
@@ -1352,6 +1356,10 @@ impl Finder {
             || self.quick_look_open;
         if wants_preview && let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
+            // Quick Look's window follows clicks in the browser.
+            if self.quick_look_open {
+                self.ensure_pdf(&entry, cx);
+            }
         }
     }
 

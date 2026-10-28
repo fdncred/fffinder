@@ -298,6 +298,30 @@ impl<'a> Ui<'a> {
         self.click_in("dialog", "close");
     }
 
+    /// Drive the Quick Look window instead of the browser's: clicks, keys,
+    /// and lookups inside `f` go to it.
+    pub fn in_quick_look<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let quick_look = self
+            .read(|f| f.quick_look_window())
+            .expect("Quick Look is open");
+        let browser = std::mem::replace(&mut self.handle, quick_look);
+        let result = f(self);
+        self.handle = browser;
+        self.settle();
+        result
+    }
+
+    /// Close the Quick Look window, as its close button does.
+    pub fn close_quick_look(&mut self) {
+        let quick_look = self
+            .read(|f| f.quick_look_window())
+            .expect("Quick Look is open");
+        self.cx
+            .update_window(quick_look, |_, window, _| window.remove_window())
+            .expect("Quick Look's window is open");
+        self.settle();
+    }
+
     /// Click without letting spawned work run afterwards, so a test can
     /// replace that work before it starts.
     pub fn click_without_settling(&mut self, id: impl Into<ElementId>) {

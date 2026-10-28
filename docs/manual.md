@@ -357,7 +357,7 @@ Each item shows its icon until its thumbnail is ready. Thumbnails are cached as 
 
 ### Quick Look
 
-Space or Cmd+Y opens Quick Look for the selected item, and pressing either again closes it. Quick Look shows the item's icon and name, a large preview, and its kind, size, and modification date. It takes most of the window, so a bigger window gives a bigger preview.
+Space or Cmd+Y opens Quick Look for the selected item in a window of its own, over the browser, with the item's name as its title. Move it, resize it, maximize it, or make it full screen like any window; the preview fills it, with the item's kind, size, and date, and the Show in Finder and Open buttons, in a bar at the bottom. Space, Cmd+Y, or Escape in Quick Look closes it, and so does Space or Cmd+Y in the browser. Quick Look follows the browser's selection while it's open, and closes with its browser. In `--term` mode, where the terminal shows a single window, Quick Look is a dialog in it instead.
 
 The arrow keys move to other items while Quick Look stays open, as in Finder:
 
@@ -819,7 +819,7 @@ Cmd on macOS, Ctrl elsewhere.
 
 | Keys | Action |
 | --- | --- |
-| Space, Cmd+Y | Close Quick Look |
+| Space, Cmd+Y, Escape | Close Quick Look |
 | Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)) |
 | Cmd+=, Cmd++ | Bigger preview text, or zoom in on a PDF |
 | Cmd+- | Smaller preview text, or zoom out of a PDF |

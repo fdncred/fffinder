@@ -4,6 +4,7 @@
 //! shown in their own type, PDFs drawn page by page (see `pdf.rs`), and
 //! videos and documents show the system's thumbnail of them.
 
+use super::pdf::Surface;
 use super::views::file_icon;
 use super::{AppState, Finder};
 use crate::actions::{
@@ -82,7 +83,7 @@ pub enum Preview {
 
 impl Preview {
     /// Whether the preview shows text, so its size can be changed.
-    fn has_text(&self) -> bool {
+    pub(super) fn has_text(&self) -> bool {
         matches!(
             self,
             Preview::Text { .. }
@@ -326,7 +327,18 @@ impl Finder {
             .unwrap_or(Preview::Loading)
     }
 
+    /// Space or Cmd+Y: show the selected item in Quick Look, or close it.
+    /// Quick Look is a window of its own, except in `--term` mode, where the
+    /// terminal shows one window and it's a dialog in it.
     pub fn quick_look(&mut self, _: &QuickLook, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::term::active() {
+            self.quick_look_dialog(window, cx);
+        } else {
+            self.toggle_quick_look_window(window, cx);
+        }
+    }
+
+    fn quick_look_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_look_open {
             self.quick_look_open = false;
             // The flag can outlive the dialog; only close what is open.
@@ -396,7 +408,13 @@ impl Finder {
                         .on_action(page_handler::<NextPdfPage>(&view, 1))
                         .on_action(page_handler::<PreviousPdfPage>(&view, -1))
                         .h(px(height))
-                        .child(render_preview_large(finder, &view, &entry, cx)),
+                        .child(render_preview_large(
+                            finder,
+                            &view,
+                            &entry,
+                            Surface::QuickLook,
+                            cx,
+                        )),
                 )
                 .footer(
                     DialogFooter::new()
@@ -434,7 +452,7 @@ impl Finder {
     /// the selection the way the view does, except that in the list and in
     /// columns Left and Right go to the previous and next item. Quick Look
     /// then shows the new item.
-    fn quick_look_step(
+    pub(super) fn quick_look_step(
         &mut self,
         dx: isize,
         dy: isize,
@@ -457,8 +475,11 @@ impl Finder {
             self.ensure_preview(&entry, cx);
             self.ensure_pdf(&entry, cx);
         }
-        // Selecting in a column focuses the files; keep the keys coming here.
-        self.quick_look_focus.focus(window, cx);
+        // Selecting in a column focuses the files; keep the keys coming to
+        // the dialog. Quick Look's own window keeps its focus.
+        if self.quick_look_window.is_none() {
+            self.quick_look_focus.focus(window, cx);
+        }
     }
 }
 
@@ -486,13 +507,18 @@ fn step_handler<A: Action>(
 }
 
 /// Steps the preview text size by `steps` points, or resets it for `None`.
-fn step_text_size(view: &Entity<Finder>, steps: Option<f32>, window: &mut Window, cx: &mut App) {
+pub(super) fn step_text_size(
+    view: &Entity<Finder>,
+    steps: Option<f32>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     view.update(cx, |this, cx| this.step_preview_size(steps, cx));
     // The dialog is drawn by the window's root, not by the Finder view.
     window.refresh();
 }
 
-fn text_size_handler<A: Action>(
+pub(super) fn text_size_handler<A: Action>(
     view: &Entity<Finder>,
     steps: Option<f32>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
@@ -501,7 +527,7 @@ fn text_size_handler<A: Action>(
 }
 
 /// Quick Look's smaller/bigger text buttons, and the size, which resets it.
-fn text_size_buttons(view: &Entity<Finder>, size: f32) -> impl IntoElement {
+pub(super) fn text_size_buttons(view: &Entity<Finder>, size: f32) -> impl IntoElement {
     let (min, max) = FONT_SIZE_RANGE;
     let view = view.clone();
     size_stepper(
@@ -552,14 +578,52 @@ pub(super) fn size_stepper(
         }))
 }
 
-/// A big preview with a caption: the gallery's main area and Quick Look.
+/// A big preview with a caption: the gallery's main area, and Quick Look in
+/// `--term` mode.
 pub fn render_preview_large(
     finder: &Finder,
     view: &Entity<Finder>,
     entry: &FileEntry,
+    surface: Surface,
     cx: &App,
 ) -> AnyElement {
-    let theme = cx.theme();
+    v_flex()
+        .size_full()
+        .gap(ui(10.))
+        .child(preview_area(finder, view, entry, surface, cx))
+        .child(
+            h_flex()
+                .justify_center()
+                .child(preview_caption(finder, entry, cx)),
+        )
+        .into_any_element()
+}
+
+/// The item's name, then its kind, size, and date.
+pub(super) fn preview_caption(finder: &Finder, entry: &FileEntry, cx: &App) -> impl IntoElement {
+    h_flex()
+        .gap(ui(8.))
+        .text_size(ui(12.))
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(entry.name.clone()),
+        )
+        .child(
+            div()
+                .text_color(cx.theme().muted_foreground)
+                .child(info_line(finder, entry)),
+        )
+}
+
+/// The preview itself, filling its space, with a PDF's controls under it.
+pub(super) fn preview_area(
+    finder: &Finder,
+    view: &Entity<Finder>,
+    entry: &FileEntry,
+    surface: Surface,
+    cx: &App,
+) -> AnyElement {
     let pdf = finder.pdf_view(entry);
     let body = preview_body(
         finder,
@@ -571,7 +635,7 @@ pub fn render_preview_large(
     // A PDF shows the system's thumbnail of its first page until hayro has
     // drawn the page.
     let body = match pdf {
-        Some(pdf) => finder.render_pdf_page(pdf, view.clone(), body),
+        Some(pdf) => finder.render_pdf_page(pdf, view.clone(), surface, body),
         None => body,
     };
     v_flex()
@@ -586,23 +650,7 @@ pub fn render_preview_large(
                 .overflow_hidden()
                 .child(body),
         )
-        .when_some(pdf, |this, pdf| this.child(pdf_controls(pdf)))
-        .child(
-            h_flex()
-                .justify_center()
-                .gap(ui(8.))
-                .text_size(ui(12.))
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(entry.name.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child(info_line(finder, entry)),
-                ),
-        )
+        .when_some(pdf, |this, pdf| this.child(pdf_controls(pdf, surface)))
         .into_any_element()
 }
 
@@ -684,9 +732,11 @@ fn pdf_button(
 /// Under a PDF: the previous page, "Page 2 of 12", and the next page when
 /// it has more than one; then zoom out, the zoom, which fits the page
 /// again, and zoom in.
-fn pdf_controls(pdf: &super::pdf::PdfView) -> impl IntoElement {
+fn pdf_controls(pdf: &super::pdf::PdfView, surface: Surface) -> impl IntoElement {
     let (page, pages) = pdf.position();
-    let zoom = pdf.percent().map_or("Fit".to_string(), |p| format!("{p}%"));
+    let zoom = pdf
+        .percent(surface)
+        .map_or("Fit".to_string(), |p| format!("{p}%"));
     h_flex()
         .justify_center()
         .gap(ui(6.))

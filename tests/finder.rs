@@ -413,13 +413,16 @@ fn pdfs_preview_page_by_page(cx: &mut TestAppContext) {
 
     ui.press("space");
     assert!(ui.read(|f| f.quick_look_is_open()));
-    ui.press("pageup");
+    ui.in_quick_look(|ui| ui.press("pageup"));
     assert_eq!(shown(&ui), Some((1, 2)), "Page Up in Quick Look");
-    ui.press("pageup");
+    ui.in_quick_look(|ui| ui.press("pageup"));
     assert_eq!(shown(&ui), Some((1, 2)));
-    ui.press("pagedown");
+    ui.in_quick_look(|ui| ui.press("pagedown"));
     assert_eq!(shown(&ui), Some((2, 2)), "Page Down in Quick Look");
-    let in_quick_look = zoom(&ui);
-    ui.press(&cmd("="));
-    assert!(zoom(&ui) > in_quick_look, "Cmd+= zooms in Quick Look");
+    let in_quick_look = ui.in_quick_look(|ui| zoom(ui));
+    ui.in_quick_look(|ui| ui.press(&cmd("=")));
+    assert!(
+        ui.in_quick_look(|ui| zoom(ui)) > in_quick_look,
+        "Cmd+= zooms in Quick Look"
+    );
 }

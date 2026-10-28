@@ -26,6 +26,14 @@ const PIXEL_BUDGET: f32 = 16_000_000.;
 /// them; they keep the system's thumbnail.
 const PDF_LIMIT: u64 = 200_000_000;
 
+/// Where a PDF is shown. The gallery and Quick Look can show the same PDF
+/// at once, each laid out at its own size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    Gallery,
+    QuickLook,
+}
+
 /// The PDF the large preview shows.
 pub(super) struct PdfView {
     path: PathBuf,
@@ -39,9 +47,9 @@ pub(super) struct PdfView {
     page_size: (f32, f32),
     /// Which of `ZOOMS`.
     zoom: usize,
-    /// The preview's size when last drawn, and the display's pixels per
-    /// point.
-    frame: Option<(Size<Pixels>, f32)>,
+    /// Each surface's preview size when last drawn, and the display's
+    /// pixels per point.
+    frames: [Option<(Size<Pixels>, f32)>; 2],
     image: Option<Arc<RenderImage>>,
     /// The page and pixel size last asked to be drawn.
     wanted: Option<(usize, u32)>,
@@ -56,9 +64,9 @@ impl PdfView {
         (self.page + 1, self.pages)
     }
 
-    /// The page's size on screen: fitted to the preview, then zoomed.
-    fn shown_size(&self) -> Option<Size<Pixels>> {
-        let (frame, _) = self.frame?;
+    /// The page's size on `surface`: fitted to the preview, then zoomed.
+    fn shown_size(&self, surface: Surface) -> Option<Size<Pixels>> {
+        let (frame, _) = self.frames[surface as usize]?;
         let (width, height) = self.page_size;
         if width <= 0. || height <= 0. {
             return None;
@@ -68,9 +76,9 @@ impl PdfView {
         Some(size(px(width * scale), px(height * scale)))
     }
 
-    /// The zoom, as a percentage of the page's printed size.
-    pub(super) fn percent(&self) -> Option<u32> {
-        let shown = self.shown_size()?;
+    /// The zoom on `surface`, as a percentage of the page's printed size.
+    pub(super) fn percent(&self, surface: Surface) -> Option<u32> {
+        let shown = self.shown_size(surface)?;
         Some((f32::from(shown.width) / self.page_size.0 * 100.).round() as u32)
     }
 
@@ -80,16 +88,23 @@ impl PdfView {
             .is_some_and(|zoom| zoom < ZOOMS.len())
     }
 
-    /// How many pixels the page's longer side needs to look sharp at its
-    /// size on screen, within the budget, in steps of 64.
+    /// How many pixels the page's longer side needs to look sharp where it's
+    /// biggest on screen, within the budget, in steps of 64.
     fn page_pixels(&self) -> Option<u32> {
-        let (_, scale) = self.frame?;
-        let shown = self.shown_size()?;
-        let (width, height) = (f32::from(shown.width), f32::from(shown.height));
-        let (long, short) = (width.max(height), width.min(height).max(1.));
-        let most = (PIXEL_BUDGET * long / short).sqrt();
-        let pixels = (long * scale).min(most).max(64.);
-        Some((pixels / 64.).ceil() as u32 * 64)
+        let biggest = [Surface::Gallery, Surface::QuickLook]
+            .into_iter()
+            .filter_map(|surface| {
+                let (_, scale) = self.frames[surface as usize]?;
+                let shown = self.shown_size(surface)?;
+                Some((f32::from(shown.width), f32::from(shown.height), scale))
+            })
+            .map(|(width, height, scale)| {
+                let (long, short) = (width.max(height), width.min(height).max(1.));
+                let most = (PIXEL_BUDGET * long / short).sqrt();
+                (long * scale).min(most)
+            })
+            .reduce(f32::max)?;
+        Some((biggest.max(64.) / 64.).ceil() as u32 * 64)
     }
 }
 
@@ -159,7 +174,7 @@ impl Finder {
             page: 0,
             page_size: (0., 0.),
             zoom: 0,
-            frame: None,
+            frames: [None; 2],
             image: None,
             wanted: None,
             _drawing: Some(opening),
@@ -181,9 +196,14 @@ impl Finder {
             .map(PdfView::position)
     }
 
-    /// The PDF's zoom, as a percentage of its printed size.
+    /// The PDF's zoom where it's looked at (Quick Look while it's open), as
+    /// a percentage of its printed size.
     pub fn shown_pdf_zoom(&self) -> Option<u32> {
-        self.pdf.as_ref().and_then(PdfView::percent)
+        let surface = match self.quick_look_open {
+            true => Surface::QuickLook,
+            false => Surface::Gallery,
+        };
+        self.pdf.as_ref().and_then(|pdf| pdf.percent(surface))
     }
 
     /// Draw the page shown at the size it's shown, unless it's drawn (or
@@ -222,16 +242,23 @@ impl Finder {
         }));
     }
 
-    /// The preview was laid out at `frame`; fit the page to it. Returns
-    /// whether that changed anything.
-    fn set_pdf_frame(&mut self, frame: Size<Pixels>, scale: f32, cx: &mut Context<Self>) -> bool {
+    /// `surface`'s preview was laid out at `frame`; fit the page to it.
+    /// Returns whether that changed anything.
+    fn set_pdf_frame(
+        &mut self,
+        surface: Surface,
+        frame: Size<Pixels>,
+        scale: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(pdf) = self.pdf.as_mut() else {
             return false;
         };
-        if pdf.frame == Some((frame, scale)) {
+        let slot = &mut pdf.frames[surface as usize];
+        if *slot == Some((frame, scale)) {
             return false;
         }
-        pdf.frame = Some((frame, scale));
+        *slot = Some((frame, scale));
         self.draw_pdf_page(cx);
         cx.notify();
         true
@@ -358,9 +385,10 @@ impl Finder {
         &self,
         pdf: &PdfView,
         view: Entity<Finder>,
+        surface: Surface,
         fallback: AnyElement,
     ) -> AnyElement {
-        let content = match (pdf.image.clone(), pdf.shown_size()) {
+        let content = match (pdf.image.clone(), pdf.shown_size(surface)) {
             (Some(image), Some(shown)) => div()
                 .min_w_full()
                 .min_h_full()
@@ -383,7 +411,7 @@ impl Finder {
             .child(
                 div()
                     .id(SharedString::from(format!(
-                        "pdf-{}-{}",
+                        "pdf-{surface:?}-{}-{}",
                         super::views::path_id(&pdf.path),
                         pdf.page
                     )))
@@ -393,7 +421,10 @@ impl Finder {
             )
             .on_prepaint(move |bounds, window, cx| {
                 let scale = window.scale_factor();
-                if view.update(cx, |this, cx| this.set_pdf_frame(bounds.size, scale, cx)) {
+                let changed = view.update(cx, |this, cx| {
+                    this.set_pdf_frame(surface, bounds.size, scale, cx)
+                });
+                if changed {
                     window.refresh();
                 }
             })

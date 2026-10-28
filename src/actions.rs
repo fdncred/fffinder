@@ -151,6 +151,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-y", QuickLook, files),
         KeyBinding::new("space", QuickLook, Some(QUICK_LOOK)),
         KeyBinding::new("secondary-y", QuickLook, Some(QUICK_LOOK)),
+        KeyBinding::new("escape", QuickLook, Some(QUICK_LOOK)),
         KeyBinding::new("up", MoveUp, Some(QUICK_LOOK)),
         KeyBinding::new("down", MoveDown, Some(QUICK_LOOK)),
         KeyBinding::new("left", MoveLeft, Some(QUICK_LOOK)),

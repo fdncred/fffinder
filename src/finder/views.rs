@@ -991,6 +991,7 @@ impl Finder {
                             self,
                             &cx.entity(),
                             &entry,
+                            super::pdf::Surface::Gallery,
                             cx,
                         ))
                     }),

@@ -148,13 +148,16 @@ fn main() {
         .expect("open window");
     let view = cx.update(|cx| workspace.read(cx).active().clone());
 
+    // Quick Look draws in a window of its own, so every window is drawn.
     let settle = |cx: &mut HeadlessAppContext| {
         for _ in 0..30 {
             cx.run_until_parked();
             cx.advance_clock(Duration::from_millis(100));
             std::thread::sleep(Duration::from_millis(20));
-            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
-                .ok();
+            for window in cx.update(|cx| cx.windows()) {
+                cx.update_window(window, |_, window, cx| window.render_frame(cx))
+                    .ok();
+            }
         }
     };
 
@@ -240,7 +243,13 @@ fn main() {
     }
     settle(&mut cx);
 
-    let image = cx.capture_screenshot(handle).expect("Metal rendering");
+    let shown = match o.quick_look {
+        true => view
+            .read_with(&cx, |f, _| f.quick_look_window())
+            .expect("Quick Look opened its window"),
+        false => handle,
+    };
+    let image = cx.capture_screenshot(shown).expect("Metal rendering");
     image.save(&o.out).expect("save png");
     println!("{}", o.out.display());
 }
