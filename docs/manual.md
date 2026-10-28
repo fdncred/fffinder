@@ -105,7 +105,7 @@ The file area shows a message when there is nothing to list:
 | Message | When |
 | --- | --- |
 | Can't open this folder | The folder can't be read. The reason is shown. |
-| Indexing… | A search ran before the index was ready. It runs again when indexing finishes. |
+| Indexing… | A search ran before the index was ready. It runs again as soon as a search location finishes indexing, and again as the rest finish. |
 | No Results | The search found nothing. |
 | No Recent Files | Recents is empty. |
 | No Items | The folder is empty. |
@@ -299,6 +299,10 @@ fff-search ranks results, and fffinder re-ranks them so name matches come first,
 A search shows at most `result_limit` items (500 by default; **Results shown** in [Settings › Search engine](#search-engine)). With a filter on, it fetches up to 5,000 so the filter has enough to work with. Opening a file from search results records it, so files you open often rank higher for the same search later.
 
 Search results always show where each item is. Searches can't filter by size or date themselves; use a [Nushell filter](#filters-and-smart-folders).
+
+### When the index is ready
+
+The index is kept in memory, not on disk, so each time fffinder starts it walks the search locations again. On a Mac with about 620,000 files in the home folder and `/Applications`, that takes about 4 seconds; half of those files are inside app bundles in `/Applications`. A search typed before then shows results from each location as soon as it's indexed. After that, searches take milliseconds, and watching keeps the index current while fffinder runs.
 
 ### What the index skips
 

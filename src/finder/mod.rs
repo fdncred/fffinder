@@ -1057,6 +1057,7 @@ impl Finder {
         self.search_gen += 1;
         let generation = self.search_gen;
         let engine = self.engine.clone();
+        let engine_for_retry = self.engine.clone();
         let scope = match self.scope {
             SearchScope::Computer => None,
             SearchScope::Folder => self.current_folder().map(Path::to_path_buf),
@@ -1125,10 +1126,18 @@ impl Finder {
                 })
                 .unwrap_or(false);
             if retry {
-                // The index is still being built: try again shortly.
-                cx.background_executor()
-                    .timer(Duration::from_millis(600))
-                    .await;
+                // The index is still being built: search again as soon as
+                // a location finishes indexing, or after a while anyway, as
+                // results from the rest come in.
+                let indexing = engine_for_retry.roots_indexing();
+                for _ in 0..24 {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(25))
+                        .await;
+                    if engine_for_retry.roots_indexing() < indexing {
+                        break;
+                    }
+                }
                 this.update(cx, |this, cx| {
                     if this.search_gen == generation {
                         this.run_search(false, cx);

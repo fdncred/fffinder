@@ -90,6 +90,16 @@ impl RootIndex {
         }
     }
 
+    /// Whether its index is still being built; cheaper than [`Self::status`],
+    /// which counts folders.
+    fn scanning(&self) -> bool {
+        let guard = self.picker.read().ok();
+        guard
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .is_none_or(|p| p.get_scan_progress().is_scanning)
+    }
+
     fn status(&self) -> RootStatus {
         let guard = self.picker.read().ok();
         let picker = guard.as_ref().and_then(|g| g.as_ref());
@@ -344,7 +354,17 @@ impl Engine {
     }
 
     pub fn is_scanning(&self) -> bool {
-        self.status().iter().any(|s| s.scanning)
+        self.roots_indexing() > 0
+    }
+
+    /// How many roots are still building their index. A search made while
+    /// one is can run again as soon as this drops.
+    pub fn roots_indexing(&self) -> usize {
+        self.read_indexes()
+            .roots
+            .iter()
+            .filter(|root| root.scanning())
+            .count()
     }
 
     /// Block until every root finished its initial scan, or `timeout` passes.
@@ -1532,6 +1552,8 @@ mod tests {
             search: Default::default(),
         });
         assert!(engine.wait_ready(Duration::from_secs(10)));
+        assert!(!engine.is_scanning());
+        assert_eq!(engine.roots_indexing(), 0);
 
         let res = engine.search(&SearchRequest {
             query: "atlas".into(),
