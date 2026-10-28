@@ -57,12 +57,13 @@ impl PdfDocument {
         self.pdf.pages().len()
     }
 
-    /// Page `index`'s size in points as it's shown, turned if the page is.
-    pub fn page_size(&self, index: usize) -> Option<(f32, f32)> {
+    /// Every page's size in points as it's shown, turned if the page is.
+    pub fn page_sizes(&self) -> Vec<(f32, f32)> {
         self.pdf
             .pages()
-            .get(index)
+            .iter()
             .map(|page| page.render_dimensions())
+            .collect()
     }
 
     /// Draw page `index` (from 0) so its longer side is `longest_side`
@@ -125,8 +126,7 @@ mod tests {
     fn draws_each_page() {
         let doc = PdfDocument::from_bytes(PAGES.to_vec()).unwrap();
         assert_eq!(doc.page_count(), 2);
-        assert_eq!(doc.page_size(1), Some((100., 200.)));
-        assert_eq!(doc.page_size(2), None);
+        assert_eq!(doc.page_sizes(), [(200., 100.), (100., 200.)]);
 
         // Page 1 is 200 × 100 points, black on its left half.
         let page = doc.render_page(0, 400).unwrap();

@@ -73,7 +73,9 @@ impl QuickLookWindow {
     }
 
     fn page(&mut self, by: isize, cx: &mut Context<Self>) {
-        self.with_finder(cx, |finder, _, cx| finder.step_pdf_page(by, cx));
+        self.with_finder(cx, |finder, _, cx| {
+            finder.step_pdf_page(by, Surface::QuickLook, cx)
+        });
     }
 
     /// The arrow keys move the browser's selection, as with Quick Look in
@@ -225,6 +227,7 @@ impl Finder {
                     cx.observe_release(&view, |this, _, cx| {
                         this.quick_look_window = None;
                         this.quick_look_open = false;
+                        this.forget_pdf_surface(Surface::QuickLook);
                         cx.notify();
                     })
                     .detach();

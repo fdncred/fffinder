@@ -1588,6 +1588,9 @@ impl Finder {
             return;
         }
         self.config.view_mode = mode;
+        if mode != ViewMode::Gallery {
+            self.forget_pdf_surface(pdf::Surface::Gallery);
+        }
         // Only the list shows open folders' items.
         self.rebuild_rows(cx);
         if mode == ViewMode::Columns {

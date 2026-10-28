@@ -16,15 +16,13 @@ use crate::theme::palette;
 use crate::theme::ui;
 use fffinder_core::config::{DEFAULT_PREVIEW_FONT_SIZE, FONT_SIZE_RANGE};
 use fffinder_core::{FileEntry, FileKind, ViewMode, format};
-use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -489,7 +487,11 @@ fn page_handler<A: Action>(
     by: isize,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     let view = view.clone();
-    move |_, _, cx| view.update(cx, |this, cx| this.step_pdf_page(by, cx))
+    move |_, _, cx| {
+        view.update(cx, |this, cx| {
+            this.step_pdf_page(by, Surface::QuickLook, cx)
+        })
+    }
 }
 
 /// Moves through the items from Quick Look by `dx` and `dy`.
@@ -513,7 +515,9 @@ pub(super) fn step_text_size(
     window: &mut Window,
     cx: &mut App,
 ) {
-    view.update(cx, |this, cx| this.step_preview_size(steps, cx));
+    view.update(cx, |this, cx| {
+        this.step_preview_size(steps, Surface::QuickLook, cx)
+    });
     // The dialog is drawn by the window's root, not by the Finder view.
     window.refresh();
 }
@@ -616,7 +620,7 @@ pub(super) fn preview_caption(finder: &Finder, entry: &FileEntry, cx: &App) -> i
         )
 }
 
-/// The preview itself, filling its space, with a PDF's controls under it.
+/// The preview itself, filling its space; a PDF with its toolbar.
 pub(super) fn preview_area(
     finder: &Finder,
     view: &Entity<Finder>,
@@ -634,24 +638,15 @@ pub(super) fn preview_area(
     );
     // A PDF shows the system's thumbnail of its first page until hayro has
     // drawn the page.
-    let body = match pdf {
-        Some(pdf) => finder.render_pdf_page(pdf, view.clone(), surface, body),
-        None => body,
-    };
-    v_flex()
-        .size_full()
-        .gap(ui(10.))
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .rounded(ui(8.))
-                .overflow_hidden()
-                .child(body),
-        )
-        .when_some(pdf, |this, pdf| this.child(pdf_controls(pdf, surface)))
-        .into_any_element()
+    match pdf {
+        Some(pdf) => finder.render_pdf(pdf, view, surface, body, cx),
+        None => div()
+            .size_full()
+            .rounded(ui(8.))
+            .overflow_hidden()
+            .child(body)
+            .into_any_element(),
+    }
 }
 
 /// A compact card for the column view's last column.
@@ -714,88 +709,9 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
         .into_any_element()
 }
 
-/// A small button under a PDF that sends `action`, as its keys do.
-fn pdf_button(
-    id: &'static str,
-    icon: impl Into<Icon>,
-    tip: &'static str,
-    action: Box<dyn Action>,
-) -> Button {
-    Button::new(id)
-        .ghost()
-        .small()
-        .icon(icon)
-        .tooltip_with_action(tip, action.as_ref(), Some(QUICK_LOOK))
-        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-}
-
-/// Under a PDF: the previous page, "Page 2 of 12", and the next page when
-/// it has more than one; then zoom out, the zoom, which fits the page
-/// again, and zoom in.
-fn pdf_controls(pdf: &super::pdf::PdfView, surface: Surface) -> impl IntoElement {
-    let (page, pages) = pdf.position();
-    let zoom = pdf
-        .percent(surface)
-        .map_or("Fit".to_string(), |p| format!("{p}%"));
-    h_flex()
-        .justify_center()
-        .gap(ui(6.))
-        .text_size(ui(12.))
-        .when(pages > 1, |this| {
-            this.child(
-                pdf_button(
-                    "pdf-previous",
-                    IconName::ChevronLeft,
-                    "Previous Page",
-                    Box::new(PreviousPdfPage),
-                )
-                .disabled(page <= 1),
-            )
-            .child(format!("Page {page} of {pages}"))
-            .child(
-                pdf_button(
-                    "pdf-next",
-                    IconName::ChevronRight,
-                    "Next Page",
-                    Box::new(NextPdfPage),
-                )
-                .disabled(page >= pages),
-            )
-            .child(div().w(ui(12.)))
-        })
-        .child(
-            pdf_button(
-                "pdf-zoom-out",
-                Lucide::Minus,
-                "Zoom Out",
-                Box::new(PreviewTextSmaller),
-            )
-            .disabled(!pdf.can_zoom(-1)),
-        )
-        .child(
-            Button::new("pdf-zoom-fit")
-                .ghost()
-                .small()
-                .label(zoom)
-                .tooltip_with_action("Fit Page", &PreviewTextReset, Some(QUICK_LOOK))
-                .on_click(|_, window, cx| {
-                    window.dispatch_action(PreviewTextReset.boxed_clone(), cx)
-                }),
-        )
-        .child(
-            pdf_button(
-                "pdf-zoom-in",
-                Lucide::Plus,
-                "Zoom In",
-                Box::new(PreviewTextBigger),
-            )
-            .disabled(!pdf.can_zoom(1)),
-        )
-}
-
 fn info_line(finder: &Finder, entry: &FileEntry) -> String {
     let mut parts = vec![entry.kind_label()];
-    if let Some((_, pages)) = finder.pdf_view(entry).map(|pdf| pdf.position()) {
+    if let Some(pages) = finder.pdf_view(entry).map(|pdf| pdf.page_count()) {
         parts.push(match pages {
             1 => "1 page".to_string(),
             n => format!("{n} pages"),

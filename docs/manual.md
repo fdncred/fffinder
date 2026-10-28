@@ -325,7 +325,7 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 | File | Preview |
 | --- | --- |
 | Images | The image. Formats GPUI can't draw, such as HEIC, RAW, and PSD, show the system's thumbnail of them (see [Thumbnails](#thumbnails)). |
-| PDFs | Page by page in the gallery and Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro), so they look the same on every system. A page opens fitted to the preview. Under it are the page arrows with "Page 2 of 12", then − and + to zoom out and in, up to six times the fitted size, with the zoom between them as a percentage of the printed size; click it to fit the page again. Page Up and Page Down change pages, and Cmd+Plus, Cmd+Minus, and Cmd+0 zoom, in Quick Look and in the gallery. A page bigger than the preview scrolls, and each page starts at its top; it is drawn again at its new size, so text stays sharp. The caption gives the page count. The column view's card, and the gallery while the page is drawn, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
+| PDFs | Read as in a PDF viewer, in the gallery and in Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro) so they look the same on every system. The pages scroll by in one column, starting at the first page fitted to the width. The toolbar above them has the previous and next page buttons with "Page 2 of 12", which follows as you scroll; − and + to zoom out and in; and the zoom between them, which opens a menu of Fit Width, Fit Page, Actual Size, and sizes from 25% to 400%. Pinching on a trackpad, scrolling with Cmd held, and Cmd+Plus, Cmd+Minus, and Cmd+0 (Fit Width) zoom too, from 10% to 800%, and Page Up and Page Down go a page back or on. Zooming keeps the place you were reading at the top. Pages larger than the view scroll both ways; each is drawn as it comes into view, and again after zooming, so text stays sharp, and only the pages in view and their neighbors are kept in memory. The caption gives the page count. The column view's card, and the gallery while a PDF opens, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
 | Videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a document, a frame of a video. Types the system can't draw show their icon. |
 | Video and audio | The running time, in the caption and in the column view's card, for MP4, MOV, M4A, M4V, WAV, and FLAC files. Audio shows its icon with the time under it. |
 | Folders | The folder icon and how many items it holds. |
@@ -812,7 +812,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Z | Undo the latest file operation |
 | Cmd+Shift+Z | Redo the latest Undo |
 | Page Up, Page Down | In the gallery, the previous or next page of a PDF |
-| Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit, or change the size of text previews |
+| Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit the width, or change the size of text previews |
 | Letters | Type to select |
 
 ### In Quick Look
@@ -823,8 +823,9 @@ Cmd on macOS, Ctrl elsewhere.
 | Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)) |
 | Cmd+=, Cmd++ | Bigger preview text, or zoom in on a PDF |
 | Cmd+- | Smaller preview text, or zoom out of a PDF |
-| Cmd+0 | Reset the preview text size, or fit a PDF's page |
+| Cmd+0 | Reset the preview text size, or fit a PDF to the width |
 | Page Up, Page Down | Previous or next page of a PDF |
+| Pinch, Cmd+scroll | Zoom a PDF |
 
 ### In the search field
 
