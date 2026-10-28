@@ -21,7 +21,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Working with files](#working-with-files)
 - [Copying and moving](#copying-and-moving)
 - [Get Info](#get-info)
-- [Undo](#undo)
+- [Undo and Redo](#undo-and-redo)
 - [The Trash](#the-trash)
 - [Volumes and servers](#volumes-and-servers)
 - [Dragging and dropping](#dragging-and-dropping)
@@ -391,7 +391,8 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
 | Get Info (Cmd+I) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
-| Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo](#undo). |
+| Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo and Redo](#undo-and-redo). |
+| Redo (Cmd+Shift+Z in the files) | Reverses the latest Undo. |
 | Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
 | Paste (Cmd+V in the files) | Copies the items on the clipboard into the folder shown. |
 | Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
@@ -444,9 +445,11 @@ Get Info (Cmd+I, File › Get Info, or the item and empty-space menus) shows a p
 
 With several items selected, the panel shows how many there are, their kinds, their total size (folders included), and the folder they're in when they share one.
 
-## Undo
+## Undo and Redo
 
 Undo (Cmd+Z with the files focused, or Edit › Undo) reverses the latest file operation, then the one before it, and so on, up to the last 100. There is one list for all windows, so Undo in any window reverses the latest operation anywhere. A notification says what was undone, such as "Undid Rename".
+
+Redo (Cmd+Shift+Z with the files focused, or Edit › Redo) reverses the latest Undo: it renames or moves the items again, takes undone copies and new items back out of the Trash, and moves items put back by Undo to the Trash again. Redo goes forward through everything you undid until you do a new file operation, which ends what Redo can do. A notification says what was redone, such as "Redid Rename". On Linux and Windows, Undo and Redo are also in the toolbar's Actions menu.
 
 | Operation | Undo |
 | --- | --- |
@@ -455,7 +458,7 @@ Undo (Cmd+Z with the files focused, or Edit › Undo) reverses the latest file o
 | Copy, paste, Duplicate, New Folder, New File, Make Alias, Make Symbolic Link, Compress, Extract | Moves the new items to the Trash, as Finder does. |
 | Move to Trash | Puts the items back. |
 
-Undo stops with a notification when it can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z undoes typing as usual.
+Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
 
 ## The Trash
 
@@ -655,7 +658,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
-| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo, Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
+| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
@@ -716,7 +719,7 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 - **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files.
 - **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
-- **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
+- **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Redo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
 
 ## Keyboard shortcuts
 
@@ -785,6 +788,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
 | Cmd+Alt+Backspace | Delete immediately |
 | Cmd+Z | Undo the latest file operation |
+| Cmd+Shift+Z | Redo the latest Undo |
 | Letters | Type to select |
 
 ### In Quick Look

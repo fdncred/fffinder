@@ -169,6 +169,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-backspace", MoveToTrash, files),
         KeyBinding::new("secondary-alt-backspace", DeleteImmediately, files),
         KeyBinding::new("secondary-z", input::Undo, files),
+        KeyBinding::new("secondary-shift-z", input::Redo, files),
         KeyBinding::new("delete", MoveToTrash, files),
     ];
     // Terminals keep most Cmd shortcuts for themselves, so in one every Cmd

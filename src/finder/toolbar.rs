@@ -544,11 +544,16 @@ fn actions_menu(
             .disabled(!has_selection)
             .action(Box::new(DeleteImmediately)),
     )
-    // The menu bar's Edit › Undo, for systems without one.
+    // The menu bar's Edit › Undo and Redo, for systems without one.
     .item(
         PopupMenuItem::new("Undo")
             .icon(Lucide::Undo2)
             .action(Box::new(gpui_kit::component::input::Undo)),
+    )
+    .item(
+        PopupMenuItem::new("Redo")
+            .icon(Lucide::Redo2)
+            .action(Box::new(gpui_kit::component::input::Redo)),
     )
     .separator()
     .item(

@@ -1,6 +1,6 @@
-//! The Trash and Undo: moving items to the Trash, the Trash view with Put
-//! Back and Empty, deleting items for good, and reversing the latest file
-//! operation.
+//! The Trash, Undo, and Redo: moving items to the Trash, the Trash view
+//! with Put Back and Empty, deleting items for good, and reversing the
+//! latest file operation or undo.
 
 use super::Finder;
 use super::views::DraggedFiles;
@@ -8,7 +8,7 @@ use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
 use crate::trash_bin::{self, Trashed};
-use crate::undo::{self, Change};
+use crate::undo::{self, Change, Step};
 use fffinder_core::FileEntry;
 use gpui_kit::component::button::{Button, ButtonVariant};
 use gpui_kit::component::input;
@@ -188,8 +188,27 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(operation) = undo::take_last(cx) else {
-            window.push_notification("There’s nothing to undo", cx);
+        self.step_file_history(Step::Undo, window, cx);
+    }
+
+    pub(super) fn redo_file_operation(
+        &mut self,
+        _: &input::Redo,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_file_history(Step::Redo, window, cx);
+    }
+
+    /// Reverse the latest operation (Undo) or undo (Redo), and keep its
+    /// opposite for the other one.
+    fn step_file_history(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(operation) = undo::take_last(step, cx) else {
+            let message = match step {
+                Step::Undo => "There’s nothing to undo",
+                Step::Redo => "There’s nothing to redo",
+            };
+            window.push_notification(message, cx);
             return;
         };
         let bin = trash_bin::bin(cx);
@@ -199,16 +218,25 @@ impl Finder {
                 .background_spawn(async move { undo::reverse(&operation.change, bin.as_ref()) })
                 .await;
             this.update_in(cx, |this, window, cx| match result {
-                Ok(back) => {
-                    this.files_changed(back, cx);
-                    window.push_notification(format!("Undid {name}"), cx);
+                Ok(reversed) => {
+                    let opposite = undo::Operation {
+                        name,
+                        change: reversed.opposite,
+                    };
+                    undo::stepped(step, opposite, cx);
+                    this.files_changed(reversed.back, cx);
+                    window.push_notification(format!("{} {name}", step.past()), cx);
                 }
                 Err(err) => {
                     this.files_changed(Vec::new(), cx);
+                    let verb = match step {
+                        Step::Undo => "undo",
+                        Step::Redo => "redo",
+                    };
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            format!("Couldn’t undo {name}: {err}"),
+                            format!("Couldn’t {verb} {name}: {err}"),
                         ),
                         cx,
                     );

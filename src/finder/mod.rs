@@ -2374,6 +2374,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::compress))
             .on_action(cx.listener(Self::extract))
             .on_action(cx.listener(Self::undo_file_operation))
+            .on_action(cx.listener(Self::redo_file_operation))
             .on_action(cx.listener(Self::put_back))
             .on_action(cx.listener(Self::delete_immediately))
             .on_action(cx.listener(Self::empty_trash))

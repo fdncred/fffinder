@@ -181,6 +181,48 @@ fn undo_reverses_file_operations(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn redo_reverses_undo(cx: &mut TestAppContext) {
+    let fx = Fixture::new("redo");
+    let mut ui = Ui::open(cx, &fx.dir);
+
+    ui.select("Roadmap.md");
+    ui.press("f2");
+    ui.type_text("Plan");
+    ui.press("enter");
+    ui.select("notes.txt");
+    ui.press(&cmd("c"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("notes copy.txt").exists());
+
+    // Undo both, newest first, then Redo both, oldest first.
+    ui.press(&cmd("z"));
+    ui.press(&cmd("z"));
+    assert!(fx.path("Roadmap.md").exists() && !fx.path("notes copy.txt").exists());
+    ui.press(&cmd("shift-z"));
+    assert!(fx.path("Plan.md").exists(), "Redo renames it again");
+    assert!(!fx.path("notes copy.txt").exists());
+    ui.press(&cmd("shift-z"));
+    assert!(
+        fx.path("notes copy.txt").exists(),
+        "a redone copy comes back out of the Trash"
+    );
+
+    // Undo after Redo works, and a new operation ends what Redo can do.
+    ui.press(&cmd("z"));
+    assert!(!fx.path("notes copy.txt").exists());
+    ui.select("Budget.csv");
+    ui.press(&cmd("d"));
+    assert!(fx.path("Budget copy.csv").exists());
+    ui.press(&cmd("shift-z"));
+    assert!(
+        !fx.path("notes copy.txt").exists(),
+        "nothing to redo after a new operation"
+    );
+    ui.press(&cmd("z"));
+    assert!(!fx.path("Budget copy.csv").exists());
+}
+
+#[gpui_kit::test]
 fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
     let fx = Fixture::new("trash-view");
     let mut ui = Ui::open(cx, &fx.dir);
