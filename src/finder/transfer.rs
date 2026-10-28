@@ -159,6 +159,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let transfer = Transfer {
             sources,
             dest,
@@ -289,6 +292,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let progress = self.start_job(kind.clone(), count, cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = cx

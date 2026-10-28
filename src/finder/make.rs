@@ -110,6 +110,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.wait_for_undo(window, cx) {
+            return false;
+        }
         let name = input.read(cx).value().trim().to_string();
         if let Some(problem) = crate::rename::name_problem(&name) {
             window.push_notification((NotificationType::Warning, problem), cx);
@@ -156,6 +159,9 @@ impl Finder {
     }
 
     fn make_links(&mut self, alias: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let mut made = Vec::new();
         for target in self.selected_paths() {
             let (Some(dir), name) = (target.parent(), display_name(&target)) else {

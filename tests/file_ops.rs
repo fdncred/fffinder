@@ -5,6 +5,7 @@ mod common;
 
 use common::{Fixture, Ui, at, cmd, item_id};
 use fffinder::actions::*;
+use gpui_kit::Action as _;
 use gpui_kit::{Modifiers, TestAppContext};
 
 #[gpui_kit::test]
@@ -178,6 +179,32 @@ fn undo_reverses_file_operations(cx: &mut TestAppContext) {
     ui.press(&cmd("z"));
     ui.press(&cmd("z"));
     assert!(fx.path("notes.txt").exists() && fx.path("Roadmap.md").exists());
+}
+
+#[gpui_kit::test]
+fn file_operations_wait_for_undo(cx: &mut TestAppContext) {
+    let fx = Fixture::new("undo-busy");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.press(&cmd("d"));
+    assert!(fx.path("notes copy.txt").exists());
+
+    // Duplicate arrives while the Undo is still running, and is refused.
+    ui.select("Budget.csv");
+    ui.window(|window, cx| {
+        window.dispatch_action(gpui_kit::component::input::Undo.boxed_clone(), cx);
+        window.dispatch_action(Duplicate.boxed_clone(), cx);
+    });
+    ui.settle();
+    assert!(!fx.path("notes copy.txt").exists(), "the Undo finished");
+    assert!(
+        !fx.path("Budget copy.csv").exists(),
+        "nothing else starts while Undo runs"
+    );
+
+    // Once it's done, file operations work again.
+    ui.press(&cmd("d"));
+    assert!(fx.path("Budget copy.csv").exists());
 }
 
 #[gpui_kit::test]

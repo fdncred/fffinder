@@ -718,6 +718,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.wait_for_undo(window, cx) {
+            return false;
+        }
         let new_name = input.read(cx).value().trim().to_string();
         let mut notify = |kind, message: String| {
             window.push_notification((kind, message), cx);

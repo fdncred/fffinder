@@ -476,7 +476,7 @@ Redo (Cmd+Shift+Z with the files focused, or Edit › Redo) reverses the latest 
 | Copy, paste, Duplicate, New Folder, New File, Make Alias, Make Symbolic Link, Compress, Extract | Moves the new items to the Trash, as Finder does. |
 | Move to Trash | Puts the items back. |
 
-Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
+While an Undo or Redo runs, no other file operation starts: copying, moving, renaming, new items, trashing, Put Back, deleting, compressing, extracting, and another Undo or Redo are refused with "Wait for Undo to finish" (or Redo) until it's done. Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
 
 ## The Trash
 

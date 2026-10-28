@@ -44,6 +44,9 @@ impl Finder {
 
     /// Move items to the Trash now; Undo puts them back.
     pub fn trash_now(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let bin = trash_bin::bin(cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
@@ -98,7 +101,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         let entries = self.selected_entries();
-        if entries.is_empty() {
+        if entries.is_empty() || self.wait_for_undo(window, cx) {
             return;
         }
         let title = match entries.as_slice() {
@@ -123,6 +126,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let bin = trash_bin::bin(cx);
         self.confirm_danger(
             "Permanently erase the items in the Trash?".into(),
@@ -167,6 +173,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(async move { job() }).await;
             this.update_in(cx, |this, window, cx| {
@@ -200,10 +209,29 @@ impl Finder {
         self.step_file_history(Step::Redo, window, cx);
     }
 
+    /// Whether an Undo or Redo is still running, which no other file
+    /// operation may start during; says so when it is.
+    pub(super) fn wait_for_undo(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(step) = undo::running(cx) else {
+            return false;
+        };
+        window.push_notification(
+            (
+                NotificationType::Warning,
+                format!("Wait for {} to finish", step.name()),
+            ),
+            cx,
+        );
+        true
+    }
+
     /// Reverse the latest operation (Undo) or undo (Redo), and keep its
     /// opposite for the other one.
     fn step_file_history(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(operation) = undo::take_last(step, cx) else {
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
+        let Some((operation, running)) = undo::take_last(step, cx) else {
             let message = match step {
                 Step::Undo => "There’s nothing to undo",
                 Step::Redo => "There’s nothing to redo",
@@ -214,8 +242,10 @@ impl Finder {
         let bin = trash_bin::bin(cx);
         cx.spawn_in(window, async move |this, cx| {
             let name = operation.name;
-            let result = cx
-                .background_spawn(async move { undo::reverse(&operation.change, bin.as_ref()) })
+            let (result, running) = cx
+                .background_spawn(async move {
+                    (undo::reverse(&operation.change, bin.as_ref()), running)
+                })
                 .await;
             this.update_in(cx, |this, window, cx| match result {
                 Ok(reversed) => {
@@ -243,6 +273,8 @@ impl Finder {
                 }
             })
             .ok();
+            // Other file operations may start once the log is up to date.
+            drop(running);
         })
         .detach();
     }

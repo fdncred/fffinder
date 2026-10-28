@@ -1,13 +1,15 @@
 //! Undo and Redo for file operations. Renames, moves, copies, new folders,
 //! and moves to the Trash are recorded as they happen, in one log for every
 //! window. Undo reverses the latest and keeps its opposite for Redo, which
-//! reverses that in turn; any new operation clears what Redo had.
+//! reverses that in turn; any new operation clears what Redo had. While an
+//! Undo or Redo runs, no other file operation may start.
 
 use crate::trash_bin::{Bin, Trashed};
 use fffinder_core::entry::display_name;
 use fffinder_core::ops;
 use gpui_kit::{App, Global};
 use std::path::PathBuf;
+use std::sync::{Arc, Weak};
 
 /// The most operations Undo remembers.
 const LIMIT: usize = 100;
@@ -56,6 +58,20 @@ impl Step {
             Step::Redo => "Redid",
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Step::Undo => "Undo",
+            Step::Redo => "Redo",
+        }
+    }
+}
+
+/// Held for as long as an Undo or Redo runs. It ends when this is dropped,
+/// whether the step finished or its window closed partway, so file
+/// operations can never be left waiting for good.
+pub struct Running {
+    _step: Arc<Step>,
 }
 
 /// Operations Undo can reverse, and the opposites of undone ones, which
@@ -64,6 +80,9 @@ impl Step {
 struct UndoLog {
     done: Vec<Operation>,
     undone: Vec<Operation>,
+    /// The step running now, if any. `Weak` is a reference that doesn't
+    /// keep its value alive, so this empties when the `Running` is dropped.
+    running: Weak<Step>,
 }
 
 impl Global for UndoLog {}
@@ -85,13 +104,23 @@ pub fn record(name: &'static str, change: Change, cx: &mut App) {
     push_capped(&mut log.done, Operation { name, change });
 }
 
-/// The latest operation `step` can reverse, taken off the log.
-pub fn take_last(step: Step, cx: &mut App) -> Option<Operation> {
+/// The latest operation `step` can reverse, taken off the log, and what
+/// marks the step as running until it's dropped.
+pub fn take_last(step: Step, cx: &mut App) -> Option<(Operation, Running)> {
     let log = cx.default_global::<UndoLog>();
-    match step {
+    let operation = match step {
         Step::Undo => log.done.pop(),
         Step::Redo => log.undone.pop(),
-    }
+    }?;
+    let running = Arc::new(step);
+    log.running = Arc::downgrade(&running);
+    Some((operation, Running { _step: running }))
+}
+
+/// The Undo or Redo running now, if any.
+pub fn running(cx: &App) -> Option<Step> {
+    let log = cx.try_global::<UndoLog>()?;
+    log.running.upgrade().map(|step| *step)
 }
 
 /// `step` reversed an operation; `opposite` reverses it back, so it goes
@@ -211,5 +240,18 @@ mod tests {
         reverse(&undone.opposite, &bin).unwrap();
         assert!(!a.exists(), "a redone Move to Trash trashes it again");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn running_ends_when_dropped() {
+        let log = UndoLog::default();
+        let running = Arc::new(Step::Redo);
+        let log = UndoLog {
+            running: Arc::downgrade(&running),
+            ..log
+        };
+        assert_eq!(log.running.upgrade().as_deref(), Some(&Step::Redo));
+        drop(Running { _step: running });
+        assert!(log.running.upgrade().is_none());
     }
 }

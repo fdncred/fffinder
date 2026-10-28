@@ -2137,6 +2137,9 @@ impl Finder {
         let Some(dir) = self.current_folder().map(Path::to_path_buf) else {
             return;
         };
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let mut name = "untitled folder".to_string();
         let mut n = 2;
         while dir.join(&name).exists() {

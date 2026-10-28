@@ -203,7 +203,7 @@ impl Finder {
     }
 
     fn apply_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.batch_ready() {
+        if !self.batch_ready() || self.wait_for_undo(window, cx) {
             return;
         }
         let Some(BatchRename {
