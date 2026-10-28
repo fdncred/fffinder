@@ -15,13 +15,15 @@ use crate::theme::palette;
 use crate::theme::ui;
 use fffinder_core::config::{DEFAULT_PREVIEW_FONT_SIZE, FONT_SIZE_RANGE};
 use fffinder_core::{FileEntry, FileKind, ViewMode, format};
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -359,6 +361,12 @@ impl Finder {
                 .preview_of(&entry)
                 .has_text()
                 .then(|| finder.config.preview_font_size());
+            // Quick Look takes most of the window, so a bigger window shows
+            // a bigger preview, and never gets smaller than it used to be.
+            let viewport = window.viewport_size();
+            let (wide, tall) = (f32::from(viewport.width), f32::from(viewport.height));
+            let width = (wide * 0.85).max(f32::from(ui(860.))).min(wide - 32.);
+            let height = (tall * 0.85 - f32::from(ui(150.))).max(f32::from(ui(300.)));
             dialog
                 .title(
                     h_flex()
@@ -366,7 +374,7 @@ impl Finder {
                         .child(file_icon(&entry, ui(20.), false, &palette(cx)))
                         .child(div().truncate().child(entry.name.clone())),
                 )
-                .w(ui(860.))
+                .w(px(width))
                 .child(
                     div()
                         .track_focus(&focus)
@@ -387,8 +395,8 @@ impl Finder {
                         .on_action(step_handler::<MoveRight>(&view, 1, 0))
                         .on_action(page_handler::<NextPdfPage>(&view, 1))
                         .on_action(page_handler::<PreviousPdfPage>(&view, -1))
-                        .h(ui(540.))
-                        .child(render_preview_large(finder, &entry, cx)),
+                        .h(px(height))
+                        .child(render_preview_large(finder, &view, &entry, cx)),
                 )
                 .footer(
                     DialogFooter::new()
@@ -479,10 +487,7 @@ fn step_handler<A: Action>(
 
 /// Steps the preview text size by `steps` points, or resets it for `None`.
 fn step_text_size(view: &Entity<Finder>, steps: Option<f32>, window: &mut Window, cx: &mut App) {
-    view.update(cx, |this, cx| match steps {
-        Some(steps) => this.step_preview_font_size(steps, cx),
-        None => this.set_preview_font_size(None, cx),
-    });
+    view.update(cx, |this, cx| this.step_preview_size(steps, cx));
     // The dialog is drawn by the window's root, not by the Finder view.
     window.refresh();
 }
@@ -548,23 +553,26 @@ pub(super) fn size_stepper(
 }
 
 /// A big preview with a caption: the gallery's main area and Quick Look.
-pub fn render_preview_large(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyElement {
+pub fn render_preview_large(
+    finder: &Finder,
+    view: &Entity<Finder>,
+    entry: &FileEntry,
+    cx: &App,
+) -> AnyElement {
     let theme = cx.theme();
     let pdf = finder.pdf_view(entry);
+    let body = preview_body(
+        finder,
+        entry,
+        ui(220.),
+        finder.config.preview_font_size(),
+        cx,
+    );
     // A PDF shows the system's thumbnail of its first page until hayro has
     // drawn the page.
-    let body = match pdf.and_then(|pdf| pdf.image()) {
-        Some(page) => img(page)
-            .size_full()
-            .object_fit(ObjectFit::Contain)
-            .into_any_element(),
-        None => preview_body(
-            finder,
-            entry,
-            ui(220.),
-            finder.config.preview_font_size(),
-            cx,
-        ),
+    let body = match pdf {
+        Some(pdf) => finder.render_pdf_page(pdf, view.clone(), body),
+        None => body,
     };
     v_flex()
         .size_full()
@@ -578,11 +586,7 @@ pub fn render_preview_large(finder: &Finder, entry: &FileEntry, cx: &App) -> Any
                 .overflow_hidden()
                 .child(body),
         )
-        .when_some(
-            pdf.map(|pdf| pdf.position())
-                .filter(|(_, pages)| *pages > 1),
-            |this, (page, pages)| this.child(page_buttons(page, pages)),
-        )
+        .when_some(pdf, |this, pdf| this.child(pdf_controls(pdf)))
         .child(
             h_flex()
                 .justify_center()
@@ -662,38 +666,80 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
         .into_any_element()
 }
 
-/// Previous page, "Page 2 of 12", and next page, under a PDF.
-fn page_buttons(page: usize, pages: usize) -> impl IntoElement {
-    let button = |id: &'static str, icon: IconName, tip: &'static str, action: Box<dyn Action>| {
-        Button::new(id)
-            .ghost()
-            .small()
-            .icon(icon)
-            .tooltip_with_action(tip, action.as_ref(), Some(QUICK_LOOK))
-            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-    };
+/// A small button under a PDF that sends `action`, as its keys do.
+fn pdf_button(
+    id: &'static str,
+    icon: impl Into<Icon>,
+    tip: &'static str,
+    action: Box<dyn Action>,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .icon(icon)
+        .tooltip_with_action(tip, action.as_ref(), Some(QUICK_LOOK))
+        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+}
+
+/// Under a PDF: the previous page, "Page 2 of 12", and the next page when
+/// it has more than one; then zoom out, the zoom, which fits the page
+/// again, and zoom in.
+fn pdf_controls(pdf: &super::pdf::PdfView) -> impl IntoElement {
+    let (page, pages) = pdf.position();
+    let zoom = pdf.percent().map_or("Fit".to_string(), |p| format!("{p}%"));
     h_flex()
         .justify_center()
         .gap(ui(6.))
         .text_size(ui(12.))
-        .child(
-            button(
-                "pdf-previous",
-                IconName::ChevronLeft,
-                "Previous Page",
-                Box::new(PreviousPdfPage),
+        .when(pages > 1, |this| {
+            this.child(
+                pdf_button(
+                    "pdf-previous",
+                    IconName::ChevronLeft,
+                    "Previous Page",
+                    Box::new(PreviousPdfPage),
+                )
+                .disabled(page <= 1),
             )
-            .disabled(page <= 1),
+            .child(format!("Page {page} of {pages}"))
+            .child(
+                pdf_button(
+                    "pdf-next",
+                    IconName::ChevronRight,
+                    "Next Page",
+                    Box::new(NextPdfPage),
+                )
+                .disabled(page >= pages),
+            )
+            .child(div().w(ui(12.)))
+        })
+        .child(
+            pdf_button(
+                "pdf-zoom-out",
+                Lucide::Minus,
+                "Zoom Out",
+                Box::new(PreviewTextSmaller),
+            )
+            .disabled(!pdf.can_zoom(-1)),
         )
-        .child(format!("Page {page} of {pages}"))
         .child(
-            button(
-                "pdf-next",
-                IconName::ChevronRight,
-                "Next Page",
-                Box::new(NextPdfPage),
+            Button::new("pdf-zoom-fit")
+                .ghost()
+                .small()
+                .label(zoom)
+                .tooltip_with_action("Fit Page", &PreviewTextReset, Some(QUICK_LOOK))
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(PreviewTextReset.boxed_clone(), cx)
+                }),
+        )
+        .child(
+            pdf_button(
+                "pdf-zoom-in",
+                Lucide::Plus,
+                "Zoom In",
+                Box::new(PreviewTextBigger),
             )
-            .disabled(page >= pages),
+            .disabled(!pdf.can_zoom(1)),
         )
 }
 

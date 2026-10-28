@@ -987,7 +987,12 @@ impl Finder {
                     .min_h_0()
                     .p(ui(18.))
                     .when_some(entry, |this, entry| {
-                        this.child(super::preview::render_preview_large(self, &entry, cx))
+                        this.child(super::preview::render_preview_large(
+                            self,
+                            &cx.entity(),
+                            &entry,
+                            cx,
+                        ))
                     }),
             )
             .child(

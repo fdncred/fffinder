@@ -387,6 +387,30 @@ fn pdfs_preview_page_by_page(cx: &mut TestAppContext) {
     ui.click("pdf-next");
     assert_eq!(shown(&ui), Some((2, 2)), "the last page has no next");
 
+    // Zooming: the buttons, the gallery's keys, and Fit.
+    let zoom = |ui: &Ui| {
+        ui.read(|f| f.shown_pdf_zoom())
+            .expect("the page is laid out")
+    };
+    let fit = zoom(&ui);
+    ui.click("pdf-zoom-in");
+    let once = zoom(&ui);
+    assert!(once > fit, "Zoom In makes the page bigger");
+    ui.press(&cmd("="));
+    assert!(zoom(&ui) > once, "Cmd+= zooms in the gallery");
+    ui.press(&cmd("0"));
+    assert_eq!(zoom(&ui), fit, "Cmd+0 fits the page again");
+
+    // The zoom stays as the pages change.
+    ui.press(&cmd("="));
+    ui.press("pageup");
+    assert_eq!(shown(&ui), Some((1, 2)), "Page Up in the gallery");
+    let zoomed = zoom(&ui);
+    ui.click("pdf-zoom-fit");
+    assert!(zoom(&ui) < zoomed, "the zoom button fits the page");
+    ui.press("pagedown");
+    assert_eq!(zoom(&ui), fit);
+
     ui.press("space");
     assert!(ui.read(|f| f.quick_look_is_open()));
     ui.press("pageup");
@@ -395,4 +419,7 @@ fn pdfs_preview_page_by_page(cx: &mut TestAppContext) {
     assert_eq!(shown(&ui), Some((1, 2)));
     ui.press("pagedown");
     assert_eq!(shown(&ui), Some((2, 2)), "Page Down in Quick Look");
+    let in_quick_look = zoom(&ui);
+    ui.press(&cmd("="));
+    assert!(zoom(&ui) > in_quick_look, "Cmd+= zooms in Quick Look");
 }

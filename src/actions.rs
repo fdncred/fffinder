@@ -161,6 +161,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-0", PreviewTextReset, Some(QUICK_LOOK)),
         KeyBinding::new("pagedown", NextPdfPage, Some(QUICK_LOOK)),
         KeyBinding::new("pageup", PreviousPdfPage, Some(QUICK_LOOK)),
+        // The same keys for the gallery's preview, from the files.
+        KeyBinding::new("secondary-=", PreviewTextBigger, files),
+        KeyBinding::new("secondary-+", PreviewTextBigger, files),
+        KeyBinding::new("secondary--", PreviewTextSmaller, files),
+        KeyBinding::new("secondary-0", PreviewTextReset, files),
+        KeyBinding::new("pagedown", NextPdfPage, files),
+        KeyBinding::new("pageup", PreviousPdfPage, files),
         KeyBinding::new("escape", Escape, files),
         KeyBinding::new("secondary-a", SelectAll, files),
         // Edit › Copy and Paste act on files when the files have focus.

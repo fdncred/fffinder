@@ -325,7 +325,7 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 | File | Preview |
 | --- | --- |
 | Images | The image. Formats GPUI can't draw, such as HEIC, RAW, and PSD, show the system's thumbnail of them (see [Thumbnails](#thumbnails)). |
-| PDFs | Page by page in the gallery and Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro), so they look the same on every system. Under the page, the arrows go to the previous and next page, and "Page 2 of 12" says where you are; in Quick Look, Page Up and Page Down do the same. The caption gives the page count. The column view's card, and the gallery while the page is drawn, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
+| PDFs | Page by page in the gallery and Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro), so they look the same on every system. A page opens fitted to the preview. Under it are the page arrows with "Page 2 of 12", then − and + to zoom out and in, up to six times the fitted size, with the zoom between them as a percentage of the printed size; click it to fit the page again. Page Up and Page Down change pages, and Cmd+Plus, Cmd+Minus, and Cmd+0 zoom, in Quick Look and in the gallery. A page bigger than the preview scrolls, and each page starts at its top; it is drawn again at its new size, so text stays sharp. The caption gives the page count. The column view's card, and the gallery while the page is drawn, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
 | Videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a document, a frame of a video. Types the system can't draw show their icon. |
 | Video and audio | The running time, in the caption and in the column view's card, for MP4, MOV, M4A, M4V, WAV, and FLAC files. Audio shows its icon with the time under it. |
 | Folders | The folder icon and how many items it holds. |
@@ -357,7 +357,7 @@ Each item shows its icon until its thumbnail is ready. Thumbnails are cached as 
 
 ### Quick Look
 
-Space or Cmd+Y opens Quick Look for the selected item, and pressing either again closes it. Quick Look shows the item's icon and name, a large preview, and its kind, size, and modification date.
+Space or Cmd+Y opens Quick Look for the selected item, and pressing either again closes it. Quick Look shows the item's icon and name, a large preview, and its kind, size, and modification date. It takes most of the window, so a bigger window gives a bigger preview.
 
 The arrow keys move to other items while Quick Look stays open, as in Finder:
 
@@ -811,6 +811,8 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Alt+Backspace | Delete immediately |
 | Cmd+Z | Undo the latest file operation |
 | Cmd+Shift+Z | Redo the latest Undo |
+| Page Up, Page Down | In the gallery, the previous or next page of a PDF |
+| Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit, or change the size of text previews |
 | Letters | Type to select |
 
 ### In Quick Look
@@ -819,9 +821,9 @@ Cmd on macOS, Ctrl elsewhere.
 | --- | --- |
 | Space, Cmd+Y | Close Quick Look |
 | Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)) |
-| Cmd+=, Cmd++ | Bigger preview text |
-| Cmd+- | Smaller preview text |
-| Cmd+0 | Reset the preview text size |
+| Cmd+=, Cmd++ | Bigger preview text, or zoom in on a PDF |
+| Cmd+- | Smaller preview text, or zoom out of a PDF |
+| Cmd+0 | Reset the preview text size, or fit a PDF's page |
 | Page Up, Page Down | Previous or next page of a PDF |
 
 ### In the search field
