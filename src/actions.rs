@@ -76,6 +76,8 @@ actions!(
         PreviewTextBigger,
         PreviewTextSmaller,
         PreviewTextReset,
+        NextPdfPage,
+        PreviousPdfPage,
     ]
 );
 
@@ -156,6 +158,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-+", PreviewTextBigger, Some(QUICK_LOOK)),
         KeyBinding::new("secondary--", PreviewTextSmaller, Some(QUICK_LOOK)),
         KeyBinding::new("secondary-0", PreviewTextReset, Some(QUICK_LOOK)),
+        KeyBinding::new("pagedown", NextPdfPage, Some(QUICK_LOOK)),
+        KeyBinding::new("pageup", PreviousPdfPage, Some(QUICK_LOOK)),
         KeyBinding::new("escape", Escape, files),
         KeyBinding::new("secondary-a", SelectAll, files),
         // Edit › Copy and Paste act on files when the files have focus.

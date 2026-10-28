@@ -1,14 +1,14 @@
 //! File previews for the gallery, the column view, and Quick Look. Structured
 //! files (CSV, JSON, TOML, YAML, SQLite, …) are opened with Nushell and shown
 //! as tables. Code is highlighted, Markdown rendered, archives listed, fonts
-//! shown in their own type, and on macOS PDFs, videos, and documents show
-//! QuickLook's picture of them.
+//! shown in their own type, PDFs drawn page by page (see `pdf.rs`), and
+//! videos and documents show the system's thumbnail of them.
 
 use super::views::file_icon;
 use super::{AppState, Finder};
 use crate::actions::{
-    MoveDown, MoveLeft, MoveRight, MoveUp, PreviewTextBigger, PreviewTextReset, PreviewTextSmaller,
-    QUICK_LOOK, QuickLook,
+    MoveDown, MoveLeft, MoveRight, MoveUp, NextPdfPage, PreviewTextBigger, PreviewTextReset,
+    PreviewTextSmaller, PreviousPdfPage, QUICK_LOOK, QuickLook,
 };
 use crate::nushell::{self, NuOutput};
 use crate::theme::palette;
@@ -21,7 +21,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -338,6 +338,7 @@ impl Finder {
         };
         self.focus_before_dialog(window, cx);
         self.ensure_preview(&entry, cx);
+        self.ensure_pdf(&entry, cx);
         self.quick_look_open = true;
         let view = cx.entity();
         let focus = self.quick_look_focus.clone();
@@ -384,6 +385,8 @@ impl Finder {
                         .on_action(step_handler::<MoveDown>(&view, 0, 1))
                         .on_action(step_handler::<MoveLeft>(&view, -1, 0))
                         .on_action(step_handler::<MoveRight>(&view, 1, 0))
+                        .on_action(page_handler::<NextPdfPage>(&view, 1))
+                        .on_action(page_handler::<PreviousPdfPage>(&view, -1))
                         .h(ui(540.))
                         .child(render_preview_large(finder, &entry, cx)),
                 )
@@ -444,10 +447,20 @@ impl Finder {
         }
         if let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
+            self.ensure_pdf(&entry, cx);
         }
         // Selecting in a column focuses the files; keep the keys coming here.
         self.quick_look_focus.focus(window, cx);
     }
+}
+
+/// Pages through a PDF from Quick Look, `by` pages at a time.
+fn page_handler<A: Action>(
+    view: &Entity<Finder>,
+    by: isize,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    let view = view.clone();
+    move |_, _, cx| view.update(cx, |this, cx| this.step_pdf_page(by, cx))
 }
 
 /// Moves through the items from Quick Look by `dx` and `dy`.
@@ -537,6 +550,22 @@ pub(super) fn size_stepper(
 /// A big preview with a caption: the gallery's main area and Quick Look.
 pub fn render_preview_large(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyElement {
     let theme = cx.theme();
+    let pdf = finder.pdf_view(entry);
+    // A PDF shows the system's thumbnail of its first page until hayro has
+    // drawn the page.
+    let body = match pdf.and_then(|pdf| pdf.image()) {
+        Some(page) => img(page)
+            .size_full()
+            .object_fit(ObjectFit::Contain)
+            .into_any_element(),
+        None => preview_body(
+            finder,
+            entry,
+            ui(220.),
+            finder.config.preview_font_size(),
+            cx,
+        ),
+    };
     v_flex()
         .size_full()
         .gap(ui(10.))
@@ -547,13 +576,12 @@ pub fn render_preview_large(finder: &Finder, entry: &FileEntry, cx: &App) -> Any
                 .w_full()
                 .rounded(ui(8.))
                 .overflow_hidden()
-                .child(preview_body(
-                    finder,
-                    entry,
-                    ui(220.),
-                    finder.config.preview_font_size(),
-                    cx,
-                )),
+                .child(body),
+        )
+        .when_some(
+            pdf.map(|pdf| pdf.position())
+                .filter(|(_, pages)| *pages > 1),
+            |this, (page, pages)| this.child(page_buttons(page, pages)),
         )
         .child(
             h_flex()
@@ -634,8 +662,49 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
         .into_any_element()
 }
 
+/// Previous page, "Page 2 of 12", and next page, under a PDF.
+fn page_buttons(page: usize, pages: usize) -> impl IntoElement {
+    let button = |id: &'static str, icon: IconName, tip: &'static str, action: Box<dyn Action>| {
+        Button::new(id)
+            .ghost()
+            .small()
+            .icon(icon)
+            .tooltip_with_action(tip, action.as_ref(), Some(QUICK_LOOK))
+            .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+    };
+    h_flex()
+        .justify_center()
+        .gap(ui(6.))
+        .text_size(ui(12.))
+        .child(
+            button(
+                "pdf-previous",
+                IconName::ChevronLeft,
+                "Previous Page",
+                Box::new(PreviousPdfPage),
+            )
+            .disabled(page <= 1),
+        )
+        .child(format!("Page {page} of {pages}"))
+        .child(
+            button(
+                "pdf-next",
+                IconName::ChevronRight,
+                "Next Page",
+                Box::new(NextPdfPage),
+            )
+            .disabled(page >= pages),
+        )
+}
+
 fn info_line(finder: &Finder, entry: &FileEntry) -> String {
     let mut parts = vec![entry.kind_label()];
+    if let Some((_, pages)) = finder.pdf_view(entry).map(|pdf| pdf.position()) {
+        parts.push(match pages {
+            1 => "1 page".to_string(),
+            n => format!("{n} pages"),
+        });
+    }
     if let Preview::Media {
         duration: Some(duration),
     } = finder.preview_of(entry)

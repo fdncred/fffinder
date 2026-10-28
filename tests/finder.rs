@@ -367,3 +367,32 @@ fn typing_jumps_to_matching_names(cx: &mut TestAppContext) {
         "the folder opens to the right"
     );
 }
+
+#[gpui_kit::test]
+fn pdfs_preview_page_by_page(cx: &mut TestAppContext) {
+    let fx = Fixture::new("pdf-pages");
+    let pdf = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/fffinder-core/testdata/pages.pdf"
+    );
+    std::fs::copy(pdf, fx.path("Manual.pdf")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    let shown = |ui: &Ui| ui.read(|f| f.shown_pdf_page());
+
+    ui.click("view-gallery");
+    ui.select("Manual.pdf");
+    assert_eq!(shown(&ui), Some((1, 2)), "a PDF opens at its first page");
+    ui.click("pdf-next");
+    assert_eq!(shown(&ui), Some((2, 2)));
+    ui.click("pdf-next");
+    assert_eq!(shown(&ui), Some((2, 2)), "the last page has no next");
+
+    ui.press("space");
+    assert!(ui.read(|f| f.quick_look_is_open()));
+    ui.press("pageup");
+    assert_eq!(shown(&ui), Some((1, 2)), "Page Up in Quick Look");
+    ui.press("pageup");
+    assert_eq!(shown(&ui), Some((1, 2)));
+    ui.press("pagedown");
+    assert_eq!(shown(&ui), Some((2, 2)), "Page Down in Quick Look");
+}

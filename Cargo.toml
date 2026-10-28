@@ -65,6 +65,8 @@ syntect = { version = "5", default-features = false, features = ["parsing", "def
 ttf-parser = "0.25"
 # Colors file names the way Nushell's `ls` does.
 lscolors = { version = "0.21", default-features = false }
+# PDF previews: the pixel buffer GPUI takes drawn pages in.
+image = { version = "0.25", default-features = false }
 # `term` feature: frames as kitty graphics escape codes, and the types GPUI's
 # platform traits are written in.
 base64 = { version = "0.22", optional = true }

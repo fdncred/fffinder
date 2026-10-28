@@ -922,6 +922,7 @@ impl Finder {
             .or_else(|| self.rows.first().map(|r| r.entry.clone()));
         if let Some(entry) = &entry {
             self.ensure_preview(entry, cx);
+            self.ensure_pdf(entry, cx);
         }
         let sizes: Rc<Vec<Size<Pixels>>> = Rc::new(vec![size(ui(96.), ui(112.)); self.rows.len()]);
         let strip = h_virtual_list(

@@ -25,6 +25,8 @@ tar = "0.4"
 flate2 = "1"
 # Free space on a volume, for the status bar.
 fs4 = "1"
+# PDF pages for previews, drawn in pure Rust on every system.
+hayro = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 # Owner and group names for Get Info.

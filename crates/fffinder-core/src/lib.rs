@@ -13,6 +13,7 @@ pub mod kind;
 pub mod listing;
 pub mod media;
 pub mod ops;
+pub mod pdf;
 pub mod places;
 pub mod servers;
 pub mod terminals;

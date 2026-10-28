@@ -13,6 +13,7 @@ mod make;
 mod menus;
 mod nu_panel;
 mod open_with;
+mod pdf;
 mod preview;
 mod sidebar;
 mod tab_bar;
@@ -210,6 +211,8 @@ pub struct Finder {
 
     previews: HashMap<PathBuf, Preview>,
     preview_tasks: HashMap<PathBuf, Task<()>>,
+    /// The PDF the large preview shows page by page.
+    pdf: Option<pdf::PdfView>,
     quick_look_open: bool,
     quick_look_focus: FocusHandle,
     /// Type-to-select: the letters typed so far and when the last arrived.
@@ -408,6 +411,7 @@ impl Finder {
             content_height: ui(400.),
             previews: HashMap::new(),
             preview_tasks: HashMap::new(),
+            pdf: None,
             quick_look_open: false,
             quick_look_focus: cx.focus_handle(),
             item_menu_at: None,
@@ -2375,6 +2379,8 @@ impl Render for Finder {
             .on_action(cx.listener(Self::extract))
             .on_action(cx.listener(Self::undo_file_operation))
             .on_action(cx.listener(Self::redo_file_operation))
+            .on_action(cx.listener(Self::next_pdf_page))
+            .on_action(cx.listener(Self::previous_pdf_page))
             .on_action(cx.listener(Self::put_back))
             .on_action(cx.listener(Self::delete_immediately))
             .on_action(cx.listener(Self::empty_trash))

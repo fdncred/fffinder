@@ -304,7 +304,8 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 | File | Preview |
 | --- | --- |
 | Images | The image. Formats GPUI can't draw, such as HEIC, RAW, and PSD, show the system's thumbnail of them (see [Thumbnails](#thumbnails)). |
-| PDFs, videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a PDF or document, a frame of a video. Types the system can't draw show their icon. |
+| PDFs | Page by page in the gallery and Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro), so they look the same on every system. Under the page, the arrows go to the previous and next page, and "Page 2 of 12" says where you are; in Quick Look, Page Up and Page Down do the same. The caption gives the page count. The column view's card, and the gallery while the page is drawn, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
+| Videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a document, a frame of a video. Types the system can't draw show their icon. |
 | Video and audio | The running time, in the caption and in the column view's card, for MP4, MOV, M4A, M4V, WAV, and FLAC files. Audio shows its icon with the time under it. |
 | Folders | The folder icon and how many items it holds. |
 | Zip, `.tar`, `.tar.gz`, `.tgz` | A table of what's inside: each item's path and size, up to 200 items, with the count below. |
@@ -800,6 +801,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+=, Cmd++ | Bigger preview text |
 | Cmd+- | Smaller preview text |
 | Cmd+0 | Reset the preview text size |
+| Page Up, Page Down | Previous or next page of a PDF |
 
 ### In the search field
 
