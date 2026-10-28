@@ -8,6 +8,7 @@ pub mod desktop_apps;
 pub mod engine;
 pub mod entry;
 pub mod format;
+pub mod grouping;
 pub mod info;
 pub mod kind;
 pub mod listing;
@@ -28,5 +29,6 @@ pub use engine::{
     IndexedItem, RootStatus, SearchHit, SearchRequest, SearchResponse, Watch,
 };
 pub use entry::FileEntry;
+pub use grouping::GroupKey;
 pub use kind::{FileKind, KindFilter};
 pub use listing::{SortKey, SortOrder};

@@ -50,7 +50,10 @@ impl Finder {
 
     /// Whether the list needs each item's last-opened date.
     pub(super) fn wants_last_opened(&self) -> bool {
-        self.config.sort.key == SortKey::LastOpened || self.shows_column(ListColumn::LastOpened)
+        self.config.sort.key == SortKey::LastOpened
+            || self.shows_column(ListColumn::LastOpened)
+            || (self.config.use_groups
+                && self.config.group_by == fffinder_core::GroupKey::LastOpened)
     }
 
     pub(super) fn shows_column(&self, column: ListColumn) -> bool {

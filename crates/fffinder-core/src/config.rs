@@ -2,6 +2,7 @@
 //! platform config directory (`~/Library/Application Support/fffinder` on
 //! macOS, `~/.config/fffinder` on Linux, `%APPDATA%\fffinder` on Windows).
 
+use crate::grouping::GroupKey;
 use crate::kind::KindFilter;
 use crate::listing::{SortKey, SortOrder};
 use crate::terminals::{CUSTOM, Platform, TerminalSetting};
@@ -164,6 +165,9 @@ pub struct Config {
     pub sort: SortOrder,
     /// Folders before files, whatever the sort ("Keep Folders on Top").
     pub folders_first: bool,
+    /// Show the list and icon views in groups ("Use Groups"), by `group_by`.
+    pub use_groups: bool,
+    pub group_by: GroupKey,
     /// The list view's columns after Name, in order, with their widths.
     pub list_columns: Vec<ColumnSetting>,
     /// Show folder sizes, added up from the index ("Calculate All Sizes").
@@ -214,6 +218,8 @@ impl Default for Config {
             view_mode: ViewMode::Icons,
             sort: SortOrder::default(),
             folders_first: false,
+            use_groups: false,
+            group_by: GroupKey::default(),
             list_columns: default_list_columns(),
             folder_sizes: true,
             recent_servers: Vec::new(),

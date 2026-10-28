@@ -14,6 +14,7 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Views](#views)
 - [Selecting items](#selecting-items)
 - [Sorting and hidden files](#sorting-and-hidden-files)
+- [Groups](#groups)
 - [Searching](#searching)
 - [Recents](#recents)
 - [Previews and Quick Look](#previews-and-quick-look)
@@ -235,12 +236,28 @@ The Sort and View Options menu has:
 - **Ascending** and **Descending**. Both are disabled for Relevance.
 - **Keep Folders on Top**. See [The list view](#the-list-view).
 - **Show Hidden Files**.
+- **Group By**: None, Name, Kind, Date Modified, Date Created, Date Last Opened, or Size. See [Groups](#groups).
 
 Name sorting is natural, so `file2` comes before `file10`. Date Modified, Date Created, and Size start with the newest and largest items. Kind sorts by kind, then name.
 
 The folder sort is saved. A search has its own sort, which starts at Relevance and isn't saved.
 
 **Show Hidden Files** (Cmd+Shift+.) shows dot files and other hidden items in folders. It is also in the empty-space menu and the View menu, and in Settings. Searches find hidden files only when the search location is itself a git repository, because that is what fff-search indexes. See [What the index skips](#what-the-index-skips).
+
+## Groups
+
+The list and icon views can show items in groups, as Finder's Use Groups does. Choose a key from Group By in the Sort and View Options menu, or turn groups on and off with View › Use Groups, which uses the last key chosen (Kind at first). The choice is saved and applies to every folder and to search results; the column and gallery views don't use groups.
+
+| Group By | Groups, in order |
+| --- | --- |
+| Name | 0–9, then one group per first letter, then Other for names starting with a symbol. |
+| Kind | One group per kind, such as Folder or PDF Document, alphabetically. |
+| Date Modified, Date Created, Date Last Opened | Today, Yesterday, Previous 7 Days, Previous 30 Days, then the earlier months of this year, then earlier years, then No Date. |
+| Size | Huge (over 1 GB), Large (100 MB to 1 GB), Medium (1 to 100 MB), Small (100 KB to 1 MB), Tiny (under 100 KB), Empty, then folders without a size. |
+
+Items keep the current sort within their group. In the list view, an open folder's items stay under it, in its group.
+
+Each group has a header with its name and how many items it holds. Click the header to collapse the group, and click it again to expand it. A collapsed group's items are hidden: the arrow keys, Shift+click ranges, and Select All skip them. Each tab remembers which groups are collapsed until you choose another key. In the icon view, each group starts a new row, and Up and Down move to the same column in the next group.
 
 ## Searching
 
@@ -660,7 +677,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
-| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Toggle Light/Dark, Refresh |
+| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
@@ -717,7 +734,7 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 
 ### Toolbar menus
 
-- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files.
+- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files, Group By.
 - **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
 - **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Redo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
@@ -874,6 +891,8 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `view_mode` | `"icons"` | `icons`, `list`, `columns`, or `gallery`. |
 | `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `created`, `last_opened`, `size`, `kind`. |
 | `folders_first` | `false` | Keep Folders on Top. |
+| `use_groups` | `false` | Show the list and icon views in groups. |
+| `group_by` | `"kind"` | What groups are by: `name`, `kind`, `modified`, `created`, `last_opened`, or `size`. |
 | `list_columns` | Date Modified 170, Size 90, Kind 160 | The list view's columns after Name, in order: `column` (`modified`, `created`, `last_opened`, `size`, `kind`, `permissions`, `git`) and `width` in points, at least 50. |
 | `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
 | `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |

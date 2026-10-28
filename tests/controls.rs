@@ -10,7 +10,7 @@ use fffinder::finder::{PickerOptions, SearchScope};
 use fffinder::model::Location;
 use fffinder::system::SystemCall;
 use fffinder_core::terminals::{Launch, Terminal};
-use fffinder_core::{Appearance, KindFilter, SortKey, ViewMode};
+use fffinder_core::{Appearance, GroupKey, KindFilter, SortKey, ViewMode};
 use gpui_kit::Action as _;
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme as _;
@@ -88,7 +88,8 @@ fn sort_menu_items(cx: &mut TestAppContext) {
             "Ascending",
             "Descending",
             "Keep Folders on Top",
-            "Show Hidden Files"
+            "Show Hidden Files",
+            "Group By"
         ]
     );
     ui.click_menu_item("Size");
@@ -1550,4 +1551,75 @@ fn nushell_colors_and_editor(cx: &mut TestAppContext) {
     ui.click("use-nu-env");
     assert!(!ui.read(|f| f.config().use_nu_environment));
     assert_eq!(color(&ui, "Projects"), None);
+}
+
+#[gpui_kit::test]
+fn groups_collapse_and_hide_their_items(cx: &mut TestAppContext) {
+    let fx = Fixture::new("groups");
+    std::fs::write(fx.path("todo.txt"), "todo").unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    let headers = |ui: &Ui| ui.read(|f| f.group_headers());
+    let header = |label: &str| gpui_kit::SharedString::from(format!("group-{label}"));
+
+    ui.click("view-list");
+    ui.click("sort");
+    ui.click_menu_item("Group By");
+    // "Kind" is also a sort; this label is only in the Group By menu.
+    ui.click_menu_item("Date Last Opened");
+    assert_eq!(ui.read(|f| f.config().group_by), GroupKey::LastOpened);
+    assert!(!headers(&ui).is_empty());
+    ui.update(|f, _, cx| f.set_group_by(Some(GroupKey::Kind), cx));
+    assert_eq!(
+        headers(&ui),
+        ["Comma-Separated Values", "Folder", "Markdown", "Plain Text"]
+    );
+    assert_eq!(
+        ui.names(),
+        [
+            "Budget.csv",
+            "Projects",
+            "Roadmap.md",
+            "notes.txt",
+            "todo.txt"
+        ]
+    );
+
+    // A collapsed group's items leave the view, so the keys skip them.
+    ui.click(header("Markdown"));
+    assert_eq!(
+        ui.names(),
+        ["Budget.csv", "Projects", "notes.txt", "todo.txt"]
+    );
+    ui.select("Projects");
+    ui.press("down");
+    assert_eq!(
+        ui.selected(),
+        ["notes.txt"],
+        "Down skips the collapsed group"
+    );
+    ui.click(header("Markdown"));
+    assert_eq!(ui.names().len(), 5, "expanding brings them back");
+
+    // The icon view has the same groups, and Down goes into the next one.
+    ui.click("view-icons");
+    assert!(ui.exists(header("Folder")));
+    ui.select("Budget.csv");
+    ui.press("down");
+    assert_eq!(ui.selected(), ["Projects"]);
+    ui.select("todo.txt");
+    ui.press("down");
+    assert_eq!(ui.selected(), ["todo.txt"], "nothing below the last group");
+
+    // The gallery doesn't use groups.
+    ui.click("view-gallery");
+    assert!(headers(&ui).is_empty());
+    assert_eq!(ui.names().len(), 5);
+
+    // View › Use Groups turns them off and back on, by the same key.
+    ui.click("view-list");
+    ui.dispatch(ToggleGroups);
+    assert!(headers(&ui).is_empty());
+    ui.dispatch(ToggleGroups);
+    assert_eq!(headers(&ui).len(), 4);
+    assert!(ui.read(|f| f.config().use_groups));
 }

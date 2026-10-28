@@ -10,7 +10,8 @@ use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::{
-    ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, h_flex, h_virtual_list, v_flex,
+    ActiveTheme as _, ElementExt as _, Icon, IconName, Sizable as _, h_flex, h_virtual_list,
+    v_flex, v_virtual_list,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -296,8 +297,7 @@ impl Finder {
         let icon = self.config.icon_size;
         let tile_w = (icon + 52.).max(96.);
         let tile_h = icon + 58.;
-        let cols = self.grid_cols.max(1);
-        let rows = self.rows.len().div_ceil(cols);
+        let sizes = self.icon_layout(tile_h, GRID_PADDING / 2.).sizes.clone();
         let view = cx.entity();
         div()
             .size_full()
@@ -315,27 +315,16 @@ impl Finder {
                 });
             })
             .child(
-                uniform_list(
+                // Lines differ in height when group headers are among them.
+                v_virtual_list(
+                    cx.entity(),
                     "icon-grid",
-                    rows,
-                    cx.processor(move |this: &mut Self, range: Range<usize>, _, cx| {
-                        let mut out = Vec::with_capacity(range.len());
-                        for line in range {
-                            let start = line * cols;
-                            let end = (start + cols).min(this.rows.len());
-                            let mut row = h_flex().px(ui(GRID_PADDING)).items_start();
-                            if line == 0 {
-                                row = row.pt(ui(GRID_PADDING / 2.));
-                            }
-                            for ix in start..end {
-                                row = row.child(this.render_tile(ix, tile_w, tile_h, cx));
-                            }
-                            out.push(
-                                row.h(ui(tile_h + if line == 0 { GRID_PADDING / 2. } else { 0. })),
-                            );
-                        }
-                        out
-                    }),
+                    sizes,
+                    move |this: &mut Self, range: Range<usize>, _, cx| {
+                        range
+                            .map(|line| this.render_icon_line(line, tile_w, tile_h, cx))
+                            .collect::<Vec<_>>()
+                    },
                 )
                 .size_full()
                 .track_scroll(&self.grid_scroll),
@@ -352,6 +341,40 @@ impl Finder {
                 let view = cx.entity();
                 move |menu, window, cx| super::menus::background_menu(&view, menu, window, cx)
             })
+    }
+
+    /// A line of the icon view: a group header, or a row of tiles. The
+    /// first line has extra room above it.
+    fn render_icon_line(
+        &self,
+        line: usize,
+        tile_w: f32,
+        tile_h: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let pad = if line == 0 { GRID_PADDING / 2. } else { 0. };
+        let layout = self
+            .icon_layout
+            .as_ref()
+            .expect("the icon view makes its layout before drawing");
+        match layout.lines.get(line).cloned() {
+            Some(super::groups::IconLine::Header(g)) => div()
+                .pt(ui(pad))
+                .child(self.render_group_header(g, super::groups::ICON_HEADER, cx))
+                .into_any_element(),
+            Some(super::groups::IconLine::Tiles(tiles)) => {
+                let mut row = h_flex()
+                    .px(ui(GRID_PADDING))
+                    .pt(ui(pad))
+                    .h(ui(tile_h + pad))
+                    .items_start();
+                for ix in tiles {
+                    row = row.child(self.render_tile(ix, tile_w, tile_h, cx));
+                }
+                row.into_any_element()
+            }
+            None => div().into_any_element(),
+        }
     }
 
     fn render_tile(
@@ -419,7 +442,7 @@ impl Finder {
         let sort = self.current_sort();
         let header_color = theme.muted_foreground;
         let border = theme.border;
-        let len = self.rows.len();
+        let len = self.list_line_count();
         let row = LIST_ROW * crate::theme::ui_scale();
         let visible = (f32::from(self.content_height) / row).ceil() as usize;
         let filler = visible.saturating_sub(len + 1);
@@ -475,7 +498,15 @@ impl Finder {
             len + filler,
             cx.processor(move |this: &mut Self, range: Range<usize>, _, cx| {
                 range
-                    .map(|ix| this.render_list_row(ix, searching, active, cx))
+                    .map(|line| match this.list_line(line) {
+                        Some(super::groups::ListLine::Header(g)) => {
+                            this.render_group_header(g, LIST_ROW, cx)
+                        }
+                        Some(super::groups::ListLine::Row(ix, stripe)) => {
+                            this.render_list_row(ix, stripe, searching, active, cx)
+                        }
+                        None => this.render_list_filler(line, cx),
+                    })
                     .collect::<Vec<_>>()
             }),
         )
@@ -600,28 +631,39 @@ impl Finder {
             .into_any_element()
     }
 
+    /// A list row's frame: rounded, and striped every other row.
+    fn list_row_base(stripe: bool, cx: &App) -> Div {
+        h_flex()
+            .h(ui(LIST_ROW))
+            .w_full()
+            .px(ui(2.))
+            .rounded(ui(5.))
+            .text_size(ui(12.))
+            .when(stripe, |this| this.bg(palette(cx).stripe))
+    }
+
+    /// An empty striped row under the items, so stripes fill the view.
+    fn render_list_filler(&self, line: usize, cx: &App) -> AnyElement {
+        div()
+            .w_full()
+            .px(ui(8.))
+            .child(Self::list_row_base(line % 2 == 1, cx).id(("filler", line)))
+            .into_any_element()
+    }
+
     fn render_list_row(
         &self,
         ix: usize,
+        stripe: bool,
         searching: bool,
         active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let pal = palette(cx);
         let theme = cx.theme();
-        let stripe = ix % 2 == 1;
-        let base = h_flex()
-            .h(ui(LIST_ROW))
-            .w_full()
-            .px(ui(2.))
-            .rounded(ui(5.))
-            .text_size(ui(12.))
-            .when(stripe, |this| this.bg(pal.stripe));
+        let base = Self::list_row_base(stripe, cx);
         // Rows are inset from the edges, like Finder's rounded selection.
-        let inset = |el: AnyElement| div().w_full().px(ui(8.)).child(el).into_any_element();
-        let Some(row) = self.rows.get(ix) else {
-            return inset(base.id(("filler", ix)).into_any_element());
-        };
+        let row = &self.rows[ix];
         let selected = self.selection.contains(ix);
         let (fg, muted) = if selected && active {
             (pal.selection_text, pal.selection_text.opacity(0.85))

@@ -7,6 +7,7 @@ mod dialogs;
 mod editor;
 mod filter;
 mod fps;
+mod groups;
 mod info;
 mod list;
 mod make;
@@ -198,11 +199,17 @@ pub struct Finder {
     search_gen: u64,
 
     rows: Vec<Row>,
+    /// The groups `rows` are in, when the view uses groups.
+    groups: Vec<fffinder_core::grouping::GroupSpan>,
+    /// Groups collapsed in this browser, by name.
+    collapsed_groups: HashSet<String>,
     selection: Selection,
     result_sort: SortOrder,
     grid_cols: usize,
     list_scroll: UniformListScrollHandle,
-    grid_scroll: UniformListScrollHandle,
+    grid_scroll: gpui_kit::component::VirtualListScrollHandle,
+    /// The icon view's lines, kept between frames.
+    icon_layout: Option<groups::IconLayout>,
     strip_scroll: gpui_kit::component::VirtualListScrollHandle,
     columns_scroll: ScrollHandle,
     columns: Vec<ColumnPane>,
@@ -396,6 +403,8 @@ impl Finder {
             search_task: Task::ready(()),
             search_gen: 0,
             rows: Vec::new(),
+            groups: Vec::new(),
+            collapsed_groups: HashSet::new(),
             selection: Selection::default(),
             result_sort: SortOrder {
                 key: SortKey::Relevance,
@@ -403,7 +412,8 @@ impl Finder {
             },
             grid_cols: 1,
             list_scroll: UniformListScrollHandle::new(),
-            grid_scroll: UniformListScrollHandle::new(),
+            grid_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
+            icon_layout: None,
             strip_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
             columns_scroll: ScrollHandle::new(),
             columns: Vec::new(),
@@ -950,6 +960,7 @@ impl Finder {
                 row.name_style = crate::nu_env::name_style(colors, &row.entry);
             }
         }
+        let rows = self.group_rows(rows);
         let new: Vec<PathBuf> = rows.iter().map(|r| r.entry.path.clone()).collect();
         self.selection.remap(&old, &new);
         self.rows = rows;
@@ -1376,7 +1387,13 @@ impl Finder {
             return;
         }
         let delta = match view {
-            ViewMode::Icons => dx + dy * self.grid_cols.max(1) as isize,
+            // Up and Down keep the column, across group headers.
+            ViewMode::Icons => match self.selection.cursor() {
+                Some(ix) if dy != 0 => self
+                    .icon_step(ix, dy > 0)
+                    .map_or(0, |to| to as isize - ix as isize),
+                _ => dx + dy * self.grid_cols.max(1) as isize,
+            },
             ViewMode::Gallery => dx + dy,
             _ => dy,
         };
@@ -1395,9 +1412,11 @@ impl Finder {
         match self.effective_view() {
             ViewMode::Icons => self
                 .grid_scroll
-                .scroll_to_item(ix / self.grid_cols.max(1), ScrollStrategy::Nearest),
+                .scroll_to_item(self.icon_line_index(ix), ScrollStrategy::Nearest),
             ViewMode::Gallery => self.strip_scroll.scroll_to_item(ix, ScrollStrategy::Center),
-            _ => self.list_scroll.scroll_to_item(ix, ScrollStrategy::Nearest),
+            _ => self
+                .list_scroll
+                .scroll_to_item(self.list_line_of(ix), ScrollStrategy::Nearest),
         }
     }
 
@@ -2370,6 +2389,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_trash))
             .on_action(cx.listener(Self::get_info))
             .on_action(cx.listener(Self::toggle_folders_first))
+            .on_action(cx.listener(Self::toggle_groups))
             .on_action(cx.listener(Self::connect_to_server))
             .on_action(cx.listener(Self::new_file))
             .on_action(cx.listener(Self::duplicate))

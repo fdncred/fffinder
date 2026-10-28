@@ -5,7 +5,7 @@ use super::{Finder, SearchScope};
 use crate::actions::*;
 use crate::theme::palette;
 use crate::theme::ui;
-use fffinder_core::{SortKey, ViewMode};
+use fffinder_core::{GroupKey, SortKey, ViewMode};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -411,6 +411,27 @@ fn sort_menu(
                 .checked(hidden)
                 .action(Box::new(ToggleHidden)),
         )
+        .separator()
+        .submenu("Group By", window, cx, {
+            let view = view.clone();
+            move |mut menu, window, cx| {
+                let config = &view.read(cx).config;
+                let grouped = config.use_groups.then_some(config.group_by);
+                for key in [None].into_iter().chain(GroupKey::ALL.map(Some)) {
+                    menu = menu.item(
+                        PopupMenuItem::new(key.map_or("None", GroupKey::label))
+                            .checked(grouped == key)
+                            .on_click(window.listener_for(
+                                &view,
+                                move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                                    this.set_group_by(key, cx)
+                                },
+                            )),
+                    );
+                }
+                menu
+            }
+        })
         .min_w(ui(200.))
 }
 
