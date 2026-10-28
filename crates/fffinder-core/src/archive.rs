@@ -214,7 +214,7 @@ pub fn list(path: &Path, limit: usize) -> io::Result<(Vec<Listed>, bool)> {
                 .filter_map(|i| {
                     let entry = zip.by_index_raw(i).ok()?;
                     Some(Listed {
-                        name: entry.name().trim_end_matches('/').to_string(),
+                        name: entry.name().ok()?.trim_end_matches('/').to_string(),
                         size: entry.size(),
                         is_dir: entry.is_dir(),
                     })

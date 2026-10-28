@@ -371,8 +371,8 @@ fn typing_jumps_to_matching_names(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn pdfs_scroll_and_zoom(cx: &mut TestAppContext) {
     use gpui_kit::{
-        InputEvent as _, Modifiers, PinchEvent, ScrollDelta, ScrollWheelEvent, TouchPhase, point,
-        px,
+        InputEvent as _, Modifiers, PinchEvent, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
+        point, px,
     };
     let fx = Fixture::new("pdf-pages");
     let pdf = concat!(
@@ -431,16 +431,13 @@ fn pdfs_scroll_and_zoom(cx: &mut TestAppContext) {
     ui.settle();
     let pinched = zoom(&ui);
     assert!(pinched > whole, "pinching out zooms in");
-    let secondary = match cfg!(target_os = "macos") {
-        true => Modifiers::command(),
-        false => Modifiers::control(),
-    };
     ui.window(|window, cx| {
-        let scroll = ScrollWheelEvent {
+        let scroll = ScrollEvent {
             position: center,
             delta: ScrollDelta::Pixels(point(px(0.), px(-30.))),
-            modifiers: secondary,
+            modifiers: Modifiers::secondary_key(cx),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         window.dispatch_event(scroll.to_platform_input(), cx);
     });

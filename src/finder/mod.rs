@@ -1318,7 +1318,7 @@ impl Finder {
             self.open_rows(vec![ix], window, cx);
             return;
         }
-        if modifiers.secondary() {
+        if modifiers.secondary(cx) {
             self.selection.toggle(ix);
         } else if modifiers.shift {
             self.selection.extend_to(ix);

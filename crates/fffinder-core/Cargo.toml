@@ -20,7 +20,7 @@ plist = "1"
 # Directory walks for folder sizes, in parallel.
 rayon = "1"
 # Compress and Extract: zip, and gzipped tar archives.
-zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs", "chrono"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "chrono"] }
 tar = "0.4"
 flate2 = "1"
 # Free space on a volume, for the status bar.

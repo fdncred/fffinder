@@ -241,7 +241,7 @@ impl Finder {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     let already = this.selection.contains(ix);
                     if event.click_count >= 2
-                        || event.modifiers.secondary()
+                        || event.modifiers.secondary(cx)
                         || event.modifiers.shift
                         || !already
                     {
@@ -255,7 +255,7 @@ impl Finder {
                 // A plain click on one item of a multi-selection narrows to it.
                 let m = event.modifiers();
                 if event.click_count() == 1
-                    && !m.secondary()
+                    && !m.secondary(cx)
                     && !m.shift
                     && this.selection.len() > 1
                 {

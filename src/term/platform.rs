@@ -11,8 +11,8 @@ use futures::channel::oneshot;
 use gpui_kit::{
     Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
     ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Platform, PlatformDisplay,
-    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Task,
-    ThermalState, WindowAppearance, WindowParams,
+    PlatformInfo, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
+    PlatformWindow, Task, ThermalState, WindowAppearance, WindowParams,
 };
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
@@ -105,6 +105,10 @@ fn no_dialog<T>() -> oneshot::Receiver<Result<T>> {
 }
 
 impl Platform for TerminalPlatform {
+    fn platform_info(&self) -> PlatformInfo {
+        self.inner.platform_info()
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.inner.background_executor()
     }

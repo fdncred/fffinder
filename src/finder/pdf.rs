@@ -736,8 +736,8 @@ impl Finder {
             .flex()
             .justify_center()
             .child(div().flex_shrink_0().shadow_sm().child(sheet))
-            .on_scroll_wheel(move |event, window, cx| {
-                if !event.modifiers.secondary() {
+            .on_scroll(move |event, window, cx| {
+                if !event.modifiers.secondary(cx) {
                     return;
                 }
                 let lines = event.delta.pixel_delta(window.line_height()).y;
