@@ -63,10 +63,11 @@ fn find_mvhd(file: &mut File, end: u64, depth: u8) -> io::Result<Option<Duration
             0 => end - start,
             n => n,
         };
-        if size < 8 {
+        // A box can't be smaller than its header or run past the largest
+        // offset, which a damaged or crafted file may claim.
+        let Some(next) = start.checked_add(size).filter(|_| size >= 8) else {
             return Ok(None);
-        }
-        let next = start + size;
+        };
         match &kind {
             b"moov" if depth == 0 => return find_mvhd(file, next.min(end), 1),
             b"mvhd" => {
@@ -171,6 +172,18 @@ mod tests {
         file.extend(mp4_box(b"moov", &mp4_box(b"mvhd", &mvhd)));
         let path = temp("a.mp4", &file);
         assert_eq!(duration(&path), Some(Duration::from_secs(150)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_box_too_big_to_be_real_ends_the_walk() {
+        // A 64-bit size near the largest offset, then a `moov` that's never reached.
+        let mut file = 1u32.to_be_bytes().to_vec();
+        file.extend_from_slice(b"free");
+        file.extend_from_slice(&(u64::MAX - 4).to_be_bytes());
+        file.extend(mp4_box(b"moov", &[0u8; 8]));
+        let path = temp("huge.mp4", &file);
+        assert_eq!(duration(&path), None);
         let _ = std::fs::remove_file(path);
     }
 

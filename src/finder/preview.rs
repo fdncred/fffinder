@@ -64,9 +64,11 @@ pub enum Preview {
         text: SharedString,
     },
     /// A font file, drawn in its own type once `data` is loaded into the
-    /// text system.
+    /// text system, in the weight and style of the face it holds.
     Font {
         family: SharedString,
+        weight: FontWeight,
+        italic: bool,
         data: Option<Arc<Vec<u8>>>,
     },
     /// Audio or video, with its running time when the header says.
@@ -93,17 +95,27 @@ impl Preview {
     }
 }
 
-/// The family name stored in a font file.
-fn font_family(data: &[u8]) -> Option<String> {
+/// The family name stored in a font file, and its face's weight and
+/// whether it slants: `Inter-Bold.ttf` is Inter at 700, upright.
+fn font_face(data: &[u8]) -> Option<(String, FontWeight, bool)> {
     use ttf_parser::name_id::{FAMILY, TYPOGRAPHIC_FAMILY};
     let face = ttf_parser::Face::parse(data, 0).ok()?;
-    [TYPOGRAPHIC_FAMILY, FAMILY].into_iter().find_map(|id| {
+    let family = [TYPOGRAPHIC_FAMILY, FAMILY].into_iter().find_map(|id| {
         face.names()
             .into_iter()
             .find(|name| name.name_id == id && name.is_unicode())
             .and_then(|name| name.to_string())
-    })
+    })?;
+    let weight = FontWeight(f32::from(face.weight().to_number()));
+    Some((family, weight, face.is_italic() || face.is_oblique()))
 }
+
+/// Font files already given to the text system, which keeps every font it's
+/// given for good, by path and modification time.
+#[derive(Default)]
+struct LoadedFonts(std::collections::HashSet<(std::path::PathBuf, Option<std::time::SystemTime>)>);
+
+impl Global for LoadedFonts {}
 
 fn extension(entry: &FileEntry) -> String {
     entry
@@ -214,10 +226,12 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
     if matches!(ext.as_str(), "ttf" | "otf" | "ttc")
         && entry.size.unwrap_or(0) < FONT_LIMIT
         && let Ok(data) = std::fs::read(&entry.path)
-        && let Some(family) = font_family(&data)
+        && let Some((family, weight, italic)) = font_face(&data)
     {
         return Preview::Font {
             family: family.into(),
+            weight,
+            italic,
             data: Some(Arc::new(data)),
         };
     }
@@ -299,9 +313,14 @@ impl Finder {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                // A font is drawn in its own type once the text system has it.
+                // A font is drawn in its own type once the text system has
+                // it, which only needs to be told once.
                 if let Preview::Font { data, .. } = &mut preview
                     && let Some(bytes) = data.take()
+                    && cx
+                        .default_global::<LoadedFonts>()
+                        .0
+                        .insert((entry.path.clone(), entry.modified))
                 {
                     let bytes = Arc::unwrap_or_clone(bytes);
                     if let Err(err) = cx.text_system().add_fonts(vec![bytes.into()]) {
@@ -811,7 +830,12 @@ fn preview_body(
                     .size_full(),
             )
             .into_any_element(),
-        Preview::Font { family, .. } => {
+        Preview::Font {
+            family,
+            weight,
+            italic,
+            ..
+        } => {
             let samples = [
                 (text_size + 2., "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
                 (text_size + 2., "abcdefghijklmnopqrstuvwxyz"),
@@ -837,6 +861,8 @@ fn preview_body(
                 .children(samples.into_iter().map(|(size, sample)| {
                     div()
                         .font_family(family.clone())
+                        .font_weight(weight)
+                        .when(italic, |this| this.italic())
                         .text_size(ui(size))
                         .child(sample)
                 }))
@@ -1102,8 +1128,18 @@ mod tests {
         ];
         if let Some(font) = fonts.iter().find(|f| std::path::Path::new(f).is_file()) {
             match load(&FileEntry::from_path(font).unwrap()) {
-                Preview::Font { family, data } => {
+                Preview::Font {
+                    family,
+                    weight,
+                    italic,
+                    data,
+                } => {
                     assert!(!family.is_empty() && data.is_some());
+                    assert_eq!(
+                        (weight, italic),
+                        (gpui_kit::FontWeight::NORMAL, false),
+                        "a regular face"
+                    );
                 }
                 _ => panic!("a font shows itself"),
             }

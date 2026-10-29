@@ -191,6 +191,12 @@ impl Finder {
             open.update(cx, |_, window, _| window.remove_window()).ok();
             return;
         }
+        // Open but without a window yet: it opens after this update, and a
+        // second press before then means it shouldn't.
+        if self.quick_look_open {
+            self.quick_look_open = false;
+            return;
+        }
         let Some(entry) = self.primary_entry() else {
             return;
         };
@@ -218,6 +224,9 @@ impl Finder {
         // A new window draws its first frame at once, which reads this
         // browser, so it opens after this update.
         cx.defer(move |cx| {
+            if !finder.read(cx).quick_look_open {
+                return;
+            }
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| QuickLookWindow::new(&finder, finder_window, window, cx))
             });

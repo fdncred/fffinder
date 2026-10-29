@@ -30,6 +30,7 @@ impl GroupKey {
         GroupKey::Size,
     ];
 
+    /// The name the Group By menu shows: "Date Modified".
     pub fn label(self) -> &'static str {
         match self {
             GroupKey::Name => "Name",

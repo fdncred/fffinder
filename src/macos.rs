@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use fffinder_core::FileEntry;
 
+#[cfg(target_os = "macos")]
+use crate::system::SystemError;
+
 /// Colors as 0xRRGGBBAA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemColors {
@@ -182,7 +185,7 @@ mod imp {
     }
 
     /// A Finder alias is a bookmark written to a file.
-    pub fn make_alias(target: &Path, alias: &Path) -> Result<(), String> {
+    pub fn make_alias(target: &Path, alias: &Path) -> Result<(), SystemError> {
         use objc2_foundation::NSURLBookmarkCreationOptions;
         let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
         autoreleasepool(|_| {
@@ -192,14 +195,14 @@ mod imp {
                     None,
                     None,
                 )
-                .map_err(|e| e.localizedDescription().to_string())?;
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))?;
             NSURL::writeBookmarkData_toURL_options_error(&data, &url(alias), 0)
-                .map_err(|e| e.localizedDescription().to_string())
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))
         })
     }
 
     /// QuickLook writes the thumbnail itself and calls back when done.
-    pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+    pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), SystemError> {
         use objc2_foundation::NSError;
         use objc2_quick_look_thumbnailing::{
             QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
@@ -242,9 +245,24 @@ mod imp {
         });
         match rx.recv_timeout(Duration::from_secs(30)) {
             Ok(None) => Ok(()),
-            Ok(Some(message)) => Err(message),
-            Err(_) => Err("QuickLook didn’t answer".into()),
+            Ok(Some(message)) => Err(SystemError::Refused(message)),
+            Err(_) => Err(SystemError::NoAnswer("QuickLook")),
         }
+    }
+
+    pub fn trash_item(path: &Path) -> Result<PathBuf, SystemError> {
+        use objc2_foundation::NSFileManager;
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let mut landed = None;
+            NSFileManager::defaultManager()
+                .trashItemAtURL_resultingItemURL_error(&url, Some(&mut landed))
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))?;
+            landed
+                .and_then(|url| url.path())
+                .map(|p| PathBuf::from(p.to_string()))
+                .ok_or(SystemError::NoAnswer("The Trash"))
+        })
     }
 
     pub fn apps_for(path: &Path) -> Vec<PathBuf> {
@@ -260,7 +278,7 @@ mod imp {
 
     /// Launch Services answers on another thread, after the user confirms
     /// the change, so this waits for it.
-    pub fn set_default_app(app: &Path, file: &Path) -> Result<(), String> {
+    pub fn set_default_app(app: &Path, file: &Path) -> Result<(), SystemError> {
         use objc2_foundation::NSError;
         let (tx, rx) = std::sync::mpsc::channel();
         autoreleasepool(|_| {
@@ -280,8 +298,8 @@ mod imp {
         });
         match rx.recv_timeout(Duration::from_secs(300)) {
             Ok(None) => Ok(()),
-            Ok(Some(message)) => Err(message),
-            Err(_) => Err("macOS didn’t answer".into()),
+            Ok(Some(message)) => Err(SystemError::Refused(message)),
+            Err(_) => Err(SystemError::NoAnswer("macOS")),
         }
     }
 
@@ -476,15 +494,36 @@ pub fn default_app(path: &Path) -> Option<PathBuf> {
 }
 
 /// Make a Finder alias to `target` at `alias`.
+///
+/// # Errors
+///
+/// macOS's reason when the bookmark can't be made or written.
 #[cfg(target_os = "macos")]
-pub fn make_alias(target: &Path, alias: &Path) -> Result<(), String> {
+pub fn make_alias(target: &Path, alias: &Path) -> Result<(), SystemError> {
     imp::make_alias(target, alias)
 }
 
 /// Have QuickLook write a `px`-wide PNG thumbnail of `file` to `out`.
+///
+/// # Errors
+///
+/// QuickLook's reason when it can't draw the file, or
+/// [`SystemError::NoAnswer`] when it takes longer than 30 seconds.
 #[cfg(target_os = "macos")]
-pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), SystemError> {
     imp::save_thumbnail(file, px, out)
+}
+
+/// Move the item at `path` to its volume's Trash, in this process, so
+/// macOS doesn't ask to let fffinder control Finder. Returns where the item
+/// is now.
+///
+/// # Errors
+///
+/// macOS's reason when it can't, as when the volume has no Trash.
+#[cfg(target_os = "macos")]
+pub fn trash_item(path: &Path) -> Result<PathBuf, SystemError> {
+    imp::trash_item(path)
 }
 
 /// Every app Launch Services says can open the file at `path`.
@@ -494,8 +533,13 @@ pub fn apps_for(path: &Path) -> Vec<PathBuf> {
 }
 
 /// Make `app` the default for files of `file`'s type.
+///
+/// # Errors
+///
+/// Launch Services' reason, as when the user declines the change, or
+/// [`SystemError::NoAnswer`] after five minutes without one.
 #[cfg(target_os = "macos")]
-pub fn set_default_app(app: &Path, file: &Path) -> Result<(), String> {
+pub fn set_default_app(app: &Path, file: &Path) -> Result<(), SystemError> {
     imp::set_default_app(app, file)
 }
 

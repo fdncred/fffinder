@@ -3,6 +3,7 @@
 //! (Explorer's Open with list) opened through the shell, shortcuts, and
 //! the thumbnails Explorer shows.
 
+use crate::system::SystemError;
 use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, SIZE};
@@ -214,7 +215,12 @@ pub fn apps_for(path: &Path) -> Vec<(String, PathBuf, bool)> {
 
 /// Open `files` with the app whose program is `program`, through the shell,
 /// so Store apps open too; a program not in the list is run directly.
-pub fn open_with(program: &Path, files: &[PathBuf]) -> Result<(), String> {
+///
+/// # Errors
+///
+/// The shell's reason when a file can't be handed to the app, or the
+/// system's when the program can't be started.
+pub fn open_with(program: &Path, files: &[PathBuf]) -> Result<(), SystemError> {
     let Some(first) = files.first() else {
         return Ok(());
     };
@@ -223,44 +229,43 @@ pub fn open_with(program: &Path, files: &[PathBuf]) -> Result<(), String> {
         .find(|(_, _, p)| p.as_os_str().eq_ignore_ascii_case(program.as_os_str()))
         .map(|(handler, _, _)| handler);
     let Some(handler) = handler else {
+        // Windows reclaims a finished process itself, so it needn't be waited on.
         return std::process::Command::new(program)
             .args(files)
             .spawn()
             .map(drop)
-            .map_err(|e| e.to_string());
+            .map_err(SystemError::from);
     };
     for file in files {
         let name = HSTRING::from(file.as_os_str());
         // SAFETY: the item and its data object live until Invoke returns.
         unsafe {
-            let item: IShellItem =
-                SHCreateItemFromParsingName(&name, None).map_err(|e| e.message())?;
-            let data: IDataObject = item
-                .BindToHandler(None, &BHID_DataObject)
-                .map_err(|e| e.message())?;
-            handler.Invoke(&data).map_err(|e| e.message())?;
+            let item: IShellItem = SHCreateItemFromParsingName(&name, None)?;
+            let data: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
+            handler.Invoke(&data)?;
         }
     }
     Ok(())
 }
 
 /// An Explorer shortcut (`.lnk`) at `link` that opens `target`.
-pub fn make_shortcut(target: &Path, link: &Path) -> Result<(), String> {
+///
+/// # Errors
+///
+/// The shell's reason when the shortcut can't be made or saved.
+pub fn make_shortcut(target: &Path, link: &Path) -> Result<(), SystemError> {
     com();
     // SAFETY: the shell link object lives until it's saved.
     unsafe {
-        let shortcut: IShellLinkW =
-            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message())?;
-        shortcut
-            .SetPath(&HSTRING::from(target.as_os_str()))
-            .map_err(|e| e.message())?;
+        let shortcut: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        shortcut.SetPath(&HSTRING::from(target.as_os_str()))?;
         if let Some(dir) = target.parent() {
             let _ = shortcut.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()));
         }
-        let file: IPersistFile = shortcut.cast().map_err(|e| e.message())?;
-        file.Save(&HSTRING::from(link.as_os_str()), true)
-            .map_err(|e| e.message())
+        let file: IPersistFile = shortcut.cast()?;
+        file.Save(&HSTRING::from(link.as_os_str()), true)?;
     }
+    Ok(())
 }
 
 /// A bitmap's pixels as top-down RGBA rows, and its size.
@@ -327,31 +332,31 @@ fn bitmap_rgba(bitmap: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
 
 /// Save the thumbnail Explorer would show for `file`, about `px` across,
 /// as a PNG at `out`. Types with no thumbnail handler have none.
-pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), String> {
+///
+/// # Errors
+///
+/// The shell's reason when it has no thumbnail for the file, or the reason
+/// the PNG couldn't be written.
+pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), SystemError> {
     com();
     let name = HSTRING::from(file.as_os_str());
     // SAFETY: the image factory lives until GetImage returns, and the
     // bitmap it returns is ours to delete.
     let (width, height, pixels) = unsafe {
-        let factory: IShellItemImageFactory =
-            SHCreateItemFromParsingName(&name, None).map_err(|e| e.message())?;
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&name, None)?;
         let size = SIZE {
             cx: px as i32,
             cy: px as i32,
         };
-        let bitmap = factory
-            .GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK)
-            .map_err(|e| e.message())?;
+        let bitmap = factory.GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK)?;
         let rgba = bitmap_rgba(bitmap);
         let _ = DeleteObject(HGDIOBJ(bitmap.0));
-        rgba.ok_or("Windows returned an empty thumbnail")?
+        rgba.ok_or_else(|| SystemError::Refused("Windows returned an empty thumbnail".into()))?
     };
-    let file = std::fs::File::create(out).map_err(|e| e.to_string())?;
+    let file = std::fs::File::create(out)?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .and_then(|mut writer| writer.write_image_data(&pixels))
-        .map_err(|e| e.to_string())
+    encoder.write_header()?.write_image_data(&pixels)?;
+    Ok(())
 }

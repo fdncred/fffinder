@@ -702,11 +702,11 @@ impl Finder {
         let cells = self.config.list_columns.iter().map(|setting| {
             let text = match setting.column {
                 ListColumn::Modified => row.date.clone(),
-                ListColumn::Created => row.created.clone(),
-                ListColumn::LastOpened => row.opened.clone(),
+                ListColumn::Created => row.created(),
+                ListColumn::LastOpened => row.opened(),
                 ListColumn::Size => row.size.clone(),
                 ListColumn::Kind => row.kind.clone(),
-                ListColumn::Permissions => row.permissions.clone(),
+                ListColumn::Permissions => row.permissions(),
                 ListColumn::Git => row.git.clone(),
             };
             div()

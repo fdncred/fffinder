@@ -22,6 +22,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The open Get Info panel.
 pub(super) struct InfoPanel {
+    /// What it's about; `items` is read from these in the background.
+    paths: Vec<PathBuf>,
+    /// Empty until read.
     items: Vec<Info>,
     /// What the selected folders hold; `None` while it's being added up.
     folders: Option<FolderSize>,
@@ -62,6 +65,8 @@ fn size_text(bytes: u64) -> String {
 
 impl Finder {
     /// Cmd+I: show Get Info for the selection, or for the folder shown.
+    /// Everything is read in the background: the items first, then their
+    /// folder sizes and default app, filling in as they arrive.
     pub(super) fn get_info(&mut self, _: &GetInfo, window: &mut Window, cx: &mut Context<Self>) {
         let mut paths: Vec<PathBuf> = self
             .selected_entries()
@@ -71,39 +76,63 @@ impl Finder {
         if paths.is_empty() {
             paths.extend(self.current_folder().map(Path::to_path_buf));
         }
-        let items: Vec<Info> = paths.iter().filter_map(|p| info::read(p).ok()).collect();
-        if items.is_empty() {
+        if paths.is_empty() {
             return;
         }
-        let folders: Vec<PathBuf> = items
-            .iter()
-            .filter(|i| i.is_dir)
-            .map(|i| i.path.clone())
-            .collect();
-        let single_file = match items.as_slice() {
-            [one] if !one.is_dir => Some(one.path.clone()),
-            _ => None,
-        };
         let stop = Arc::new(AtomicBool::new(false));
         self.info = Some(InfoPanel {
-            folders: folders.is_empty().then(FolderSize::default),
-            items,
+            paths: paths.clone(),
+            items: Vec::new(),
+            folders: None,
             opens_with: None,
             stop: stop.clone(),
         });
         cx.spawn_in(window, async move |this, cx| {
+            let items: Vec<Info> = cx
+                .background_spawn(async move {
+                    paths.iter().filter_map(|p| info::read(p).ok()).collect()
+                })
+                .await;
+            let folders: Vec<PathBuf> = items
+                .iter()
+                .filter(|i| i.is_dir)
+                .map(|i| i.path.clone())
+                .collect();
+            let single_file = match items.as_slice() {
+                [one] if !one.is_dir => Some(one.path.clone()),
+                _ => None,
+            };
+            let stop = this
+                .update_in(cx, |this, window, cx| {
+                    let panel = this.info_panel(&stop)?;
+                    if items.is_empty() {
+                        this.info = None;
+                        window.close_dialog(cx);
+                        return None;
+                    }
+                    panel.folders = folders.is_empty().then(FolderSize::default);
+                    panel.items = items;
+                    window.refresh();
+                    Some(panel.stop.clone())
+                })
+                .ok()
+                .flatten();
+            let Some(stop) = stop else {
+                return;
+            };
+            let walk = stop.clone();
             let (sizes, opens_with) = cx
                 .background_spawn(async move {
                     let opens_with = single_file.and_then(|p| crate::system::default_app_name(&p));
                     let sizes = folders
                         .iter()
-                        .map(|f| info::folder_size(f, &stop))
+                        .map(|f| info::folder_size(f, &walk))
                         .fold(FolderSize::default(), |a, b| a + b);
                     (sizes, opens_with)
                 })
                 .await;
             this.update_in(cx, |this, window, _| {
-                if let Some(panel) = &mut this.info {
+                if let Some(panel) = this.info_panel(&stop) {
                     panel.folders = Some(sizes);
                     panel.opens_with = opens_with;
                     window.refresh();
@@ -115,6 +144,14 @@ impl Finder {
         self.open_info_dialog(window, cx);
     }
 
+    /// The open panel, if it's the one `stop` was made for: a task only
+    /// fills in its own, which a newer Get Info may have replaced.
+    fn info_panel(&mut self, stop: &Arc<AtomicBool>) -> Option<&mut InfoPanel> {
+        self.info
+            .as_mut()
+            .filter(|panel| Arc::ptr_eq(&panel.stop, stop))
+    }
+
     fn open_info_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_before_dialog(window, cx);
         let view = cx.entity();
@@ -123,11 +160,16 @@ impl Finder {
             let Some(panel) = &finder.info else {
                 return dialog;
             };
-            let title = match panel.items.as_slice() {
-                [one] => format!("{} Info", one.name),
+            let title = match panel.paths.as_slice() {
+                [one] => format!("{} Info", fffinder_core::entry::display_name(one)),
                 many => format!("{} Items", many.len()),
             };
             let body = match panel.items.as_slice() {
+                [] => div()
+                    .text_size(ui(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Reading…")
+                    .into_any_element(),
                 [one] => single_item(one, panel, &view, window, cx).into_any_element(),
                 many => several_items(many, panel, cx).into_any_element(),
             };

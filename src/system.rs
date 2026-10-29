@@ -4,12 +4,49 @@
 //! (GPUI's test platform doesn't implement the first two at all.) Files
 //! copied to the clipboard live here too.
 
+use fffinder_core::servers::ServerError;
 use fffinder_core::terminals::Plan;
 use gpui_kit::{App, AppContext as _, ClipboardEntry, ClipboardItem, Global, Task};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+/// Why the system (AppKit, QuickLook, Launch Services, the Windows shell)
+/// didn't do what it was asked.
+#[derive(Debug, thiserror::Error)]
+pub enum SystemError {
+    /// The system's own description of what went wrong.
+    #[error("{0}")]
+    Refused(String),
+    /// The part of the system named didn't answer in time.
+    #[error("{0} didn’t answer")]
+    NoAnswer(&'static str),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[cfg(windows)]
+    #[error("{}", .0.message())]
+    Windows(#[from] windows::core::Error),
+    #[cfg(windows)]
+    #[error(transparent)]
+    Png(#[from] png::EncodingError),
+}
+
+/// Why Connect to Server couldn't open a server.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error(transparent)]
+    Address(#[from] ServerError),
+    /// This system can't mount this kind of server; what to do instead.
+    #[error("{0}")]
+    Unsupported(&'static str),
+    /// The system's mounting tool failed, with its own message.
+    #[error(transparent)]
+    Mount(#[from] std::io::Error),
+    /// The server was mounted, or seemed to be, but where isn't known.
+    #[error("{0}")]
+    NoMountPoint(String),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemCall {
@@ -126,11 +163,29 @@ pub(crate) fn xdg_query(args: &[&std::ffi::OsStr]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// A file's MIME type: from its extension in shared-mime-info's database
+/// when it has a known one, which needs no process, or else from
+/// `xdg-mime`, which looks inside it. It may start a process, so call it
+/// off the UI thread.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(crate) fn mime_type(path: &Path) -> Option<String> {
+    use fffinder_core::thumbnailers;
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static GLOBS: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let globs = GLOBS.get_or_init(|| thumbnailers::mime_globs(&thumbnailers::data_dirs()));
+    let name = path.file_name()?.to_string_lossy();
+    match thumbnailers::mime_for_name(globs, &name) {
+        Some(mime) => Some(mime.to_string()),
+        None => xdg_query(&["filetype".as_ref(), path.as_os_str()]).filter(|m| !m.is_empty()),
+    }
+}
+
 /// The `.desktop` entry set to open the file's type: `Some(None)` when the
 /// type has none, `None` when `xdg-mime` can't tell.
 #[cfg(not(any(target_os = "macos", windows)))]
 fn xdg_default_entry(path: &Path) -> Option<Option<String>> {
-    let mime = xdg_query(&["filetype".as_ref(), path.as_os_str()]).filter(|m| !m.is_empty())?;
+    let mime = mime_type(path)?;
     let entry = xdg_query(&["default".as_ref(), mime.as_ref()])?;
     Some((!entry.is_empty()).then_some(entry))
 }
@@ -341,11 +396,13 @@ pub fn eject(path: &Path, cx: &mut App) -> Task<std::io::Result<()>> {
 }
 
 /// Mount the server at `address` the way the system does, and say where.
-pub fn connect(address: &str, cx: &mut App) -> Task<Result<PathBuf, String>> {
+pub fn connect(address: &str, cx: &mut App) -> Task<Result<PathBuf, ConnectError>> {
     if let Some(recorder) = cx.try_global::<Recorder>() {
         recorder.record(SystemCall::Connect(address.into()));
         let mounted = recorder.mount_point.borrow().clone();
-        return Task::ready(mounted.ok_or_else(|| "The server didn’t answer".to_string()));
+        return Task::ready(
+            mounted.ok_or_else(|| ConnectError::NoMountPoint("The server didn’t answer".into())),
+        );
     }
     let server = fffinder_core::servers::Server::parse(address);
     cx.background_spawn(async move { volumes::connect(&server?) })
@@ -368,7 +425,7 @@ fn run(command: &mut std::process::Command) -> std::io::Result<String> {
 
 #[cfg(target_os = "macos")]
 mod volumes {
-    use super::run;
+    use super::{ConnectError, run};
     use fffinder_core::servers::Server;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -383,23 +440,22 @@ mod volumes {
 
     /// AppleScript's `mount volume` asks for a password in the system's own
     /// dialog when the server needs one, and keeps it in the keychain.
-    pub fn connect(server: &Server) -> Result<PathBuf, String> {
-        let url = server.mac_url().ok_or(
+    pub fn connect(server: &Server) -> Result<PathBuf, ConnectError> {
+        let url = server.mac_url().ok_or(ConnectError::Unsupported(
             "macOS can’t mount SFTP servers itself. Mount them with a tool such as macFUSE’s sshfs, then open the folder.",
-        )?;
+        ))?;
         let out = run(Command::new("osascript")
             .args(["-e", "on run argv"])
             .args(["-e", "return POSIX path of (mount volume (item 1 of argv))"])
             .args(["-e", "end run"])
-            .arg(url))
-        .map_err(|e| e.to_string())?;
+            .arg(url))?;
         Ok(PathBuf::from(out.trim()))
     }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod volumes {
-    use super::run;
+    use super::{ConnectError, run};
     use fffinder_core::servers::{Server, gio_local_path};
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -414,24 +470,26 @@ mod volumes {
     /// `gio mount` mounts under `$XDG_RUNTIME_DIR/gvfs`, and `gio info`
     /// says where. Passwords come from the keyring, since there's no
     /// terminal to ask in.
-    pub fn connect(server: &Server) -> Result<PathBuf, String> {
-        let uri = server
-            .gio_uri()
-            .ok_or("This kind of server isn’t supported")?;
+    pub fn connect(server: &Server) -> Result<PathBuf, ConnectError> {
+        let uri = server.gio_uri().ok_or(ConnectError::Unsupported(
+            "This kind of server isn’t supported",
+        ))?;
         // Already mounted is fine.
         let mounted = run(Command::new("gio").args(["mount", &uri]));
         let info = run(Command::new("gio").args(["info", &uri]));
         match (gio_local_path(info.as_deref().unwrap_or_default()), mounted) {
             (Some(path), _) => Ok(path),
-            (None, Err(err)) => Err(err.to_string()),
-            (None, Ok(_)) => Err("GIO mounted the server but didn’t say where".into()),
+            (None, Err(err)) => Err(err.into()),
+            (None, Ok(_)) => Err(ConnectError::NoMountPoint(
+                "GIO mounted the server but didn’t say where".into(),
+            )),
         }
     }
 }
 
 #[cfg(windows)]
 mod volumes {
-    use super::run;
+    use super::{ConnectError, run};
     use fffinder_core::servers::{Server, net_use_drive};
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -456,21 +514,24 @@ mod volumes {
 
     /// File shares open as `\\server\share` paths; WebDAV gets a drive
     /// letter from `net use`.
-    pub fn connect(server: &Server) -> Result<PathBuf, String> {
+    pub fn connect(server: &Server) -> Result<PathBuf, ConnectError> {
         if let Some(unc) = server.unc_path() {
             let path = PathBuf::from(unc);
             return match path.is_dir() {
                 true => Ok(path),
-                false => Err(format!("{} can’t be reached", path.display())),
+                false => Err(ConnectError::NoMountPoint(format!(
+                    "{} can’t be reached",
+                    path.display()
+                ))),
             };
         }
-        let url = server
-            .webdav_url()
-            .ok_or("Windows can connect to SMB file shares and WebDAV servers")?;
-        let out = run(Command::new("net").args(["use", "*", &url])).map_err(|e| e.to_string())?;
-        net_use_drive(&out)
-            .map(PathBuf::from)
-            .ok_or_else(|| format!("net use didn’t say which drive it used: {out}"))
+        let url = server.webdav_url().ok_or(ConnectError::Unsupported(
+            "Windows can connect to SMB file shares and WebDAV servers",
+        ))?;
+        let out = run(Command::new("net").args(["use", "*", &url]))?;
+        net_use_drive(&out).map(PathBuf::from).ok_or_else(|| {
+            ConnectError::NoMountPoint(format!("net use didn’t say which drive it used: {out}"))
+        })
     }
 }
 

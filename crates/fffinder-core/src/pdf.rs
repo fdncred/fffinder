@@ -53,6 +53,7 @@ impl PdfDocument {
         Ok(PdfDocument { pdf })
     }
 
+    /// How many pages the document has.
     pub fn page_count(&self) -> usize {
         self.pdf.pages().len()
     }

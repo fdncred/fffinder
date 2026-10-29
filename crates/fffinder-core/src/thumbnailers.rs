@@ -3,7 +3,7 @@
 //! command each one runs.
 
 use crate::terminals::exec_words;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// One installed thumbnailer.
@@ -99,6 +99,59 @@ fn on_path(program: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
+/// MIME types by file extension, from the `mime/globs2` files of
+/// shared-mime-info in `data_dirs`: the database `xdg-mime` reads, so
+/// thumbnailers and apps agree on the names. A folder earlier in the list
+/// wins over later ones, and within one, a higher weight wins. Only plain
+/// `*.ext` patterns are read; anything else is left to `xdg-mime`.
+pub fn mime_globs(data_dirs: &[PathBuf]) -> HashMap<String, String> {
+    // Each extension's type, with the folder and weight it came from.
+    let mut found: HashMap<String, (String, usize, u32)> = HashMap::new();
+    for (rank, dir) in data_dirs.iter().enumerate() {
+        let Ok(text) = std::fs::read_to_string(dir.join("mime/globs2")) else {
+            continue;
+        };
+        for (weight, mime, ext) in text.lines().filter_map(parse_glob) {
+            let better = found
+                .get(ext)
+                .is_none_or(|&(_, r, w)| r == rank && weight > w);
+            if better {
+                found.insert(ext.to_string(), (mime.to_string(), rank, weight));
+            }
+        }
+    }
+    found
+        .into_iter()
+        .map(|(ext, (mime, _, _))| (ext, mime))
+        .collect()
+}
+
+/// `50:text/x-csrc:*.c` → (50, `text/x-csrc`, `c`), for plain `*.ext`
+/// patterns that ignore case (the usual kind).
+fn parse_glob(line: &str) -> Option<(u32, &str, &str)> {
+    if line.starts_with('#') {
+        return None;
+    }
+    let mut fields = line.split(':');
+    let weight = fields.next()?.parse().ok()?;
+    let mime = fields.next()?;
+    let ext = fields.next()?.strip_prefix("*.")?;
+    let case_sensitive = fields
+        .next()
+        .is_some_and(|flags| flags.split(',').any(|f| f == "cs"));
+    let plain = !ext.is_empty() && !ext.contains(['*', '?', '[']) && ext == ext.to_lowercase();
+    (plain && !case_sensitive).then_some((weight, mime, ext))
+}
+
+/// The MIME type `globs` gives a file's name: its longest extension first,
+/// so `a.tar.gz` is a gzipped tar before it's a gzip file.
+pub fn mime_for_name<'a>(globs: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
+    let name = name.to_lowercase();
+    name.match_indices('.')
+        .find_map(|(dot, _)| globs.get(&name[dot + 1..]))
+        .map(String::as_str)
+}
+
 /// The first thumbnailer that draws `mime`.
 pub fn for_mime<'a>(thumbnailers: &'a [Thumbnailer], mime: &str) -> Option<&'a Thumbnailer> {
     thumbnailers
@@ -138,6 +191,40 @@ pub fn command(exec: &str, input: &Path, output: &Path, size: u32) -> Vec<String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_mime_globs() {
+        let base = std::env::temp_dir().join(format!("fffinder-globs-{}", std::process::id()));
+        let (home, shared) = (base.join("home"), base.join("shared"));
+        for dir in [&home, &shared] {
+            std::fs::create_dir_all(dir.join("mime")).unwrap();
+        }
+        std::fs::write(
+            shared.join("mime/globs2"),
+            "# a comment\n50:application/pdf:*.pdf\n50:application/gzip:*.gz\n\
+             50:application/x-compressed-tar:*.tar.gz\n50:text/x-c:*.C:cs\n\
+             50:text/x-readme:README*\n10:image/x-weak:*.png\n50:image/png:*.png\n",
+        )
+        .unwrap();
+        std::fs::write(home.join("mime/globs2"), "5:application/x-mine:*.pdf\n").unwrap();
+        let globs = super::mime_globs(&[home, shared]);
+        let mime = |name| super::mime_for_name(&globs, name);
+        assert_eq!(
+            mime("a.PDF"),
+            Some("application/x-mine"),
+            "the first folder wins"
+        );
+        assert_eq!(
+            mime("photo.png"),
+            Some("image/png"),
+            "the higher weight wins"
+        );
+        assert_eq!(mime("pack.tar.gz"), Some("application/x-compressed-tar"));
+        assert_eq!(mime("notes.gz"), Some("application/gzip"));
+        assert_eq!(mime("main.C"), None, "case-sensitive patterns are left out");
+        assert_eq!(mime("README"), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     use super::*;
 
     #[test]

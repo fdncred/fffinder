@@ -59,7 +59,7 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 log.workspace = true
-trash = "5"
+thiserror.workspace = true
 # Hands control-socket requests to the UI thread.
 async-channel = "2"
 # Code previews: grammars and themes for syntax highlighting, in pure Rust.
@@ -93,6 +93,15 @@ objc2-app-kit = "0.3"
 block2 = "0.6"
 # Thumbnails of PDFs, videos, and every other type macOS understands.
 objc2-quick-look-thumbnailing = "0.3"
+
+# Linux and Windows: the system trash. macOS uses NSFileManager directly, which
+# says where each item went.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+trash = "5"
+
+# Linux: a thumbnailer that hangs is stopped after a while.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wait-timeout = "0.2"
 
 # Windows: files on the clipboard, Open With, shortcuts, and thumbnails, as
 # Explorer has them. `png` saves the thumbnails.

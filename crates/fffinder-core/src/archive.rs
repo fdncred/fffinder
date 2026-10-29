@@ -3,20 +3,19 @@
 //! Utility does. Both report progress and stop when asked. Nothing is left
 //! half made: the work happens under a hidden name and is renamed at the end.
 
-use crate::ops::{Progress, TransferError, free_name, numbered_name, remove_any, tree_size};
+use crate::ops::{
+    Progress, TransferError, free_name, io_error, make_symlink, numbered_name, remove_any,
+    sized_while, staging_path,
+};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
 const CHUNK: usize = 256 * 1024;
-
-fn io_error(path: &Path) -> impl FnOnce(io::Error) -> TransferError + '_ {
-    move |source| TransferError::Io {
-        path: path.to_path_buf(),
-        source,
-    }
-}
+/// A gzipped tar is listed by reading through it, so a preview stops after
+/// this many unpacked bytes and says there's more.
+const LIST_BYTES: u64 = 64 * 1024 * 1024;
 
 fn zip_error(path: &Path) -> impl FnOnce(zip::result::ZipError) -> TransferError + '_ {
     move |err| TransferError::Io {
@@ -58,11 +57,6 @@ fn stem(path: &Path) -> String {
     name[..name.len() - cut].to_string()
 }
 
-/// A hidden name in `dir` for work in progress.
-fn staging(dir: &Path, name: &str) -> PathBuf {
-    dir.join(format!(".{name}.fffinder-{}", std::process::id()))
-}
-
 /// Where Compress puts its zip: "name.zip" for one item, "Archive.zip"
 /// for several, numbered when the name is taken.
 pub fn zip_path(sources: &[PathBuf]) -> Option<PathBuf> {
@@ -81,11 +75,10 @@ pub fn zip_path(sources: &[PathBuf]) -> Option<PathBuf> {
 /// Put `sources` (files and folders, which share a parent) into a new zip
 /// at `zip`. Links are stored as links.
 pub fn compress(sources: &[PathBuf], zip: &Path, progress: &Progress) -> Result<(), TransferError> {
-    let dir = zip.parent().unwrap_or(Path::new("."));
-    let temp = staging(dir, &crate::entry::display_name(zip));
-    progress.expect(sources.iter().map(|s| tree_size(s)).sum());
-    let result = (|| {
-        let file = File::create_new(&temp).map_err(io_error(&temp))?;
+    let temp = staging_path(zip);
+    // Only what this job made is removed when it fails.
+    let file = File::create_new(&temp).map_err(io_error(&temp))?;
+    let result = sized_while(sources, progress, || {
         let mut writer = zip::ZipWriter::new(file);
         for source in sources {
             progress.set_current(crate::entry::display_name(source));
@@ -94,7 +87,7 @@ pub fn compress(sources: &[PathBuf], zip: &Path, progress: &Progress) -> Result<
         }
         writer.finish().map_err(zip_error(&temp))?;
         fs::rename(&temp, zip).map_err(io_error(zip))
-    })();
+    });
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
@@ -203,9 +196,14 @@ pub struct Listed {
     pub is_dir: bool,
 }
 
-/// The first `limit` items in an archive, and whether there are more. Tar
-/// archives are read in order, so a big one only as far as needed.
+/// The first `limit` items in an archive, and whether there are more. A
+/// plain tar skips over what its items hold; a gzipped one has to be read
+/// through, so it's read only as far as needed and at most [`LIST_BYTES`].
 pub fn list(path: &Path, limit: usize) -> io::Result<(Vec<Listed>, bool)> {
+    list_within(path, limit, LIST_BYTES)
+}
+
+fn list_within(path: &Path, limit: usize, max_bytes: u64) -> io::Result<(Vec<Listed>, bool)> {
     let file = File::open(path)?;
     match format(path) {
         Some(Format::Zip) => {
@@ -222,34 +220,52 @@ pub fn list(path: &Path, limit: usize) -> io::Result<(Vec<Listed>, bool)> {
                 .collect();
             Ok((listed, zip.len() > limit))
         }
-        Some(Format::Tar | Format::TarGz) => {
-            let reader: Box<dyn Read> = if format(path) == Some(Format::TarGz) {
-                Box::new(flate2::read::GzDecoder::new(io::BufReader::new(file)))
-            } else {
-                Box::new(io::BufReader::new(file))
-            };
-            let mut tar = tar::Archive::new(reader);
+        Some(Format::Tar) => {
+            let mut tar = tar::Archive::new(io::BufReader::new(file));
             let mut listed = Vec::new();
-            for entry in tar.entries()? {
-                if listed.len() == limit {
-                    return Ok((listed, true));
-                }
-                let entry = entry?;
-                let header = entry.header();
-                listed.push(Listed {
-                    name: entry
-                        .path()?
-                        .to_string_lossy()
-                        .trim_end_matches('/')
-                        .to_string(),
-                    size: header.size().unwrap_or(0),
-                    is_dir: header.entry_type().is_dir(),
-                });
+            let more = list_tar(tar.entries_with_seek()?, limit, &mut listed)?;
+            Ok((listed, more))
+        }
+        Some(Format::TarGz) => {
+            let unpacked = flate2::read::GzDecoder::new(io::BufReader::new(file)).take(max_bytes);
+            let mut tar = tar::Archive::new(unpacked);
+            let mut listed = Vec::new();
+            let more = list_tar(tar.entries()?, limit, &mut listed);
+            match more {
+                Ok(more) => Ok((listed, more)),
+                // Running out of bytes to read means the cap was reached.
+                Err(_) if tar.into_inner().limit() == 0 => Ok((listed, true)),
+                Err(err) => Err(err),
             }
-            Ok((listed, false))
         }
         None => Err(io::Error::other("not a zip or tar archive")),
     }
+}
+
+/// Add tar items to `listed` until it holds `limit`; returns whether there
+/// are more.
+fn list_tar<R: Read>(
+    entries: tar::Entries<'_, R>,
+    limit: usize,
+    listed: &mut Vec<Listed>,
+) -> io::Result<bool> {
+    for entry in entries {
+        if listed.len() == limit {
+            return Ok(true);
+        }
+        let entry = entry?;
+        let header = entry.header();
+        listed.push(Listed {
+            name: entry
+                .path()?
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string(),
+            size: header.size().unwrap_or(0),
+            is_dir: header.entry_type().is_dir(),
+        });
+    }
+    Ok(false)
 }
 
 /// Unpack an archive beside itself. One item at the top of the archive
@@ -262,8 +278,10 @@ pub fn extract(archive: &Path, progress: &Progress) -> Result<PathBuf, TransferE
     })?;
     let dir = archive.parent().unwrap_or(Path::new("."));
     let name = stem(archive);
-    let temp = staging(dir, &name);
+    let temp = staging_path(&dir.join(&name));
     progress.set_current(crate::entry::display_name(archive));
+    // Only what this job made is removed when it fails.
+    fs::create_dir(&temp).map_err(io_error(&temp))?;
     let unpacked = match format {
         Format::Zip => extract_zip(archive, &temp, progress),
         Format::Tar | Format::TarGz => extract_tar(archive, format, &temp, progress),
@@ -308,7 +326,7 @@ fn extract_zip(archive: &Path, into: &Path, progress: &Progress) -> Result<(), T
             .filter_map(|i| zip.by_index_raw(i).ok().map(|f| f.size()))
             .sum(),
     );
-    fs::create_dir(into).map_err(io_error(into))?;
+    progress.counted();
     // Links come last, so no file is written through one.
     let mut links = Vec::new();
     for i in 0..zip.len() {
@@ -341,19 +359,11 @@ fn extract_zip(archive: &Path, into: &Path, progress: &Progress) -> Result<(), T
         }
     }
     for (link, target) in links {
-        make_link(&target, &link).map_err(io_error(&link))?;
+        // Everything else is unpacked by now, so a link to a folder can tell.
+        let is_dir = link.parent().is_some_and(|dir| dir.join(&target).is_dir());
+        make_symlink(&target, &link, is_dir).map_err(io_error(&link))?;
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn make_link(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn make_link(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_file(target, link)
 }
 
 fn extract_tar(
@@ -364,6 +374,7 @@ fn extract_tar(
 ) -> Result<(), TransferError> {
     let file = File::open(archive).map_err(io_error(archive))?;
     progress.expect(file.metadata().map(|m| m.len()).unwrap_or(0));
+    progress.counted();
     let counted = Counted {
         inner: io::BufReader::new(file),
         progress,
@@ -372,7 +383,6 @@ fn extract_tar(
         Format::TarGz => Box::new(flate2::read::GzDecoder::new(counted)),
         Format::Tar | Format::Zip => Box::new(counted),
     };
-    fs::create_dir(into).map_err(io_error(into))?;
     let mut tar = tar::Archive::new(reader);
     tar.set_preserve_mtime(true);
     for entry in tar.entries().map_err(io_error(archive))? {
@@ -479,6 +489,71 @@ mod tests {
         );
         assert!(!more && listed[0].is_dir && listed[1].size == 5);
         assert!(list(&zip, 2).unwrap().1, "more than the limit");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_a_gzipped_tar_only_so_far() {
+        let dir = temp("list-cap");
+        fs::write(dir.join("folder/big.bin"), vec![7u8; 256 * 1024]).unwrap();
+        let tgz = dir.join("pack.tgz");
+        let gz = flate2::write::GzEncoder::new(File::create(&tgz).unwrap(), Default::default());
+        let mut builder = tar::Builder::new(gz);
+        builder
+            .append_path_with_name(dir.join("c.txt"), "c.txt")
+            .unwrap();
+        builder
+            .append_path_with_name(dir.join("folder/big.bin"), "big.bin")
+            .unwrap();
+        builder
+            .append_path_with_name(dir.join("c.txt"), "last.txt")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let (all, more) = list(&tgz, 10).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(!more);
+        // The cap falls inside the big item: what came before it is listed.
+        let (some, more) = list_within(&tgz, 10, 64 * 1024).unwrap();
+        let names: Vec<&str> = some.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["c.txt", "big.bin"]);
+        assert!(more);
+
+        let plain = dir.join("pack.tar");
+        let mut builder = tar::Builder::new(File::create(&plain).unwrap());
+        builder
+            .append_path_with_name(dir.join("folder/big.bin"), "big.bin")
+            .unwrap();
+        builder
+            .append_path_with_name(dir.join("c.txt"), "c.txt")
+            .unwrap();
+        builder.finish().unwrap();
+        let (listed, more) = list(&plain, 1).unwrap();
+        assert_eq!(listed[0].name, "big.bin");
+        assert!(more);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archives_with_one_name_extract_at_once() {
+        let dir = temp("same-name");
+        let zip = dir.join("a.zip");
+        compress(&[dir.join("folder")], &zip, &Progress::default()).unwrap();
+        let tgz = dir.join("a.tar.gz");
+        let gz = flate2::write::GzEncoder::new(File::create(&tgz).unwrap(), Default::default());
+        let mut builder = tar::Builder::new(gz);
+        builder.append_dir_all("pack", dir.join("folder")).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        // Both work under a hidden name made from "a"; neither may take or
+        // remove the other's.
+        let (one, two) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| extract(&zip, &Progress::default()));
+            let two = scope.spawn(|| extract(&tgz, &Progress::default()));
+            (one.join().unwrap(), two.join().unwrap())
+        });
+        assert_eq!(one.unwrap(), dir.join("folder 2"));
+        assert_eq!(two.unwrap(), dir.join("pack"));
         let _ = fs::remove_dir_all(&dir);
     }
 

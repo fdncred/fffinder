@@ -1,15 +1,62 @@
 //! The Trash: moving items there, listing what's in it, putting items back,
-//! and deleting them for good. On macOS, Finder does the trashing, so its
-//! own Put Back still works, and it tells fffinder where each item went.
-//! Linux and Windows use the system trash through the `trash` crate. UI
-//! tests install a [`FolderBin`] instead, so they never touch the real Trash.
+//! and deleting them for good. On macOS, NSFileManager does the trashing in
+//! this process, so macOS never asks to let fffinder control Finder, and it
+//! says where each item went. Linux and Windows use the system trash through
+//! the `trash` crate. UI tests install a [`FolderBin`] instead, so they never
+//! touch the real Trash.
 
-use fffinder_core::ops;
+use fffinder_core::ops::{self, TransferError};
 use gpui_kit::{App, Global};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+
+/// Why the Trash couldn't do something.
+#[derive(Debug, thiserror::Error)]
+pub enum TrashError {
+    /// The item's name; where it was before it was trashed isn't known.
+    #[error("fffinder doesn’t know where “{0}” came from")]
+    UnknownOrigin(String),
+    /// The item's name; the folder it was in is gone.
+    #[error("The folder “{0}” was in no longer exists")]
+    FolderGone(String),
+    #[error("An item named “{name}” is already in “{folder}”")]
+    Taken { name: String, folder: String },
+    #[error(
+        "fffinder needs Full Disk Access to show the Trash. Turn it on in System Settings › Privacy & Security, then reopen fffinder."
+    )]
+    NeedsFullDiskAccess,
+    #[error("There is no home folder")]
+    NoHome,
+    /// The system Trash (NSFileManager, or the `trash` crate) refused, with
+    /// its own message.
+    #[error("{0}")]
+    Refused(String),
+    #[error(transparent)]
+    Transfer(#[from] TransferError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// A move to the Trash that stopped part way: the items that went, and why
+/// the rest didn't.
+#[derive(Debug, thiserror::Error)]
+#[error("{error}")]
+pub struct TrashStopped {
+    pub trashed: Vec<Trashed>,
+    #[source]
+    pub error: TrashError,
+}
+
+impl From<TrashError> for TrashStopped {
+    fn from(error: TrashError) -> TrashStopped {
+        TrashStopped {
+            trashed: Vec::new(),
+            error,
+        }
+    }
+}
 
 /// An item in the Trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,36 +79,59 @@ impl Trashed {
     }
 
     /// Where Put Back puts it, if that place is free.
-    fn put_back_path(&self) -> Result<&Path, String> {
+    fn put_back_path(&self) -> Result<&Path, TrashError> {
         let original = self
             .original
             .as_deref()
-            .ok_or_else(|| format!("fffinder doesn’t know where “{}” came from", self.name()))?;
+            .ok_or_else(|| TrashError::UnknownOrigin(self.name()))?;
         let parent = original
             .parent()
             .filter(|p| p.is_dir())
-            .ok_or_else(|| format!("The folder “{}” was in no longer exists", self.name()))?;
+            .ok_or_else(|| TrashError::FolderGone(self.name()))?;
         if original.symlink_metadata().is_ok() {
-            return Err(format!(
-                "An item named “{}” is already in “{}”",
-                self.name(),
-                fffinder_core::entry::display_name(parent)
-            ));
+            return Err(TrashError::Taken {
+                name: self.name(),
+                folder: fffinder_core::entry::display_name(parent),
+            });
         }
         Ok(original)
+    }
+
+    /// Whether it's still in the Trash: not put back or deleted since.
+    pub fn in_trash(&self) -> bool {
+        self.path.symlink_metadata().is_ok()
     }
 }
 
 /// Somewhere trashed items go.
 pub trait Bin: Send + Sync {
     /// Move items to the Trash; returns where each one went.
-    fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, String>;
+    ///
+    /// # Errors
+    ///
+    /// Stops at the first item that can't be trashed, and says which items
+    /// went before it.
+    fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, TrashStopped>;
     /// Everything in the Trash.
-    fn list(&self) -> Result<Vec<Trashed>, String>;
-    /// Put items back where they were; returns where they are now.
-    fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, String>;
+    ///
+    /// # Errors
+    ///
+    /// Fails when the Trash can't be read.
+    fn list(&self) -> Result<Vec<Trashed>, TrashError>;
+    /// Put items back where they were, in order; returns where they are now.
+    ///
+    /// # Errors
+    ///
+    /// Stops at the first item that can't go back, as when its name is
+    /// taken; the items before it are back. [`Trashed::in_trash`] tells them
+    /// apart.
+    fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, TrashError>;
     /// Delete items in the Trash for good.
-    fn delete(&self, items: &[Trashed]) -> Result<(), String>;
+    ///
+    /// # Errors
+    ///
+    /// Stops at the first item that can't be deleted.
+    fn delete(&self, items: &[Trashed]) -> Result<(), TrashError>;
 }
 
 /// Use this instead of the system Trash (UI tests).
@@ -84,6 +154,7 @@ pub struct FolderBin {
 }
 
 impl FolderBin {
+    /// A Trash in `dir`, which is made if it doesn't exist.
     pub fn new(dir: PathBuf) -> FolderBin {
         let _ = std::fs::create_dir_all(&dir);
         FolderBin {
@@ -100,46 +171,50 @@ impl FolderBin {
 }
 
 impl Bin for FolderBin {
-    fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, String> {
+    fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, TrashStopped> {
         let mut trashed = Vec::with_capacity(paths.len());
-        for path in paths {
+        let result = paths.iter().try_for_each(|path| {
             let name = fffinder_core::entry::display_name(path);
             let target = ops::free_name(&self.dir, |n| match n {
                 1 => name.clone(),
                 n => format!("{name} {n}"),
             });
-            ops::move_item(path, &target).map_err(|e| e.to_string())?;
+            ops::move_item(path, &target)?;
             trashed.push(Trashed {
                 path: target,
                 original: Some(path.clone()),
                 deleted: Some(SystemTime::now()),
                 id: None,
             });
-        }
+            Ok(())
+        });
         self.items().extend(trashed.iter().cloned());
-        Ok(trashed)
+        match result {
+            Ok(()) => Ok(trashed),
+            Err(error) => Err(TrashStopped { trashed, error }),
+        }
     }
 
-    fn list(&self) -> Result<Vec<Trashed>, String> {
+    fn list(&self) -> Result<Vec<Trashed>, TrashError> {
         let mut items = self.items();
-        items.retain(|t| t.path.symlink_metadata().is_ok());
+        items.retain(Trashed::in_trash);
         Ok(items.clone())
     }
 
-    fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, String> {
+    fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, TrashError> {
         let mut back = Vec::with_capacity(items.len());
         for item in items {
             let to = item.put_back_path()?;
-            ops::move_item(&item.path, to).map_err(|e| e.to_string())?;
+            ops::move_item(&item.path, to)?;
             back.push(to.to_path_buf());
             self.items().retain(|t| t.path != item.path);
         }
         Ok(back)
     }
 
-    fn delete(&self, items: &[Trashed]) -> Result<(), String> {
+    fn delete(&self, items: &[Trashed]) -> Result<(), TrashError> {
         for item in items {
-            ops::remove_any(&item.path).map_err(|e| e.to_string())?;
+            ops::remove_any(&item.path)?;
             self.items().retain(|t| t.path != item.path);
         }
         Ok(())
@@ -151,9 +226,9 @@ struct SystemBin;
 
 #[cfg(target_os = "macos")]
 mod imp {
-    //! Finder trashes items (an AppleScript `delete` returns where each one
-    //! went), and a small journal in the data folder remembers where they
-    //! came from, for Put Back and Undo.
+    //! NSFileManager trashes items and says where each one went, and a small
+    //! journal in the data folder remembers where they came from, for Put
+    //! Back and Undo. Finder's own Put Back doesn't know these items.
 
     use super::*;
     use serde::{Deserialize, Serialize};
@@ -191,64 +266,51 @@ mod imp {
         save(&entries);
     }
 
-    fn trash_dir() -> Result<PathBuf, String> {
+    fn trash_dir() -> Result<PathBuf, TrashError> {
         dirs::home_dir()
             .map(|home| home.join(".Trash"))
-            .ok_or_else(|| "There is no home folder".to_string())
+            .ok_or(TrashError::NoHome)
     }
 
     impl Bin for SystemBin {
-        fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, String> {
-            const SCRIPT: &[&str] = &[
-                "on run argv",
-                "set out to \"\"",
-                "repeat with p in argv",
-                "set f to (POSIX file (p as text)) as alias",
-                "tell application \"Finder\" to set t to delete f",
-                "set out to out & POSIX path of (t as alias) & linefeed",
-                "end repeat",
-                "return out",
-                "end run",
-            ];
-            let mut command = std::process::Command::new("osascript");
-            for line in SCRIPT {
-                command.args(["-e", line]);
-            }
-            let out = command
-                .args(paths)
-                .output()
-                .map_err(|e| format!("Couldn’t run osascript: {e}"))?;
-            if !out.status.success() {
-                return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-            }
+        fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, TrashStopped> {
             let now = SystemTime::now();
-            let trashed: Vec<Trashed> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .zip(paths)
-                .map(|(line, original)| Trashed {
-                    path: PathBuf::from(line.trim_end_matches('/')),
+            let mut trashed = Vec::with_capacity(paths.len());
+            let result = paths.iter().try_for_each(|original| {
+                let path = crate::macos::trash_item(original).map_err(|why| {
+                    TrashError::Refused(format!(
+                        "“{}”: {why}",
+                        fffinder_core::entry::display_name(original)
+                    ))
+                })?;
+                trashed.push(Trashed {
+                    path,
                     original: Some(original.clone()),
                     deleted: Some(now),
                     id: None,
-                })
-                .collect();
+                });
+                Ok(())
+            });
             update(|entries| {
                 entries.extend(trashed.iter().map(|t| Entry {
                     path: t.path.clone(),
                     original: t.original.clone().unwrap_or_default(),
                 }))
             });
-            Ok(trashed)
+            match result {
+                Ok(()) => Ok(trashed),
+                Err(error) => Err(TrashStopped { trashed, error }),
+            }
         }
 
-        fn list(&self) -> Result<Vec<Trashed>, String> {
+        fn list(&self) -> Result<Vec<Trashed>, TrashError> {
             use std::os::unix::fs::MetadataExt as _;
             let dir = trash_dir()?;
             let read = std::fs::read_dir(&dir).map_err(|err| {
                 if err.kind() == std::io::ErrorKind::PermissionDenied {
-                    "fffinder needs Full Disk Access to show the Trash. Turn it on in System Settings › Privacy & Security, then reopen fffinder.".to_string()
+                    TrashError::NeedsFullDiskAccess
                 } else {
-                    err.to_string()
+                    err.into()
                 }
             })?;
             let journal = load();
@@ -276,11 +338,11 @@ mod imp {
                 .collect())
         }
 
-        fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, String> {
+        fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, TrashError> {
             let mut back = Vec::with_capacity(items.len());
             let result = items.iter().try_for_each(|item| {
                 let to = item.put_back_path()?;
-                ops::move_item(&item.path, to).map_err(|e| e.to_string())?;
+                ops::move_item(&item.path, to)?;
                 back.push(to.to_path_buf());
                 Ok(())
             });
@@ -288,12 +350,12 @@ mod imp {
             result.map(|()| back)
         }
 
-        fn delete(&self, items: &[Trashed]) -> Result<(), String> {
+        fn delete(&self, items: &[Trashed]) -> Result<(), TrashError> {
             let result = items
                 .iter()
-                .try_for_each(|item| ops::remove_any(&item.path).map_err(|e| e.to_string()));
+                .try_for_each(|item| ops::remove_any(&item.path));
             update(|_| {});
-            result
+            Ok(result?)
         }
     }
 }
@@ -334,38 +396,60 @@ mod imp {
         })
     }
 
+    fn refused(err: trash::Error) -> TrashError {
+        TrashError::Refused(err.to_string())
+    }
+
+    /// Where each of `paths` went in the Trash, for the ones that are there.
+    fn trashed(paths: &[PathBuf]) -> Result<Vec<Trashed>, TrashError> {
+        let listed = os_limited::list().map_err(refused)?;
+        Ok(paths
+            .iter()
+            .filter_map(|path| {
+                listed
+                    .iter()
+                    .filter(|item| item.original_path() == *path)
+                    .max_by_key(|item| item.time_deleted)
+                    .cloned()
+                    .map(from_item)
+            })
+            .collect())
+    }
+
     impl Bin for SystemBin {
-        fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, String> {
-            trash::delete_all(paths).map_err(|e| e.to_string())?;
-            let listed = os_limited::list().map_err(|e| e.to_string())?;
-            Ok(paths
-                .iter()
-                .filter_map(|path| {
-                    listed
+        fn trash(&self, paths: &[PathBuf]) -> Result<Vec<Trashed>, TrashStopped> {
+            match trash::delete_all(paths) {
+                Ok(()) => Ok(trashed(paths)?),
+                // Some may have gone before the one that failed.
+                Err(err) => {
+                    let gone: Vec<PathBuf> = paths
                         .iter()
-                        .filter(|item| item.original_path() == *path)
-                        .max_by_key(|item| item.time_deleted)
+                        .filter(|p| p.symlink_metadata().is_err())
                         .cloned()
-                        .map(from_item)
-                })
-                .collect())
+                        .collect();
+                    Err(TrashStopped {
+                        trashed: trashed(&gone).unwrap_or_default(),
+                        error: refused(err),
+                    })
+                }
+            }
         }
 
-        fn list(&self) -> Result<Vec<Trashed>, String> {
-            let listed = os_limited::list().map_err(|e| e.to_string())?;
+        fn list(&self) -> Result<Vec<Trashed>, TrashError> {
+            let listed = os_limited::list().map_err(refused)?;
             Ok(listed.into_iter().map(from_item).collect())
         }
 
-        fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, String> {
+        fn restore(&self, items: &[Trashed]) -> Result<Vec<PathBuf>, TrashError> {
             for item in items {
                 item.put_back_path()?;
             }
-            os_limited::restore_all(items.iter().filter_map(to_item)).map_err(|e| e.to_string())?;
+            os_limited::restore_all(items.iter().filter_map(to_item)).map_err(refused)?;
             Ok(items.iter().filter_map(|t| t.original.clone()).collect())
         }
 
-        fn delete(&self, items: &[Trashed]) -> Result<(), String> {
-            os_limited::purge_all(items.iter().filter_map(to_item)).map_err(|e| e.to_string())
+        fn delete(&self, items: &[Trashed]) -> Result<(), TrashError> {
+            os_limited::purge_all(items.iter().filter_map(to_item)).map_err(refused)
         }
     }
 }
@@ -389,7 +473,10 @@ mod tests {
         assert_eq!(trashed[0].name(), "a.txt");
 
         std::fs::write(&file, "new").unwrap();
-        assert!(bin.restore(&trashed).is_err(), "the name is taken again");
+        assert!(
+            matches!(bin.restore(&trashed), Err(TrashError::Taken { .. })),
+            "the name is taken again"
+        );
         std::fs::remove_file(&file).unwrap();
         assert_eq!(bin.restore(&trashed).unwrap(), std::slice::from_ref(&file));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "a");
@@ -398,6 +485,21 @@ mod tests {
         let trashed = bin.trash(std::slice::from_ref(&file)).unwrap();
         bin.delete(&trashed).unwrap();
         assert!(!trashed[0].path.exists() && !file.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_failed_trash_says_what_went() {
+        let base = std::env::temp_dir().join(format!("fffinder-bin-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let (a, gone) = (base.join("a.txt"), base.join("gone.txt"));
+        std::fs::write(&a, "a").unwrap();
+        let bin = FolderBin::new(base.join("bin"));
+        let stopped = bin.trash(&[a.clone(), gone]).unwrap_err();
+        assert_eq!(stopped.trashed.len(), 1);
+        assert_eq!(stopped.trashed[0].original.as_deref(), Some(a.as_path()));
+        assert_eq!(bin.list().unwrap(), stopped.trashed);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

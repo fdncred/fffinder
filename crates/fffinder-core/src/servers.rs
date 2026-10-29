@@ -1,6 +1,20 @@
 //! Server addresses for Connect to Server: what was typed, made into a URL
 //! each system's mounting tool understands.
 
+use std::borrow::Cow;
+
+/// Why a typed address isn't one Connect to Server can use.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ServerError {
+    #[error("Type a server address")]
+    Empty,
+    /// The scheme, as typed.
+    #[error("“{0}://” servers aren’t supported")]
+    Unsupported(String),
+    #[error("The address has no server")]
+    NoServer,
+}
+
 /// The kinds of server Connect to Server knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -31,10 +45,10 @@ impl Server {
     /// # Errors
     ///
     /// An empty address, or a scheme that isn't one of [`Protocol`]'s.
-    pub fn parse(text: &str) -> Result<Server, String> {
+    pub fn parse(text: &str) -> Result<Server, ServerError> {
         let text = text.trim();
         if text.is_empty() {
-            return Err("Type a server address".into());
+            return Err(ServerError::Empty);
         }
         if let Some(unc) = text.strip_prefix("\\\\") {
             return Ok(Server {
@@ -54,11 +68,11 @@ impl Server {
             "afp" => Protocol::Afp,
             "nfs" => Protocol::Nfs,
             "ftp" => Protocol::Ftp,
-            other => return Err(format!("“{other}://” servers aren’t supported")),
+            other => return Err(ServerError::Unsupported(other.to_string())),
         };
         let rest = rest.trim_end_matches('/').to_string();
         if rest.is_empty() {
-            return Err("The address has no server".into());
+            return Err(ServerError::NoServer);
         }
         Ok(Server { protocol, rest })
     }
@@ -117,6 +131,28 @@ impl Server {
     }
 }
 
+/// `address` without the password in it, if it has one: `smb://me:pw@nas`
+/// becomes `smb://me@nas`. What's remembered or shown never holds one; the
+/// system's keychain or keyring keeps passwords.
+pub fn without_password(address: &str) -> Cow<'_, str> {
+    let start = address.find("://").map_or(0, |i| i + 3);
+    let end = address[start..]
+        .find('/')
+        .map_or(address.len(), |i| start + i);
+    let authority = &address[start..end];
+    let password = authority
+        .rfind('@')
+        .and_then(|at| authority[..at].find(':').map(|colon| (colon, at)));
+    match password {
+        Some((colon, at)) => Cow::Owned(format!(
+            "{}{}",
+            &address[..start + colon],
+            &address[start + at..]
+        )),
+        None => Cow::Borrowed(address),
+    }
+}
+
 /// The mount point in `gio info` output: its `local path:` line.
 pub fn gio_local_path(info: &str) -> Option<std::path::PathBuf> {
     info.lines()
@@ -165,9 +201,35 @@ mod tests {
             Some("https://cloud.example.com/remote.php/dav")
         );
 
-        assert!(Server::parse("  ").is_err());
-        assert!(Server::parse("gopher://old").is_err());
-        assert!(Server::parse("smb://").is_err());
+        assert_eq!(Server::parse("  "), Err(ServerError::Empty));
+        assert_eq!(
+            Server::parse("gopher://old"),
+            Err(ServerError::Unsupported("gopher".into()))
+        );
+        assert_eq!(Server::parse("smb://"), Err(ServerError::NoServer));
+    }
+
+    #[test]
+    fn leaves_passwords_out() {
+        assert_eq!(
+            without_password("smb://me:hunter2@nas/share"),
+            "smb://me@nas/share"
+        );
+        assert_eq!(without_password("me:pw@nas:445/share"), "me@nas:445/share");
+        assert_eq!(
+            without_password("sftp://me@box:2222/srv"),
+            "sftp://me@box:2222/srv",
+            "a port isn't a password"
+        );
+        assert!(matches!(
+            without_password("\\\\nas\\media"),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            without_password("https://cloud/dav/a:b@c"),
+            "https://cloud/dav/a:b@c",
+            "only the part before the path"
+        );
     }
 
     #[test]

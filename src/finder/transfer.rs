@@ -8,7 +8,7 @@ use crate::actions::MoveItemsHere;
 use crate::theme::ui;
 use crate::undo::{self, Change};
 use fffinder_core::entry::display_name;
-use fffinder_core::ops::{self, Clash, Mode, Progress, Report, Transfer};
+use fffinder_core::ops::{self, Clash, Mode, Progress, Report, Transfer, TransferError};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input;
@@ -57,6 +57,13 @@ pub(super) const EXTRACT: JobKind = JobKind {
     failed: "Couldn’t extract",
     icon: IconName::FolderOpen,
 };
+
+/// What a background job made, and why it didn't make the rest.
+pub(super) struct Made {
+    pub items: Vec<PathBuf>,
+    /// One error for each item that couldn't be made.
+    pub failed: Vec<TransferError>,
+}
 
 /// A copy, move, or archive job under way.
 pub(super) struct Job {
@@ -134,7 +141,8 @@ impl Finder {
     }
 
     /// Files dropped on `dest`. Dragged within fffinder they move, or copy
-    /// with Alt held or to another volume; from another app they copy.
+    /// with Alt held or when any of them is on another volume, as in
+    /// Finder; from another app they copy.
     pub(super) fn drop_files(
         &mut self,
         paths: Vec<PathBuf>,
@@ -145,7 +153,7 @@ impl Finder {
     ) {
         let copy = !from_here
             || copy_modifier(window.modifiers())
-            || paths.first().is_some_and(|p| !ops::same_volume(p, &dest));
+            || paths.iter().any(|p| !ops::same_volume(p, &dest));
         let mode = if copy { Mode::Copy } else { Mode::Move };
         self.start_transfer(paths, dest, mode, window, cx);
     }
@@ -162,6 +170,11 @@ impl Finder {
         if self.wait_for_undo(window, cx) {
             return;
         }
+        // An item inside a folder that moves goes with it.
+        let sources = match mode {
+            Mode::Move => ops::outermost(&sources),
+            Mode::Copy => sources,
+        };
         let transfer = Transfer {
             sources,
             dest,
@@ -283,12 +296,13 @@ impl Finder {
     }
 
     /// Run `work` on a background thread with a progress row. It returns
-    /// the items it made, which are selected, and Undo moves to the Trash.
+    /// the items it made, which are selected, and Undo moves to the Trash,
+    /// even when it couldn't make them all.
     pub(super) fn run_job(
         &mut self,
         kind: JobKind,
         count: usize,
-        work: impl FnOnce(&Progress) -> Result<Vec<PathBuf>, String> + Send + 'static,
+        work: impl FnOnce(&Progress) -> Made + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -306,22 +320,23 @@ impl Finder {
             this.update_in(cx, |this, window, cx| {
                 this.transfers
                     .retain(|job| !Arc::ptr_eq(&job.progress, &progress));
-                match result {
-                    Ok(made) => {
-                        undo::record(kind.undo, Change::Created(made.clone()), cx);
-                        this.files_changed(made, cx);
-                    }
-                    Err(_) if progress.is_cancelled() => {
-                        window.push_notification("Stopped", cx);
-                        this.files_changed(Vec::new(), cx);
-                    }
-                    Err(err) => {
-                        window.push_notification(
-                            (NotificationType::Error, format!("{}: {err}", kind.failed)),
-                            cx,
-                        );
-                        this.files_changed(Vec::new(), cx);
-                    }
+                let Made { items, failed } = result;
+                undo::record(kind.undo, Change::Created(items.clone()), cx);
+                this.files_changed(items, cx);
+                if progress.is_cancelled() {
+                    window.push_notification("Stopped", cx);
+                } else if let Some(err) = failed.first() {
+                    let more = match failed.len() {
+                        1 => String::new(),
+                        n => format!(" ({} more failed)", n - 1),
+                    };
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            format!("{}: {err}{more}", kind.failed),
+                        ),
+                        cx,
+                    );
                 }
             })
             .ok();
@@ -359,9 +374,29 @@ impl Finder {
         let landed: Vec<PathBuf> = report.done.iter().map(|(_, to)| to.clone()).collect();
         match mode {
             Mode::Copy => undo::record("Copy", Change::Created(landed.clone()), cx),
-            Mode::Move => undo::record("Move", Change::Moved(report.done.clone()), cx),
+            Mode::Move => {
+                // An item whose original stayed behind was copied: Undo
+                // trashes the copy first, then moves the rest back.
+                let (copied, moved): (Vec<_>, Vec<_>) = report
+                    .done
+                    .iter()
+                    .cloned()
+                    .partition(|(from, _)| report.left.iter().any(|(left, _)| left == from));
+                undo::record("Move", Change::Moved(moved), cx);
+                let copies = copied.into_iter().map(|(_, to)| to).collect();
+                undo::record("Copy", Change::Created(copies), cx);
+            }
         }
         self.files_changed(landed, cx);
+        if let Some((path, why)) = report.left.first() {
+            window.push_notification(
+                (
+                    NotificationType::Warning,
+                    format!("Copied “{}”, but {why}", display_name(path)),
+                ),
+                cx,
+            );
+        }
         if let Some((path, why)) = report.failed.first() {
             let more = match report.failed.len() {
                 1 => String::new(),

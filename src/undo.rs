@@ -4,9 +4,8 @@
 //! reverses that in turn; any new operation clears what Redo had. While an
 //! Undo or Redo runs, no other file operation may start.
 
-use crate::trash_bin::{Bin, Trashed};
-use fffinder_core::entry::display_name;
-use fffinder_core::ops;
+use crate::rename::{self, MoveError};
+use crate::trash_bin::{Bin, TrashError, Trashed};
 use gpui_kit::{App, Global};
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
@@ -59,6 +58,7 @@ impl Step {
         }
     }
 
+    /// The command's name: "Undo".
     pub fn name(self) -> &'static str {
         match self {
             Step::Undo => "Undo",
@@ -136,6 +136,19 @@ pub fn stepped(step: Step, opposite: Operation, cx: &mut App) {
     }
 }
 
+/// `step` couldn't reverse `operation` (or the part of one that's left), so
+/// it goes back where `step` found it, to be tried again.
+pub fn put_back(step: Step, operation: Operation, cx: &mut App) {
+    if operation.change.is_empty() {
+        return;
+    }
+    let log = cx.default_global::<UndoLog>();
+    match step {
+        Step::Undo => push_capped(&mut log.done, operation),
+        Step::Redo => push_capped(&mut log.undone, operation),
+    }
+}
+
 /// What reversing a change did: where the items it brought back are now,
 /// and the change that would put things back as they were.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,54 +157,95 @@ pub struct Reversed {
     pub opposite: Change,
 }
 
+/// Why reversing a change failed.
+#[derive(Debug, thiserror::Error)]
+pub enum ReverseError {
+    #[error(transparent)]
+    Move(#[from] MoveError),
+    #[error(transparent)]
+    Trash(#[from] TrashError),
+}
+
+/// A reversal that stopped part way: what it reversed, what's left of the
+/// change, and why it stopped.
+#[derive(Debug, thiserror::Error)]
+#[error("{error}")]
+pub struct Stopped {
+    pub done: Reversed,
+    pub left: Change,
+    #[source]
+    pub error: ReverseError,
+}
+
 /// Reverse a change: move items back, trash what it made, or put back what
 /// it trashed.
-pub fn reverse(change: &Change, bin: &dyn Bin) -> Result<Reversed, String> {
+///
+/// # Errors
+///
+/// Moves are reversed all or nothing; trashing and putting back stop at
+/// the first item that fails. Either way [`Stopped`] says what was reversed
+/// and what's left.
+pub fn reverse(change: &Change, bin: &dyn Bin) -> Result<Reversed, Box<Stopped>> {
     match change {
         Change::Moved(pairs) => {
-            let mut back = Vec::with_capacity(pairs.len());
-            for (from, to) in pairs.iter().rev() {
-                // A case-only rename leaves `from` naming the same item.
-                let same =
-                    from.to_string_lossy().to_lowercase() == to.to_string_lossy().to_lowercase();
-                if from.symlink_metadata().is_ok() && !same {
-                    return Err(format!(
-                        "An item named “{}” is already where “{}” was",
-                        display_name(from),
-                        display_name(to)
-                    ));
-                }
-                ops::move_item(to, from).map_err(|e| e.to_string())?;
-                back.push(from.clone());
+            let back: Vec<(PathBuf, PathBuf)> =
+                pairs.iter().map(|(f, t)| (t.clone(), f.clone())).collect();
+            match rename::move_all(&back) {
+                Ok(()) => Ok(Reversed {
+                    back: pairs.iter().map(|(from, _)| from.clone()).collect(),
+                    opposite: Change::Moved(back),
+                }),
+                Err(err) => Err(Box::new(Stopped {
+                    done: Reversed {
+                        back: Vec::new(),
+                        opposite: Change::Moved(Vec::new()),
+                    },
+                    left: change.clone(),
+                    error: err.into(),
+                })),
             }
-            let opposite = pairs.iter().rev().map(|(f, t)| (t.clone(), f.clone()));
-            Ok(Reversed {
-                back,
-                opposite: Change::Moved(opposite.collect()),
-            })
         }
         Change::Created(paths) => {
-            let there: Vec<PathBuf> = paths
-                .iter()
-                .filter(|p| p.symlink_metadata().is_ok())
-                .cloned()
-                .collect();
-            let trashed = match there.is_empty() {
-                true => Vec::new(),
-                false => bin.trash(&there)?,
-            };
-            Ok(Reversed {
+            let there = |p: &&PathBuf| p.symlink_metadata().is_ok();
+            let made: Vec<PathBuf> = paths.iter().filter(there).cloned().collect();
+            match made.is_empty() {
+                true => Ok(Vec::new()),
+                false => bin.trash(&made),
+            }
+            .map(|trashed| Reversed {
                 back: Vec::new(),
                 opposite: Change::Trashed(trashed),
             })
-        }
-        Change::Trashed(items) => {
-            let back = bin.restore(items)?;
-            Ok(Reversed {
-                opposite: Change::Created(back.clone()),
-                back,
+            .map_err(|stopped| {
+                Box::new(Stopped {
+                    done: Reversed {
+                        back: Vec::new(),
+                        opposite: Change::Trashed(stopped.trashed),
+                    },
+                    left: Change::Created(paths.iter().filter(there).cloned().collect()),
+                    error: stopped.error.into(),
+                })
             })
         }
+        Change::Trashed(items) => match bin.restore(items) {
+            Ok(back) => Ok(Reversed {
+                opposite: Change::Created(back.clone()),
+                back,
+            }),
+            Err(err) => {
+                let (left, restored): (Vec<Trashed>, Vec<Trashed>) =
+                    items.iter().cloned().partition(Trashed::in_trash);
+                let back: Vec<PathBuf> = restored.into_iter().filter_map(|t| t.original).collect();
+                Err(Box::new(Stopped {
+                    done: Reversed {
+                        opposite: Change::Created(back.clone()),
+                        back,
+                    },
+                    left: Change::Trashed(left),
+                    error: err.into(),
+                }))
+            }
+        },
     }
 }
 
@@ -226,7 +280,13 @@ mod tests {
         std::fs::rename(&a, base.join("taken")).unwrap();
         std::fs::write(&a, "in the way").unwrap();
         let blocked = Change::Moved(vec![(a.clone(), base.join("taken"))]);
-        assert!(reverse(&blocked, &bin).is_err(), "a taken name blocks undo");
+        let stopped = reverse(&blocked, &bin).unwrap_err();
+        assert!(matches!(
+            stopped.error,
+            ReverseError::Move(MoveError::Taken(_))
+        ));
+        assert_eq!(stopped.left, blocked, "all of it is left to undo");
+        std::fs::rename(base.join("taken"), &a).unwrap();
 
         let undone = reverse(&Change::Created(vec![b.clone()]), &bin).unwrap();
         assert!(!b.exists(), "an undone copy goes to the Trash");
@@ -239,6 +299,95 @@ mod tests {
         assert!(a.exists());
         reverse(&undone.opposite, &bin).unwrap();
         assert!(!a.exists(), "a redone Move to Trash trashes it again");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn reverses_swaps_and_chains() {
+        let base = std::env::temp_dir().join(format!("fffinder-undo-swap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let path = |name: &str| base.join(name);
+        for name in ["a", "b", "c"] {
+            std::fs::write(path(name), name).unwrap();
+        }
+        let bin = FolderBin::new(base.join("bin"));
+        let read = |name: &str| std::fs::read_to_string(path(name)).unwrap();
+
+        // Batch rename swapped a and b, and moved c to d.
+        let renamed = Change::Moved(vec![
+            (path("a"), path("b")),
+            (path("b"), path("a")),
+            (path("c"), path("d")),
+        ]);
+        rename::move_all(&[
+            (path("a"), path("b")),
+            (path("b"), path("a")),
+            (path("c"), path("d")),
+        ])
+        .unwrap();
+        assert_eq!(
+            (read("a"), read("b"), read("d")),
+            ("b".into(), "a".into(), "c".into())
+        );
+        let undone = reverse(&renamed, &bin).unwrap();
+        assert_eq!(
+            (read("a"), read("b"), read("c")),
+            ("a".into(), "b".into(), "c".into())
+        );
+        reverse(&undone.opposite, &bin).unwrap();
+        assert_eq!(read("a"), "b", "and Redo swaps them again");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_rename_differing_in_case_only_undoes_without_overwriting() {
+        let base = std::env::temp_dir().join(format!("fffinder-undo-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let (upper, lower) = (base.join("Notes"), base.join("notes"));
+        std::fs::write(&lower, "renamed").unwrap();
+        let bin = FolderBin::new(base.join("bin"));
+        let renamed = Change::Moved(vec![(upper.clone(), lower.clone())]);
+        let ignores_case = upper.exists();
+        if !ignores_case {
+            // A new item took the old name: Undo mustn't replace it.
+            std::fs::write(&upper, "new").unwrap();
+            assert!(reverse(&renamed, &bin).is_err());
+            assert_eq!(std::fs::read_to_string(&upper).unwrap(), "new");
+            assert_eq!(std::fs::read_to_string(&lower).unwrap(), "renamed");
+        } else {
+            reverse(&renamed, &bin).unwrap();
+            let names: Vec<String> = std::fs::read_dir(&base)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n != "bin")
+                .collect();
+            assert_eq!(names, ["Notes"]);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_partial_reversal_says_what_is_left() {
+        let base = std::env::temp_dir().join(format!("fffinder-undo-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let (a, b) = (base.join("a"), base.join("b"));
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        let bin = FolderBin::new(base.join("bin"));
+        let trashed = bin.trash(&[a.clone(), b.clone()]).unwrap();
+        // b's name is taken again, so only a goes back.
+        std::fs::write(&b, "new b").unwrap();
+        let stopped = reverse(&Change::Trashed(trashed.clone()), &bin).unwrap_err();
+        assert_eq!(stopped.done.back, std::slice::from_ref(&a));
+        assert_eq!(stopped.done.opposite, Change::Created(vec![a.clone()]));
+        assert_eq!(stopped.left, Change::Trashed(vec![trashed[1].clone()]));
+        // Once b's place is free, the rest goes back too.
+        std::fs::remove_file(&b).unwrap();
+        let rest = reverse(&stopped.left, &bin).unwrap();
+        assert_eq!(rest.back, std::slice::from_ref(&b));
         let _ = std::fs::remove_dir_all(&base);
     }
 

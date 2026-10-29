@@ -447,7 +447,7 @@ A folder can't go inside itself, and an item can't replace the folder it's in. A
 
 Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
 
-A copy, move, Compress, or Extract that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+A copy, move, Compress, or Extract that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. The work starts at once while fffinder counts the bytes to copy alongside it, and the bar stays at 0% until the count is done. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
 
 ## Get Info
 
@@ -480,7 +480,7 @@ Redo (Cmd+Shift+Z with the files focused, or Edit › Redo) reverses the latest 
 | Copy, paste, Duplicate, New Folder, New File, Make Alias, Make Symbolic Link, Compress, Extract | Moves the new items to the Trash, as Finder does. |
 | Move to Trash | Puts the items back. |
 
-While an Undo or Redo runs, no other file operation starts: copying, moving, renaming, new items, trashing, Put Back, deleting, compressing, extracting, and another Undo or Redo are refused with "Wait for Undo to finish" (or Redo) until it's done. Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
+While an Undo or Redo runs, no other file operation starts: copying, moving, renaming, new items, trashing, Put Back, deleting, compressing, extracting, and another Undo or Redo are refused with "Wait for Undo to finish" (or Redo) until it's done. Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. What they reversed before stopping stays reversed, and the next Cmd+Z (or Cmd+Shift+Z) tries the rest again. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
 
 ## The Trash
 
@@ -490,7 +490,7 @@ The Trash row at the end of the sidebar's Locations shows what is in the Trash, 
 - **Delete Immediately…** (Cmd+Alt+Backspace, or the item menu) deletes the selected items for good.
 - **Empty…** in the bar above the items, Empty Trash… in the empty-space menu or the fffinder menu, or Cmd+Shift+Backspace, asks, then deletes everything in the Trash for good.
 
-On macOS, fffinder asks Finder to move items to the Trash, so Finder's own Put Back still works for them, and remembers where each one came from in `trash.json` in the data folder. fffinder can put back only items it trashed itself; for others, Put Back is unavailable, and Finder's Put Back still works. The Trash view lists your home folder's Trash, `~/.Trash`, which macOS shows only to apps with Full Disk Access. Without it, the view says so. On Linux and Windows, fffinder uses the system trash (the freedesktop.org Trash, or the Recycle Bin), which records where every item came from, so Put Back works for all of them.
+On macOS, fffinder moves items to the Trash itself, as most Mac apps do, so macOS never asks to let it control Finder. It remembers where each one came from in `trash.json` in the data folder. fffinder can put back only items it trashed itself; for others, Put Back is unavailable. Finder's own Put Back doesn't work for items fffinder trashed, and still works for items Finder trashed. The Trash view lists your home folder's Trash, `~/.Trash`, which macOS shows only to apps with Full Disk Access. Without it, the view says so. On Linux and Windows, fffinder uses the system trash (the freedesktop.org Trash, or the Recycle Bin), which records where every item came from, so Put Back works for all of them.
 
 ## Volumes and servers
 
@@ -498,7 +498,7 @@ On macOS, fffinder asks Finder to move items to the Trash, so Finder's own Put B
 
 **Free space.** The status bar ends with the space left on the current folder's volume, read when the folder loads.
 
-**Connect to Server…** (Cmd+K, or the Go menu) asks for a server's address and mounts it the way the system does, then opens it in the window. The server goes to the top of the dialog's **Recent servers**, up to ten; click one to fill in the address. An address with no scheme, such as `nas/media`, is SMB.
+**Connect to Server…** (Cmd+K, or the Go menu) asks for a server's address and mounts it the way the system does, then opens it in the window. The server goes to the top of the dialog's **Recent servers**, up to ten, without any password typed in the address; click one to fill in the address. An address with no scheme, such as `nas/media`, is SMB.
 
 | System | Servers | How |
 | --- | --- | --- |
@@ -508,7 +508,7 @@ On macOS, fffinder asks Finder to move items to the Trash, so Finder's own Put B
 
 ## Dragging and dropping
 
-- Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder.
+- Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder, even when only some of the items are on another volume.
 - Drag items onto empty space in a folder to move them into the folder shown.
 - Drop files from other apps on a folder, a column, a sidebar place, or the file area to copy them in.
 - Name clashes ask first, and long transfers show progress. See [Copying and moving](#copying-and-moving).
@@ -1014,7 +1014,7 @@ The settings folder holds `settings.json` and `actions.nu`. The data folder hold
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
 - `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
 - `trash.json`: on macOS, where each item fffinder moved to the Trash came from, for Put Back.
-- `thumbnails/`: thumbnails of PDFs, videos, and documents, as PNGs.
+- `thumbnails/`: thumbnails of PDFs, videos, and documents, as PNGs, up to 256 MB; the least recently used go first.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
 - `term.log`: stderr from the last `fffinder --term`.
 

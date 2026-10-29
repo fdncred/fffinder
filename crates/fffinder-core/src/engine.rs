@@ -939,11 +939,12 @@ impl Engine {
                 modified,
             };
             match (dirs, query.map(str::trim).filter(|q| !q.is_empty())) {
+                // The overflow files (added since the scan) are the end of
+                // `get_files`, so they're already in it.
                 (false, None) => items.extend(
                     picker
                         .get_files()
                         .iter()
-                        .chain(picker.get_overflow_files())
                         .filter(|f| !f.is_deleted())
                         .take(left)
                         .map(|f| item(f.relative_path(picker), false, f.size, f.modified)),
@@ -1009,66 +1010,86 @@ impl Engine {
     /// every indexed file under it, and each file's git status is what the
     /// index last saw. Folders and files the index skips aren't included.
     pub fn folder_stats(&self, dir: &Path) -> FolderStats {
-        let mut stats = FolderStats::default();
-        for root in &self.read_indexes().roots {
+        self.folder_stats_for(&[dir.to_path_buf()])
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// [`Self::folder_stats`] for several folders at once, in the order
+    /// given, with one pass over each root's files for all of them.
+    pub fn folder_stats_for(&self, dirs: &[PathBuf]) -> Vec<FolderStats> {
+        let mut all = vec![FolderStats::default(); dirs.len()];
+        let indexes = self.read_indexes();
+        // `set_roots` leaves out roots inside others, so no file counts twice.
+        for root in &indexes.roots {
             let Ok(guard) = root.picker.read() else {
                 continue;
             };
             let Some(picker) = guard.as_ref() else {
                 continue;
             };
+            // The overflow files (added since the scan) are the end of
+            // `get_files`, so they're already in it.
+            let files = || picker.get_files().iter().filter(|f| !f.is_deleted());
             let base = picker.base_path();
-            let files = || {
-                picker
-                    .get_files()
-                    .iter()
-                    .chain(picker.get_overflow_files())
-                    .filter(|f| !f.is_deleted())
-            };
-            // A root inside `dir` adds up as one of its subfolders.
-            if let Ok(below) = base.strip_prefix(dir)
-                && let Some(first) = below.components().next()
-            {
-                let total: u64 = files().map(|f| f.size).sum();
-                *stats.sizes.entry(dir.join(first)).or_default() += total;
+            let mut root_total: Option<u64> = None;
+            // Each folder in this root, as the start of fff-search's relative
+            // paths: `/` between names on every system, and one at the end.
+            let mut wanted: Vec<(usize, String)> = Vec::new();
+            for (ix, dir) in dirs.iter().enumerate() {
+                // A root inside `dir` adds up as one of its subfolders.
+                if let Ok(below) = root.path.strip_prefix(dir)
+                    && let Some(first) = below.components().next()
+                {
+                    let total = *root_total.get_or_insert_with(|| files().map(|f| f.size).sum());
+                    *all[ix].sizes.entry(dir.join(first)).or_default() += total;
+                    continue;
+                }
+                if let Ok(rel) = root.in_base(dir, base).strip_prefix(base) {
+                    let mut prefix = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if !prefix.is_empty() {
+                        prefix.push('/');
+                    }
+                    wanted.push((ix, prefix));
+                }
+            }
+            if wanted.is_empty() {
                 continue;
             }
-            let Ok(rel) = dir.strip_prefix(base) else {
-                continue;
-            };
-            // fff-search's relative paths use `/` on every system.
-            let mut prefix = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/");
-            if !prefix.is_empty() {
-                prefix.push('/');
-            }
+            // A file can only be under a folder whose path is no longer than
+            // its own folder's, which is known without reading the path.
+            let shortest = wanted.iter().map(|(_, p)| p.len()).min().unwrap_or(0);
             for file in files() {
-                if file.relative_path_len() <= prefix.len() {
+                if file.filename_offset_in_relative_path() < shortest {
                     continue;
                 }
                 let path = file.relative_path(picker);
-                let Some(rest) = path.strip_prefix(&prefix) else {
-                    continue;
-                };
-                match rest.split_once('/') {
-                    Some((child, _)) => {
-                        *stats.sizes.entry(dir.join(child)).or_default() += file.size;
-                    }
-                    None => {
-                        if let Some(status) =
-                            fff_search::git::format_git_status_opt(file.git_status)
-                                .filter(|s| *s != "clean" && *s != "unknown")
-                        {
-                            stats.git.insert(dir.join(rest), status.to_string());
+                for (ix, prefix) in &wanted {
+                    let Some(rest) = path.strip_prefix(prefix.as_str()) else {
+                        continue;
+                    };
+                    let (dir, stats) = (&dirs[*ix], &mut all[*ix]);
+                    match rest.split_once('/') {
+                        Some((child, _)) => {
+                            *stats.sizes.entry(dir.join(child)).or_default() += file.size;
+                        }
+                        None => {
+                            if let Some(status) =
+                                fff_search::git::format_git_status_opt(file.git_status)
+                                    .filter(|s| *s != "clean" && *s != "unknown")
+                            {
+                                stats.git.insert(dir.join(rest), status.to_string());
+                            }
                         }
                     }
                 }
             }
         }
-        stats
+        all
     }
 
     /// Subscribe to changes under the roots. `pattern` is a glob relative to
@@ -1534,6 +1555,40 @@ mod tests {
             above.sizes.get(&dir),
             Some(&11),
             "a root inside counts whole"
+        );
+        let both = engine.folder_stats_for(&[dir.join("a"), dir.clone()]);
+        assert_eq!(both[0].sizes.get(&dir.join("a/deep")), Some(&3));
+        assert_eq!(
+            both[1], stats,
+            "one pass gives what one folder at a time does"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_root_inside_another_counts_once() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("inner/deep")).unwrap();
+        std::fs::write(dir.join("inner/deep/one.txt"), "12345").unwrap();
+        std::fs::write(dir.join("inner/two.txt"), "123").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone(), dir.join("inner")],
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        assert_eq!(
+            engine.folder_stats(&dir).sizes.get(&dir.join("inner")),
+            Some(&8)
+        );
+        assert_eq!(
+            engine
+                .folder_stats(&dir.join("inner"))
+                .sizes
+                .get(&dir.join("inner/deep")),
+            Some(&5)
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

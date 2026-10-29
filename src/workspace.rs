@@ -33,6 +33,9 @@ fn new_finder(
 }
 
 impl Workspace {
+    /// A window's tabs, starting with one browser at `start`, searching for
+    /// `query` when given, and choosing files for another app when `picker`
+    /// is.
     pub fn new(
         start: Location,
         query: Option<String>,
@@ -54,14 +57,18 @@ impl Workspace {
         &self.tabs[self.active]
     }
 
+    /// Every tab's browser, in order.
     pub fn tabs(&self) -> &[Entity<Finder>] {
         &self.tabs
     }
 
+    /// Where the active tab is among [`Self::tabs`].
     pub fn active_index(&self) -> usize {
         self.active
     }
 
+    /// The browser beside the active one in split view, if the window is
+    /// split.
     pub fn split_pane(&self) -> Option<&Entity<Finder>> {
         self.split.as_ref()
     }
@@ -95,6 +102,7 @@ impl Workspace {
         self.tabs_changed(cx);
     }
 
+    /// Show the tab at `ix`; one past the last does nothing.
     pub fn select_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
             self.active = ix;

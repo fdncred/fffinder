@@ -7,7 +7,7 @@ use crate::model::Location;
 use crate::theme::ui;
 use fffinder_core::entry::display_name;
 use fffinder_core::places;
-use fffinder_core::servers::Server;
+use fffinder_core::servers::{self, Server};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
@@ -20,6 +20,19 @@ use std::path::{Path, PathBuf};
 const RECENT_SERVERS: usize = 10;
 
 impl Finder {
+    /// Reread the sidebar's locations off the UI thread, since naming a
+    /// volume can wait on its drive, and show them when they arrive.
+    pub(super) fn reload_locations(&mut self, cx: &mut Context<Self>) {
+        self.locations_task = cx.spawn(async move |this, cx| {
+            let locations = cx.background_spawn(async { places::locations() }).await;
+            this.update(cx, |this, cx| {
+                this.locations = locations;
+                cx.notify();
+            })
+            .ok();
+        });
+    }
+
     /// Read the free space on the current folder's volume, off the UI thread.
     pub(super) fn load_free_space(&mut self, cx: &mut Context<Self>) {
         let Some(dir) = self.current_folder().map(Path::to_path_buf) else {
@@ -63,8 +76,7 @@ impl Finder {
                         cx,
                     ),
                 }
-                this.locations = places::locations();
-                cx.notify();
+                this.reload_locations(cx);
             })
             .ok();
         })
@@ -169,12 +181,15 @@ impl Finder {
         let server = match Server::parse(&address) {
             Ok(server) => server,
             Err(problem) => {
-                window.push_notification((NotificationType::Warning, problem), cx);
+                window.push_notification((NotificationType::Warning, problem.to_string()), cx);
                 return false;
             }
         };
         window.push_notification(format!("Connecting to {}…", server.host()), cx);
         let task = crate::system::connect(&address, cx);
+        // The address as remembered and shown: the keychain or keyring keeps
+        // the password, never the config file or a notification.
+        let address = servers::without_password(&address).into_owned();
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             this.update_in(cx, |this, window, cx| match result {
@@ -184,7 +199,7 @@ impl Finder {
                     recent.insert(0, address.clone());
                     recent.truncate(RECENT_SERVERS);
                     this.schedule_save(cx);
-                    this.locations = places::locations();
+                    this.reload_locations(cx);
                     this.navigate(Location::Folder(path), window, cx);
                 }
                 Err(err) => window.push_notification(

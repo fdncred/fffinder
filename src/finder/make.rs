@@ -3,13 +3,14 @@
 //! or tar archive does.
 
 use super::Finder;
-use super::transfer::{COMPRESS, EXTRACT};
+use super::transfer::{COMPRESS, EXTRACT, Made};
 use crate::actions::*;
+use crate::system::SystemError;
 use crate::theme::ui;
 use crate::undo::{self, Change};
 use fffinder_core::archive;
 use fffinder_core::entry::display_name;
-use fffinder_core::ops::{Mode, free_name, split_extension};
+use fffinder_core::ops::{self, Mode, TransferError, free_name, split_extension};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
@@ -208,10 +209,15 @@ impl Finder {
         self.run_job(
             COMPRESS,
             count,
-            move |progress| {
-                archive::compress(&sources, &zip, progress)
-                    .map(|()| vec![zip])
-                    .map_err(|e| e.to_string())
+            move |progress| match archive::compress(&sources, &zip, progress) {
+                Ok(()) => Made {
+                    items: vec![zip],
+                    failed: Vec::new(),
+                },
+                Err(err) => Made {
+                    items: Vec::new(),
+                    failed: vec![err],
+                },
             },
             window,
             cx,
@@ -242,11 +248,19 @@ impl Finder {
             EXTRACT,
             count,
             move |progress| {
-                archives
-                    .iter()
-                    .map(|a| archive::extract(a, progress))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())
+                // One archive failing doesn't stop the others; Stop does.
+                let mut made = Made {
+                    items: Vec::with_capacity(archives.len()),
+                    failed: Vec::new(),
+                };
+                for archive in &archives {
+                    match archive::extract(archive, progress) {
+                        Ok(out) => made.items.push(out),
+                        Err(TransferError::Cancelled) => break,
+                        Err(err) => made.failed.push(err),
+                    }
+                }
+                made
             },
             window,
             cx,
@@ -255,10 +269,9 @@ impl Finder {
 }
 
 /// Make a Finder alias (macOS), a shortcut (Windows), or a symbolic link at
-/// `link` to `target`,
-/// which is in the same folder, so the link keeps working if the folder
-/// moves.
-fn make_link(target: &Path, link: &Path, alias: bool) -> Result<(), String> {
+/// `link` to `target`, which is in the same folder: the link names it alone,
+/// so it keeps working if the folder moves.
+fn make_link(target: &Path, link: &Path, alias: bool) -> Result<(), SystemError> {
     #[cfg(target_os = "macos")]
     if alias {
         return crate::macos::make_alias(target, link);
@@ -269,15 +282,7 @@ fn make_link(target: &Path, link: &Path, alias: bool) -> Result<(), String> {
     }
     let _ = alias;
     let name = target.file_name().map(Path::new).unwrap_or(target);
-    #[cfg(unix)]
-    let made = std::os::unix::fs::symlink(name, link);
-    #[cfg(windows)]
-    let made = if target.is_dir() {
-        std::os::windows::fs::symlink_dir(name, link)
-    } else {
-        std::os::windows::fs::symlink_file(name, link)
-    };
-    made.map_err(|e| e.to_string())
+    Ok(ops::make_symlink(name, link, target.is_dir())?)
 }
 
 /// Whether an item is an archive that Extract (and opening it) unpacks.

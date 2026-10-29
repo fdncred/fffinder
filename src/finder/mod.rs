@@ -92,10 +92,6 @@ pub struct Row {
     pub highlights: Vec<(usize, usize)>,
     /// How `LS_COLORS` draws the name, when that option is on.
     pub name_style: Option<crate::nu_env::NameStyle>,
-    /// The list view's other columns.
-    pub created: SharedString,
-    pub opened: SharedString,
-    pub permissions: SharedString,
     /// Git status (`modified`, `untracked`, …), or empty when clean.
     pub git: SharedString,
     /// How deep inside open folders the row is, in the list view's tree.
@@ -118,30 +114,42 @@ impl Row {
                 .unwrap_or_else(|| "--".into())
                 .into(),
             kind: entry.kind_label().into(),
-            created: entry
-                .created
-                .map(format::human_date)
-                .unwrap_or_default()
-                .into(),
-            opened: entry
-                .last_opened
-                .map(format::human_date)
-                .unwrap_or_default()
-                .into(),
-            // Windows has no permission bits, only read-only files.
-            permissions: match (entry.mode, entry.is_dir, entry.readonly) {
-                (Some(mode), _, _) => fffinder_core::info::mode_string(mode),
-                (None, true, _) => "--".into(),
-                (None, false, true) => "read-only".into(),
-                (None, false, false) => "read-write".into(),
-            }
-            .into(),
             git: SharedString::default(),
             depth: 0,
             detail: detail.into(),
             highlights,
             name_style: None,
             entry,
+        }
+    }
+
+    /// When the item was made, for the list view's column. This and the
+    /// next two are only made for rows drawn with those columns showing.
+    pub fn created(&self) -> SharedString {
+        self.entry
+            .created
+            .map(format::human_date)
+            .unwrap_or_default()
+            .into()
+    }
+
+    /// When the item was last opened, for the list view's column.
+    pub fn opened(&self) -> SharedString {
+        self.entry
+            .last_opened
+            .map(format::human_date)
+            .unwrap_or_default()
+            .into()
+    }
+
+    /// `rwxr-xr-x`, for the list view's column. Windows has no permission
+    /// bits, only read-only files.
+    pub fn permissions(&self) -> SharedString {
+        match (self.entry.mode, self.entry.is_dir, self.entry.readonly) {
+            (Some(mode), _, _) => fffinder_core::info::mode_string(mode).into(),
+            (None, true, _) => "--".into(),
+            (None, false, true) => "read-only".into(),
+            (None, false, false) => "read-write".into(),
         }
     }
 }
@@ -275,6 +283,8 @@ pub struct Finder {
 
     favorites: Vec<Place>,
     locations: Vec<Place>,
+    /// Rereads the locations; a newer reread replaces it.
+    locations_task: Task<()>,
     index_status: Vec<RootStatus>,
     status_task: Task<()>,
     /// Applies a change of search roots; a newer change replaces it.
@@ -376,7 +386,7 @@ impl Finder {
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    this.locations = places::locations();
+                    this.reload_locations(cx);
                     this.check_for_changes(cx);
                 }
             }),
@@ -460,7 +470,10 @@ impl Finder {
             nu_running: false,
             nu_task: Task::ready(()),
             favorites,
-            locations: places::locations(),
+            // Read in the background below: naming a volume can wait on a
+            // slow drive.
+            locations: Vec::new(),
+            locations_task: Task::ready(()),
             index_status: Vec::new(),
             status_task: Task::ready(()),
             roots_task: Task::ready(()),
@@ -488,6 +501,7 @@ impl Finder {
             config,
         };
         this.load_listing(Vec::new(), false, cx);
+        this.reload_locations(cx);
         this.poll_index_status(cx);
         this.watch_folder(cx);
         this.detect_terminals(cx);
@@ -530,6 +544,8 @@ impl Finder {
     #[doc(hidden)]
     pub fn set_locations_for_test(&mut self, locations: Vec<Place>) {
         self.locations = locations;
+        // A reread still running would replace them.
+        self.locations_task = Task::ready(());
     }
 
     #[doc(hidden)]
@@ -811,17 +827,20 @@ impl Finder {
                             None,
                             Vec::new(),
                         )),
-                        Location::Trash => bin.list().map(|items| {
-                            let entries = items
-                                .iter()
-                                .filter_map(|item| {
-                                    let mut entry = FileEntry::from_path(&item.path)?;
-                                    entry.name = item.name();
-                                    Some(entry)
-                                })
-                                .collect();
-                            (entries, None, items)
-                        }),
+                        Location::Trash => bin
+                            .list()
+                            .map(|items| {
+                                let entries = items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        let mut entry = FileEntry::from_path(&item.path)?;
+                                        entry.name = item.name();
+                                        Some(entry)
+                                    })
+                                    .collect();
+                                (entries, None, items)
+                            })
+                            .map_err(|e| e.to_string()),
                     }
                 })
                 .await;
@@ -1132,16 +1151,19 @@ impl Finder {
             if retry {
                 // The index is still being built: search again as soon as
                 // a location finishes indexing, or after a while anyway, as
-                // results from the rest come in.
-                let indexing = engine_for_retry.roots_indexing();
-                for _ in 0..24 {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(25))
-                        .await;
-                    if engine_for_retry.roots_indexing() < indexing {
-                        break;
+                // results from the rest come in. Asking takes each index's
+                // lock, which a scan may hold, so it's asked off the UI thread.
+                let executor = cx.background_executor().clone();
+                cx.background_spawn(async move {
+                    let indexing = engine_for_retry.roots_indexing();
+                    for _ in 0..24 {
+                        executor.timer(Duration::from_millis(25)).await;
+                        if engine_for_retry.roots_indexing() < indexing {
+                            break;
+                        }
                     }
-                }
+                })
+                .await;
                 this.update(cx, |this, cx| {
                     if this.search_gen == generation {
                         this.run_search(false, cx);

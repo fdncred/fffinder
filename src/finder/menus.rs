@@ -136,7 +136,7 @@ pub fn item_menu(
                 .action(Box::new(OpenSelected)),
         );
     let menu = if opens_files {
-        super::open_with::open_with_submenus(view, first.path.clone(), single, menu, window, cx)
+        super::open_with::open_with_submenus(view, &entries, menu, window, cx)
     } else {
         menu
     };

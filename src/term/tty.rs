@@ -97,14 +97,21 @@ impl Session {
     /// report its size in pixels.
     pub fn start() -> anyhow::Result<Session> {
         let out = sys::open().context("fffinder --term needs a terminal")?;
-        sys::prepare(&out).context("could not set the terminal up")?;
-        crossterm::terminal::enable_raw_mode().context("could not put the terminal in raw mode")?;
-        let checked = probe(&out).and_then(|caps| {
-            sys::check(&caps)?;
-            let geometry = geometry(caps.cell)?;
-            sys::start_input().context("could not read the mouse")?;
-            Ok((caps, geometry))
-        });
+        // Every step after the first change to the terminal is checked
+        // together, so a failure at any of them puts it all back.
+        let checked = sys::prepare(&out)
+            .context("could not set the terminal up")
+            .and_then(|()| {
+                crossterm::terminal::enable_raw_mode()
+                    .context("could not put the terminal in raw mode")
+            })
+            .and_then(|()| probe(&out))
+            .and_then(|caps| {
+                sys::check(&caps)?;
+                let geometry = geometry(caps.cell)?;
+                sys::start_input().context("could not read the mouse")?;
+                Ok((caps, geometry))
+            });
         let (caps, geometry) = match checked {
             Ok(found) => found,
             Err(err) => {

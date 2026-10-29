@@ -7,9 +7,10 @@ use super::views::DraggedFiles;
 use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
-use crate::trash_bin::{self, Trashed};
+use crate::trash_bin::{self, TrashError, TrashStopped, Trashed};
 use crate::undo::{self, Change, Step};
 use fffinder_core::FileEntry;
+use fffinder_core::ops;
 use gpui_kit::component::button::{Button, ButtonVariant};
 use gpui_kit::component::input;
 use gpui_kit::component::notification::NotificationType;
@@ -42,25 +43,32 @@ impl Finder {
         !self.is_searching() && matches!(self.location(), Location::Trash)
     }
 
-    /// Move items to the Trash now; Undo puts them back.
+    /// Move items to the Trash now; Undo puts them back. An item inside
+    /// another one being trashed goes with it.
     pub fn trash_now(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         if self.wait_for_undo(window, cx) {
             return;
         }
         let bin = trash_bin::bin(cx);
+        let paths = ops::outermost(&paths);
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
             this.update_in(cx, |this, window, cx| {
                 this.selection.clear();
-                match result {
-                    Ok(items) => undo::record("Move to Trash", Change::Trashed(items), cx),
-                    Err(err) => window.push_notification(
+                // What went before a failure can still be put back.
+                let (trashed, failed) = match result {
+                    Ok(trashed) => (trashed, None),
+                    Err(TrashStopped { trashed, error }) => (trashed, Some(error)),
+                };
+                undo::record("Move to Trash", Change::Trashed(trashed), cx);
+                if let Some(err) = failed {
+                    window.push_notification(
                         (
                             NotificationType::Error,
                             format!("Couldn’t move to the Trash: {err}"),
                         ),
                         cx,
-                    ),
+                    );
                 }
                 this.files_changed(Vec::new(), cx);
             })
@@ -110,12 +118,13 @@ impl Finder {
         };
         let trashed = self.in_trash().then(|| self.selected_trashed());
         let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
+        let paths = ops::outermost(&paths);
         let bin = trash_bin::bin(cx);
         self.confirm_danger(title, "Delete", window, cx, move || match &trashed {
             Some(items) => bin.delete(items),
             None => paths
                 .iter()
-                .try_for_each(|p| fffinder_core::ops::remove_any(p).map_err(|e| e.to_string())),
+                .try_for_each(|p| ops::remove_any(p).map_err(TrashError::from)),
         });
     }
 
@@ -146,7 +155,7 @@ impl Finder {
         ok: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
-        job: impl Fn() -> Result<(), String> + Clone + Send + 'static,
+        job: impl Fn() -> Result<(), TrashError> + Clone + Send + 'static,
     ) {
         self.focus_before_dialog(window, cx);
         let view = cx.entity();
@@ -169,7 +178,7 @@ impl Finder {
     /// Run file work off the UI thread, then reload what changed.
     fn run_file_job(
         &mut self,
-        job: impl FnOnce() -> Result<(), String> + Send + 'static,
+        job: impl FnOnce() -> Result<(), TrashError> + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -180,7 +189,7 @@ impl Finder {
             let result = cx.background_spawn(async move { job() }).await;
             this.update_in(cx, |this, window, cx| {
                 if let Err(err) = result {
-                    window.push_notification((NotificationType::Error, err), cx);
+                    window.push_notification((NotificationType::Error, err.to_string()), cx);
                 }
                 this.selection.clear();
                 this.files_changed(Vec::new(), cx);
@@ -226,7 +235,8 @@ impl Finder {
     }
 
     /// Reverse the latest operation (Undo) or undo (Redo), and keep its
-    /// opposite for the other one.
+    /// opposite for the other one. When it stops part way, what it reversed
+    /// is kept for the other one too, and the rest stays to be tried again.
     fn step_file_history(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
         if self.wait_for_undo(window, cx) {
             return;
@@ -257,8 +267,18 @@ impl Finder {
                     this.files_changed(reversed.back, cx);
                     window.push_notification(format!("{} {name}", step.past()), cx);
                 }
-                Err(err) => {
-                    this.files_changed(Vec::new(), cx);
+                Err(stopped) => {
+                    let undo::Stopped { done, left, error } = *stopped;
+                    undo::stepped(
+                        step,
+                        undo::Operation {
+                            name,
+                            change: done.opposite,
+                        },
+                        cx,
+                    );
+                    undo::put_back(step, undo::Operation { name, change: left }, cx);
+                    this.files_changed(done.back, cx);
                     let verb = match step {
                         Step::Undo => "undo",
                         Step::Redo => "redo",
@@ -266,7 +286,7 @@ impl Finder {
                     window.push_notification(
                         (
                             NotificationType::Error,
-                            format!("Couldn’t {verb} {name}: {err}"),
+                            format!("Couldn’t {verb} {name}: {error}"),
                         ),
                         cx,
                     );

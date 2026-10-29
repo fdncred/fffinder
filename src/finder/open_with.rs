@@ -3,12 +3,14 @@
 use super::Finder;
 use crate::apps::{self, OpenApp};
 use crate::theme::ui;
+use fffinder_core::FileEntry;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::NotificationType;
 use gpui_kit::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 impl Finder {
     /// The selected files (not folders), for Open With.
@@ -112,25 +114,46 @@ fn app_label(app: &OpenApp) -> String {
     }
 }
 
-/// The "Open With" submenu for the selected files, and for one file the
-/// "Always Open With" submenu. The apps are looked up when it opens.
-pub(super) fn open_with_submenus(
-    view: &Entity<Finder>,
-    file: PathBuf,
-    single: bool,
+/// Builds a submenu's items from the apps found for a file.
+type AppItems =
+    Rc<dyn Fn(PopupMenu, &[OpenApp], &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+
+/// Fill a submenu with `items` for the apps that open `file`, once they're
+/// known: at once when they already are, or after a lookup off the UI
+/// thread, with a placeholder until then.
+fn with_apps(
     menu: PopupMenu,
+    file: &Path,
+    items: AppItems,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let open_view = view.clone();
-    let open_file = file.clone();
-    let menu = menu.submenu("Open With", window, cx, move |mut menu, window, cx| {
-        let found = apps::apps_for(&open_file, cx);
-        for app in &found {
+    if let Some(found) = apps::known_apps_for(file, cx) {
+        return items(menu, &found, window, cx);
+    }
+    let lookup = apps::apps_for(file, cx);
+    cx.spawn_in(window, async move |menu, cx| {
+        let found = lookup.await;
+        menu.update_in(cx, |menu, window, cx| {
+            menu.rebuild(window, cx, |menu, window, cx| {
+                items(menu, &found, window, cx)
+            })
+        })
+        .ok();
+    })
+    .detach();
+    menu.item(PopupMenuItem::new("Looking for Apps…").disabled(true))
+        .min_w(ui(200.))
+}
+
+/// The Open With items: each app, then "Other…".
+fn open_with_items(view: Entity<Finder>) -> AppItems {
+    Rc::new(move |mut menu, found, window, _| {
+        for app in found {
             let path = app.path.clone();
             menu = menu.item(
                 PopupMenuItem::new(app_label(app)).on_click(window.listener_for(
-                    &open_view,
+                    &view,
                     move |this: &mut Finder, _: &ClickEvent, window, cx| {
                         this.open_with_app(path.clone(), window, cx)
                     },
@@ -145,37 +168,57 @@ pub(super) fn open_with_submenus(
                 PopupMenuItem::new("Other…")
                     .icon(Lucide::AppWindow)
                     .on_click(window.listener_for(
-                        &open_view,
+                        &view,
                         |this: &mut Finder, _: &ClickEvent, window, cx| {
                             this.open_with_other(window, cx)
                         },
                     )),
             )
             .min_w(ui(200.))
+    })
+}
+
+/// The Always Open With items: each app, the default checked.
+fn always_open_with_items(view: Entity<Finder>) -> AppItems {
+    Rc::new(move |mut menu, found, window, _| {
+        for app in found {
+            let path = app.path.clone();
+            menu = menu.item(
+                PopupMenuItem::new(app.name.clone())
+                    .checked(app.is_default)
+                    .on_click(window.listener_for(
+                        &view,
+                        move |this: &mut Finder, _: &ClickEvent, window, cx| {
+                            this.always_open_with(path.clone(), window, cx)
+                        },
+                    )),
+            );
+        }
+        menu.min_w(ui(200.))
+    })
+}
+
+/// The "Open With" submenu for the selected files in `entries`, and for one
+/// file the "Always Open With" submenu. The apps are looked up when it opens.
+pub(super) fn open_with_submenus(
+    view: &Entity<Finder>,
+    entries: &[FileEntry],
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(file) = entries.first().map(|e| e.path.clone()) else {
+        return menu;
+    };
+    let (open_file, open_items) = (file.clone(), open_with_items(view.clone()));
+    let menu = menu.submenu("Open With", window, cx, move |menu, window, cx| {
+        with_apps(menu, &open_file, open_items.clone(), window, cx)
     });
-    if !single || apps::SYSTEM_CHOOSER {
+    if entries.len() > 1 || apps::SYSTEM_CHOOSER {
         return menu;
     }
-    let view = view.clone();
-    menu.submenu(
-        "Always Open With",
-        window,
-        cx,
-        move |mut menu, window, cx| {
-            for app in apps::apps_for(&file, cx) {
-                let path = app.path.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(app.name.clone())
-                        .checked(app.is_default)
-                        .on_click(window.listener_for(
-                            &view,
-                            move |this: &mut Finder, _: &ClickEvent, window, cx| {
-                                this.always_open_with(path.clone(), window, cx)
-                            },
-                        )),
-                );
-            }
-            menu.min_w(ui(200.))
-        },
-    )
+    let always_items = always_open_with_items(view.clone());
+    menu.submenu("Always Open With", window, cx, move |menu, window, cx| {
+        with_apps(menu, &file, always_items.clone(), window, cx)
+    })
 }

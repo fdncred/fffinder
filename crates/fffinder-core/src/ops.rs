@@ -39,11 +39,16 @@ pub enum TransferError {
     ReplacesParent(String),
     #[error("{}: {source}", .path.display())]
     Io { path: PathBuf, source: io::Error },
+    /// A move across volumes copied the item, but the original at `path`
+    /// couldn't be removed afterwards.
+    #[error("the original couldn’t be removed: {source}")]
+    OriginalLeft { path: PathBuf, source: io::Error },
     #[error("stopped")]
     Cancelled,
 }
 
-fn io_error(path: &Path) -> impl FnOnce(io::Error) -> TransferError + '_ {
+/// Turn an I/O error on `path` into a [`TransferError`], for `map_err`.
+pub fn io_error(path: &Path) -> impl FnOnce(io::Error) -> TransferError + '_ {
     move |source| TransferError::Io {
         path: path.to_path_buf(),
         source,
@@ -70,9 +75,22 @@ impl Transfer {
         source.parent() == Some(self.dest.as_path())
     }
 
-    /// Refuse a folder copied or moved into itself.
+    /// Whether `source`'s bytes are copied: always for a copy, and for a
+    /// move only across volumes, since within one a move is a rename.
+    fn copies_bytes(&self, source: &Path) -> bool {
+        self.mode == Mode::Copy || !same_volume(source, &self.dest)
+    }
+
+    /// Refuse a folder copied or moved into itself, however either path is
+    /// spelled: through a link, a firmlink (`/tmp` and `/private/tmp`), or in
+    /// another case on a volume that ignores case.
     pub fn check(&self) -> Result<(), TransferError> {
-        match self.sources.iter().find(|s| self.dest.starts_with(s)) {
+        let dest = resolved(&self.dest);
+        match self
+            .sources
+            .iter()
+            .find(|s| dest.starts_with(resolved_item(s)))
+        {
             Some(source) => Err(TransferError::IntoItself(display_name(source))),
             None => Ok(()),
         }
@@ -94,6 +112,8 @@ impl Transfer {
 pub struct Progress {
     done: AtomicU64,
     total: AtomicU64,
+    /// Whether `total` holds every byte the job will copy.
+    counted: AtomicBool,
     cancelled: AtomicBool,
     current: Mutex<String>,
 }
@@ -104,13 +124,20 @@ impl Progress {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 
+    /// Whether [`Self::cancel`] was called.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
 
-    /// How far along the bytes are, from 0 to 1. Moves within a volume
-    /// have no bytes to copy and count as done.
+    /// How far along the bytes are, from 0 to 1. It stays at 0 until every
+    /// byte to copy is counted, so it never runs ahead of the work. A job
+    /// with nothing to copy, like a move within a volume, is then done.
     pub fn fraction(&self) -> f32 {
+        // Acquire pairs with the Release in `counted`: once that is seen,
+        // so is every byte added to `total` before it.
+        if !self.counted.load(Ordering::Acquire) {
+            return 0.0;
+        }
         let total = self.total.load(Ordering::Relaxed);
         if total == 0 {
             return 1.0;
@@ -140,6 +167,11 @@ impl Progress {
         self.total.fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// Every byte the job will copy has been passed to [`Self::expect`].
+    pub(crate) fn counted(&self) {
+        self.counted.store(true, Ordering::Release);
+    }
+
     pub(crate) fn check(&self) -> Result<(), TransferError> {
         if self.is_cancelled() {
             Err(TransferError::Cancelled)
@@ -157,25 +189,33 @@ pub struct Report {
     pub skipped: Vec<PathBuf>,
     /// Items that couldn't be copied or moved, and why.
     pub failed: Vec<(PathBuf, String)>,
+    /// Items moved across volumes whose copy is complete (and in `done`)
+    /// but whose original couldn't be removed, and why.
+    pub left: Vec<(PathBuf, String)>,
     /// Stop was pressed; the item in progress was removed.
     pub cancelled: bool,
 }
 
 /// Copy or move every source into the destination, settling name clashes
-/// with `clash`. Errors on one item don't stop the others.
+/// with `clash`. Errors on one item don't stop the others. The work starts
+/// at once while another thread adds up how many bytes it has to copy.
 pub fn run(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
-    let mut report = Report::default();
     if let Err(err) = transfer.check() {
-        report.failed = transfer
-            .sources
-            .iter()
-            .map(|s| (s.clone(), err.to_string()))
-            .collect();
-        return report;
+        return Report {
+            failed: transfer
+                .sources
+                .iter()
+                .map(|s| (s.clone(), err.to_string()))
+                .collect(),
+            ..Report::default()
+        };
     }
-    if transfer.mode == Mode::Copy {
-        progress.expect(transfer.sources.iter().map(|s| tree_size(s)).sum());
-    }
+    let copied = transfer.sources.iter().filter(|s| transfer.copies_bytes(s));
+    sized_while(copied, progress, || run_items(transfer, clash, progress))
+}
+
+fn run_items(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
+    let mut report = Report::default();
     for source in &transfer.sources {
         if progress.is_cancelled() {
             report.cancelled = true;
@@ -196,12 +236,15 @@ pub fn run(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
             (false, _, None) => (transfer.dest.join(&name), false),
             (false, _, Some(target)) => match clash {
                 Clash::Skip => {
-                    progress.advance(tree_size(source));
+                    // This item's bytes were counted; count them as done.
+                    if transfer.copies_bytes(source) {
+                        progress.advance(tree_size(source, progress));
+                    }
                     report.skipped.push(source.clone());
                     continue;
                 }
                 Clash::KeepBoth => (numbered_name(&transfer.dest, &name, is_dir), false),
-                Clash::Replace if source.starts_with(&target) => {
+                Clash::Replace if resolved_item(source).starts_with(resolved_item(&target)) => {
                     report.failed.push((
                         source.clone(),
                         TransferError::ReplacesParent(name).to_string(),
@@ -217,10 +260,56 @@ pub fn run(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
                 report.cancelled = true;
                 break;
             }
+            Err(err @ TransferError::OriginalLeft { .. }) => {
+                report.left.push((source.clone(), err.to_string()));
+                report.done.push((source.clone(), target));
+            }
             Err(err) => report.failed.push((source.clone(), err.to_string())),
         }
     }
     report
+}
+
+/// Run `work` while another thread adds up the bytes under `sources` for
+/// `progress`, so the work doesn't wait for a walk of every folder first.
+/// The count stops when the work ends or Stop is pressed.
+pub(crate) fn sized_while<'a, T>(
+    sources: impl IntoIterator<Item = &'a PathBuf> + Send,
+    progress: &Progress,
+    work: impl FnOnce() -> T,
+) -> T {
+    let finished = AtomicBool::new(false);
+    // A scoped thread may borrow from this function's stack, since the scope
+    // waits for it before returning.
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for source in sources {
+                count_bytes(source, progress, &finished);
+            }
+            progress.counted();
+        });
+        let result = work();
+        finished.store(true, Ordering::Relaxed);
+        result
+    })
+}
+
+/// Add the bytes in a file, or in every file under a folder, to the bytes
+/// `progress` expects, as they're found.
+fn count_bytes(path: &Path, progress: &Progress, finished: &AtomicBool) {
+    if finished.load(Ordering::Relaxed) || progress.is_cancelled() {
+        return;
+    }
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if meta.is_dir() {
+        for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+            count_bytes(&entry.path(), progress, finished);
+        }
+    } else if !meta.file_type().is_symlink() {
+        progress.expect(meta.len());
+    }
 }
 
 /// Move one item to exactly `target`, which must be free: a rename, or a
@@ -245,9 +334,8 @@ fn transfer_one(
     if mode == Mode::Move {
         match fs::rename(source, &staging) {
             Ok(()) => return finish_replace(&staging, target, replace, Some(source)),
-            Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
-                progress.expect(tree_size(source));
-            }
+            // `run` counted its bytes; copy and delete instead.
+            Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {}
             Err(err) => return Err(io_error(source)(err)),
         }
     }
@@ -257,7 +345,10 @@ fn transfer_one(
     }
     finish_replace(&staging, target, replace, None)?;
     if mode == Mode::Move {
-        remove_any(source).map_err(io_error(source))?;
+        remove_any(source).map_err(|err| TransferError::OriginalLeft {
+            path: source.to_path_buf(),
+            source: err,
+        })?;
     }
     Ok(())
 }
@@ -287,13 +378,16 @@ fn finish_replace(
     })
 }
 
-/// A hidden name beside `target` for a copy that isn't finished yet.
-fn staging_path(target: &Path) -> PathBuf {
+/// A hidden name beside `target` for work that isn't finished yet. Each
+/// call gets its own, so jobs running at once never share one.
+pub(crate) fn staging_path(target: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    target.with_file_name(format!(".{name}.fffinder-{}", std::process::id()))
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    target.with_file_name(format!(".{name}.fffinder-{}-{n}", std::process::id()))
 }
 
 /// Copy a file, folder, or symbolic link (as a link) to `target`, which
@@ -368,22 +462,39 @@ fn clones_instantly(_: &fs::Metadata, _: &Path) -> bool {
     false
 }
 
+/// Make a symbolic link at `link` that points to `points_to`. Windows has
+/// separate links for folders and files, so `is_dir` says which.
+///
+/// # Errors
+///
+/// Fails when the link can't be made, as when `link` is taken.
 #[cfg(unix)]
-fn make_symlink(link: &Path, target: &Path, _is_dir: bool) -> io::Result<()> {
-    std::os::unix::fs::symlink(link, target)
+pub fn make_symlink(points_to: &Path, link: &Path, _is_dir: bool) -> io::Result<()> {
+    std::os::unix::fs::symlink(points_to, link)
 }
 
+/// Make a symbolic link at `link` that points to `points_to`. Windows has
+/// separate links for folders and files, so `is_dir` says which.
+///
+/// # Errors
+///
+/// Fails when the link can't be made, as when `link` is taken or Windows
+/// doesn't allow this user to make links.
 #[cfg(windows)]
-fn make_symlink(link: &Path, target: &Path, is_dir: bool) -> io::Result<()> {
+pub fn make_symlink(points_to: &Path, link: &Path, is_dir: bool) -> io::Result<()> {
     if is_dir {
-        std::os::windows::fs::symlink_dir(link, target)
+        std::os::windows::fs::symlink_dir(points_to, link)
     } else {
-        std::os::windows::fs::symlink_file(link, target)
+        std::os::windows::fs::symlink_file(points_to, link)
     }
 }
 
 /// Bytes in a file, or in every file under a folder. Links count as nothing.
-pub fn tree_size(path: &Path) -> u64 {
+/// The walk stops early, with what it has so far, once Stop is pressed.
+pub fn tree_size(path: &Path, progress: &Progress) -> u64 {
+    if progress.is_cancelled() {
+        return 0;
+    }
     let Ok(meta) = fs::symlink_metadata(path) else {
         return 0;
     };
@@ -398,10 +509,25 @@ pub fn tree_size(path: &Path) -> u64 {
         .map(|entries| {
             entries
                 .filter_map(Result::ok)
-                .map(|e| tree_size(&e.path()))
+                .map(|e| tree_size(&e.path(), progress))
                 .sum()
         })
         .unwrap_or(0)
+}
+
+/// `path` with links, firmlinks, and case spelled as the disk has them, or
+/// as given when it can't be read.
+fn resolved(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Like [`resolved`], but a link at the end stays a link: copying one
+/// copies the link, not what it points to.
+fn resolved_item(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => resolved(parent).join(name),
+        _ => resolved(path),
+    }
 }
 
 /// Whether `a` and `b` are on the same volume, so dragging between them
@@ -424,6 +550,28 @@ pub fn same_volume(a: &Path, b: &Path) -> bool {
         };
         drive(a) == drive(b)
     }
+}
+
+/// `paths` without those inside another of them, or listed twice: trashing,
+/// moving, or deleting a folder takes what's in it along. The order is kept.
+pub fn outermost(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut order: Vec<usize> = (0..paths.len()).collect();
+    // Sorted, a folder comes right before everything inside it.
+    order.sort_by(|&a, &b| paths[a].cmp(&paths[b]).then(a.cmp(&b)));
+    let mut keep = vec![true; paths.len()];
+    let mut outer: Option<&Path> = None;
+    for ix in order {
+        match outer {
+            Some(folder) if paths[ix].starts_with(folder) => keep[ix] = false,
+            _ => outer = Some(&paths[ix]),
+        }
+    }
+    paths
+        .iter()
+        .zip(keep)
+        .filter(|&(_, keep)| keep)
+        .map(|(path, _)| path.clone())
+        .collect()
 }
 
 /// Delete a file, link, or whole folder.
@@ -701,7 +849,92 @@ mod tests {
             numbered_name(&dir.path("src"), "sub", true),
             dir.path("src/sub 2")
         );
-        assert_eq!(tree_size(&dir.path("src")), 9);
+        assert_eq!(tree_size(&dir.path("src"), &Progress::default()), 9);
         assert!(same_volume(&dir.path("src/a.txt"), &dir.path("dest")));
+        let stopped = Progress::default();
+        stopped.cancel();
+        assert_eq!(
+            tree_size(&dir.path("src"), &stopped),
+            0,
+            "Stop ends the walk"
+        );
+    }
+
+    #[test]
+    fn keeps_only_the_outermost_items() {
+        let paths: Vec<PathBuf> = ["/a/b/c", "/a", "/ab", "/a/b", "/x", "/a", "/a b/c"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        let expected: Vec<PathBuf> = ["/a", "/ab", "/x", "/a b/c"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        assert_eq!(outermost(&paths), expected);
+    }
+
+    #[test]
+    fn staging_names_differ_per_call() {
+        let target = Path::new("/a/b.txt");
+        assert_ne!(staging_path(target), staging_path(target));
+        assert!(
+            staging_path(target)
+                .to_string_lossy()
+                .starts_with("/a/.b.txt.fffinder-")
+        );
+    }
+
+    #[test]
+    fn progress_starts_at_nothing_done() {
+        let dir = Dir::new("fraction");
+        let progress = Progress::default();
+        assert_eq!(progress.fraction(), 0.0, "nothing is counted yet");
+        let transfer = dir.transfer(&["src/a.txt"], "dest", Mode::Move);
+        let report = run(&transfer, Clash::Skip, &progress);
+        assert_eq!(report.done.len(), 1);
+        assert_eq!(progress.fraction(), 1.0, "a rename copies no bytes");
+    }
+
+    #[test]
+    fn counts_bytes_while_copying() {
+        let dir = Dir::new("sized");
+        let progress = Progress::default();
+        let sources = [dir.path("src")];
+        let copied = sized_while(&sources, &progress, || {
+            copy_tree(&dir.path("src"), &dir.path("dest/src"), &progress)
+        });
+        assert!(copied.is_ok());
+        assert_eq!(dir.read("dest/src/sub/b.txt"), "beta");
+        assert_eq!(progress.fraction(), 1.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_folder_into_itself_through_a_link() {
+        let dir = Dir::new("itself-link");
+        std::os::unix::fs::symlink(dir.path("src"), dir.path("alias")).unwrap();
+        let transfer = dir.transfer(&["src"], "alias/sub", Mode::Copy);
+        assert!(matches!(
+            transfer.check(),
+            Err(TransferError::IntoItself(_))
+        ));
+        // Copying the link itself into the folder it points to is fine: the
+        // copy is a link, not the folder.
+        let link = dir.transfer(&["alias"], "src/sub", Mode::Copy);
+        assert!(link.check().is_ok());
+    }
+
+    #[test]
+    fn refuses_a_folder_into_itself_in_another_case() {
+        let dir = Dir::new("itself-case");
+        // Only where the volume ignores case, as macOS and Windows do.
+        if !dir.path("SRC").exists() {
+            return;
+        }
+        let transfer = dir.transfer(&["src"], "SRC/sub", Mode::Copy);
+        assert!(matches!(
+            transfer.check(),
+            Err(TransferError::IntoItself(_))
+        ));
     }
 }
