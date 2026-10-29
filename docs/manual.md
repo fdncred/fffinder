@@ -653,10 +653,19 @@ If the terminal saved in Settings isn't installed, Automatic's choice is used an
 It needs:
 
 - a build with the `term` feature: `nu scripts/install.nu --term`, or `cargo build --release --features term`.
-- macOS or Linux.
-- a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, or Konsole. It doesn't work inside tmux.
+- on macOS and Linux, a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, Rio, Konsole, or VS Code's terminal. It doesn't work inside tmux.
+- on Windows, a terminal with kitty graphics, such as WezTerm, Rio, or VS Code's terminal, or one with sixel images, such as Windows Terminal 1.22 or later.
+- in VS Code's terminal, the `terminal.integrated.enableImages` setting turned on, and `terminal.integrated.gpuAcceleration` not off. On Windows, VS Code shows kitty graphics but not sixel images.
 
-Frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. fffinder draws a frame only when something on screen changes, at most about 60 a second, and when the terminal falls behind it skips ahead to the newest frame. `fffinder --term --fps` shows the rate in the status bar: the frames that reached the terminal in the last second, so an idle window reads 0. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+fffinder draws a frame only when something on screen changes, at most about 60 a second, and when the terminal falls behind it skips ahead to the newest frame. `fffinder --term --fps` shows the rate in the status bar: the frames that reached the terminal in the last second, so an idle window reads 0.
+
+On macOS and Linux, frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+
+On Windows, frames go to the terminal as kitty graphics when it has them, and as sixel images otherwise, as in Windows Terminal. They pass through the Windows console (ConPTY) on the way, and in a terminal that ships an older ConPTY, the images, or the terminal's answers about what it can show, may not get through. Clicks land in the middle of a character cell, and emoji are drawn in one color.
+
+With sixel images, only the cells that changed since the last frame are sent. Each image has at most 256 colors: an area with no more than that keeps its colors, and a busier one, such as a photo in a preview, is reduced to 256 without dithering. Windows Terminal draws sixel images at 10 by 20 pixels a character cell whatever the font size, so the window has fewer pixels than with kitty graphics and text looks softer, more so on a high-DPI screen.
+
+VS Code's terminal measures character cells in points, so on a high-DPI screen the window is drawn at half the screen's resolution there.
 
 What's different from the window:
 

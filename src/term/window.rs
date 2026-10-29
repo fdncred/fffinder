@@ -16,8 +16,8 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::frames::{Frame, Writer};
 use super::input::{self, Mapping, Translator};
-use super::kitty::{Frame, Writer};
 use super::tty::{self, Geometry, Session};
 
 /// Frames are drawn at most this often, about 60 a second.
@@ -463,4 +463,10 @@ impl PlatformWindow for TerminalWindow {
     }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
+
+    /// The terminal's window isn't this process's.
+    #[cfg(windows)]
+    fn get_raw_handle(&self) -> ::windows::Win32::Foundation::HWND {
+        ::windows::Win32::Foundation::HWND::default()
+    }
 }
