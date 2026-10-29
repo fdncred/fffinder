@@ -84,26 +84,12 @@ def bundle-linux [root: path, target: path, dist: path, --install]: nothing -> p
     mkdir $out
     cp ($target | path join fffinder) ($root | path join nu fff.nu) $out
     cp ($root | path join assets app-icon.svg) ($out | path join fffinder.svg)
-    let desktop = [
-        '[Desktop Entry]'
-        'Type=Application'
-        'Name=fffinder'
-        'Comment=Fast fuzzy file search'
-        'Exec=fffinder %f'
-        'Icon=fffinder'
-        'Terminal=false'
-        'Categories=Utility;FileTools;FileManager;'
-        'Keywords=find;search;files;fuzzy;'
-        'StartupWMClass=fffinder'
-    ] | str join (char nl)
-    $desktop | save --force ($out | path join fffinder.desktop)
+    desktop-entry fffinder | save --force ($out | path join fffinder.desktop)
     if $install {
-        let share = $nu.home-dir | path join .local share
         let bin = $nu.home-dir | path join .local bin
-        mkdir ($share | path join applications) ($share | path join icons hicolor scalable apps) $bin
+        mkdir $bin
         cp ($out | path join fffinder) $bin
-        cp ($out | path join fffinder.svg) ($share | path join icons hicolor scalable apps)
-        cp ($out | path join fffinder.desktop) ($share | path join applications)
+        install-desktop-entry fffinder
         print $"Installed to ($bin) and the desktop menu."
     }
     $out

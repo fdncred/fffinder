@@ -45,6 +45,7 @@ impl Fixture {
     fn engine(&self, watch: bool) -> Arc<Engine> {
         let engine = Engine::new(EngineOptions {
             roots: vec![self.tree()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch,
             search: Default::default(),

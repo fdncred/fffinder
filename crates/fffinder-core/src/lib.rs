@@ -1,7 +1,8 @@
-//! Core of fffinder: search engine wrapper around `fff-search`, file model,
-//! folder listing, copying and moving, sidebar places, settings, terminals,
+//! Core of fffinder: search engine wrapper around `fff-search`, the app list,
+//! file model, folder listing, copying and moving, sidebar places, settings, terminals,
 //! and formatting.
 
+pub mod app_list;
 pub mod archive;
 pub mod config;
 pub mod desktop_apps;

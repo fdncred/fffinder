@@ -53,8 +53,8 @@ Run `fffinder`, open the app bundle, or use `fff gui` from Nushell.
 ```text
 fffinder [PATH] [OPTIONS]
 
-  [PATH]             Folder to open (default: the current folder with --term,
-                     else the last folder or home)
+  [PATH]             Folder to open (default: the current folder when run
+                     from a terminal, else the last folder or home)
   -s, --startup-path PATH
                      Folder to open, same as [PATH] (also --startup-path=PATH)
   -q, --query TEXT   Start with this search (also --query=TEXT)
@@ -71,9 +71,10 @@ fffinder [PATH] [OPTIONS]
 
 - `--startup-path` (`-s`) is another way to give PATH. Give one or the other, not both.
 - A PATH that is a file opens its folder.
-- With no PATH, the window opens the folder you last had open, or your home folder if that folder is gone. With `--term`, it opens the folder you ran it from.
-- If fffinder is already running, a second launch hands its PATH and `--query` to the running copy, which opens a window, and then exits. There is always one app and one index. `--pick` windows are separate and never hand off.
+- With no PATH, run from a terminal, the window opens the folder you ran it from. Started from the Dock, Finder, Explorer, or a desktop menu, it opens the folder you last had open, or your home folder if that folder is gone.
+- If fffinder is already running, a second launch hands its folder (PATH, or the folder it was run from in a terminal) and `--query` to the running copy, which shows them in its window, and then exits. There is always one app and one index. `--pick` windows are separate and never hand off.
 - On macOS, fffinder keeps running after you close its last window, like Finder, so the index stays warm for Nushell. Clicking the Dock icon opens a new window. On Linux and Windows, closing the last window quits.
+- The app icon shows everywhere: on macOS, fffinder puts it in the Dock itself when it runs outside `fffinder.app` (as `cargo install` and `scripts/install.nu` install it). Windows takes it from the executable. On Linux, X11 gets it from fffinder, and Wayland from the desktop entry that `scripts/install.nu` installs.
 - `--detach` starts fffinder in the background and returns at once. `fff gui` uses it.
 - `--pick` turns the window into a file chooser. See [Choosing files for scripts](#choosing-files-for-scripts).
 - `--term` shows the window inside the terminal instead. See [In a terminal](#in-a-terminal).
@@ -173,7 +174,7 @@ Right-click a Favorites or Locations row for:
 
 Right-click a Smart Folder for **Remove from Sidebar**.
 
-The footer shows "N files indexed", or "Indexing… N" with a spinner while scanning. Its gear button opens Settings. The Hide Sidebar button, or Cmd+Alt+S, hides the sidebar.
+The footer shows "N files indexed", or "Indexing… N" with a spinner while scanning. After a scan, "Finishing index…" means fff-search is still reading each file once to flag binaries, which can take a few minutes for a large folder and keeps the CPU busy. Searches find everything by then. Its gear button opens Settings. The Hide Sidebar button, or Cmd+Alt+S, hides the sidebar.
 
 ## Views
 
@@ -204,7 +205,7 @@ Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB
 
 Drag a header onto another header to move it there. Drag the right edge of a header to make the column wider or narrower. **Reset Columns** in the header menu goes back to Date Modified, Size, and Kind. Columns, their order, and their widths are saved.
 
-**Calculate All Sizes** (in the header menu, on by default) shows each folder's size: everything the index holds under it, added up without reading the disk. Folders the index skips, such as `node_modules` and caches (see [What the index skips](#what-the-index-skips)), and folders outside the search locations show `--`. Sorting by Size sorts folders by these sizes too.
+**Calculate All Sizes** (in the header menu, on by default) shows each folder's size: everything the index holds under it, added up without reading the disk. Folders the index skips, such as `node_modules` and caches (see [What the index skips](#what-the-index-skips)), and folders outside the search locations show `--`. Apps in the app folders are the exception: their sizes are added up from the disk in the background the first time you open the folder, and again only for an app that changed. Sorting by Size sorts folders by these sizes too.
 
 **Keep Folders on Top** (the header menu, the Sort menu, or View › Keep Folders on Top) lists folders before files whatever the sort, in every view. It is saved.
 
@@ -294,7 +295,7 @@ Cmd+/ shows this table in the app.
 
 ### Ranking and limits
 
-fff-search ranks results, and fffinder re-ranks them so name matches come first, shallow paths come before deep ones, and nothing inside `.app` or `.framework` bundles shows. When a word matches files exactly, typo-only matches are dropped.
+fff-search ranks results, and fffinder re-ranks them so name matches come first, shallow paths come before deep ones, and nothing inside `.app` or `.framework` bundles shows. When a word matches files exactly, typo-only matches are dropped. Apps from the app folders rank as one item wherever their folder is, so "safari" or "term" puts Safari or Terminal ahead of a file with the same words in its name.
 
 A search shows at most `result_limit` items (500 by default; **Results shown** in [Settings › Search engine](#search-engine)). With a filter on, it fetches up to 5,000 so the filter has enough to work with. Opening a file from search results records it, so files you open often rank higher for the same search later.
 
@@ -302,7 +303,7 @@ Search results always show where each item is. Searches can't filter by size or 
 
 ### When the index is ready
 
-The index is kept in memory, not on disk, so each time fffinder starts it walks the search locations again. On a Mac with about 620,000 files in the home folder and `/Applications`, that takes about 4 seconds; half of those files are inside app bundles in `/Applications`. A search typed before then shows results from each location as soon as it's indexed. After that, searches take milliseconds, and watching keeps the index current while fffinder runs.
+The index is kept in memory, not on disk, so each time fffinder starts it walks the search locations again. On a Mac with about 310,000 files in the home folder, that takes about 3 seconds. Apps aren't indexed (see [Search locations](#search-locations)); indexing `/Applications` as well used to double the count, nearly all of it files inside app bundles. After the scan, fff-search reads each file once to flag binaries, which took about 3 minutes on that Mac; the sidebar says "Finishing index…" meanwhile, and searches find everything. A search typed before the scan ends shows results from each location as soon as it's indexed. After that, searches take milliseconds, and watching keeps the index current while fffinder runs.
 
 ### What the index skips
 
@@ -849,11 +850,13 @@ Cmd+, (or the gear in the sidebar footer, or Settings… in the Actions menu) op
 
 ### Search locations
 
-"This Computer" searches these folders, and their indexes stay live while fffinder runs. Each row shows the folder and its file count, or "indexing…" while it scans. The X button stops indexing that folder.
+"This Computer" searches these folders, and their indexes stay live while fffinder runs. Each row shows the folder and its file count, "indexing…" while it scans, or "finishing…" while fff-search reads its files after the scan. The X button stops indexing that folder.
+
+On macOS the list ends with an **Applications** row. Its switch (on by default) finds apps by name in "This Computer" searches by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, such as `Utilities`, instead of indexing them. Finder shows an app as one item, so indexing the files inside every bundle only cost memory and minutes of reading. A new or removed app is noticed on the next search. To search inside app bundles, add `/Applications` with **Add Folder…**.
 
 - **Add Folder…** chooses another folder to index.
 - **Index Entire Disk** replaces the list with the whole disk (`/`, or `C:\` on Windows). The first scan takes longer and uses more memory.
-- **Reset** goes back to the defaults: your home folder, plus `/Applications` on macOS.
+- **Reset** goes back to the defaults: your home folder, and on macOS the Applications switch on.
 - **Rescan** rebuilds the index.
 
 ### Search engine
@@ -901,7 +904,8 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `search_roots` | Home, plus `/Applications` on macOS | Folders indexed for "This Computer" searches. |
+| `search_roots` | Home | Folders indexed for "This Computer" searches. |
+| `search_apps` | `true` on macOS | Find apps by name from the app folders without indexing them (the Applications row in [Search locations](#search-locations)). |
 | `favorites` | The standard folders that exist | Sidebar Favorites, in order. |
 | `show_hidden` | `false` | Show hidden files in folders. |
 | `view_mode` | `"icons"` | `icons`, `list`, `columns`, or `gallery`. |
@@ -927,6 +931,7 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `terminal` | none | The old single terminal command. It moves into `terminals` when the file is read. |
 | `nu_path` | none | Path to `nu`. When unset, fffinder searches `PATH` and the usual install folders. |
 | `last_folder` | none | The folder the next window opens at. |
+| `settings_version` | `1` | The one-time upgrades made to the file. A file without it gets them when read: version 1 removes `/Applications` from `search_roots` on macOS, since apps come from `search_apps` now. Adding it back afterwards keeps it. |
 
 The `search` record:
 
@@ -1084,7 +1089,7 @@ Install the Visual Studio 2022 Build Tools with the "Desktop development with C+
 | Script | What it does |
 | --- | --- |
 | `scripts/build.nu` | Builds the workspace. `--debug` skips optimizations, `--test` runs the tests, `--lint` runs clippy, and `--term` adds terminal mode. |
-| `scripts/install.nu` | Builds a release and copies `fffinder` to `~/.cargo/bin`, or to `--dest`. `--term` adds terminal mode. |
+| `scripts/install.nu` | Builds a release and copies `fffinder` to `~/.cargo/bin`, or to `--dest`. On Linux it also installs the desktop entry and icon into `~/.local/share`, which gives the window its icon on Wayland. `--term` adds terminal mode. |
 | `scripts/bundle.nu` | Packages the app into `dist/` for this platform. `--skip-build` packages the last release build, `--install` installs the Linux desktop entry, and `--term` adds terminal mode. |
 | `scripts/screenshots.nu` | Renders `docs/images` (macOS). |
 | `scripts/windows-icon.nu` | Renders `assets/app-icon.svg` into `assets/windows/fffinder.ico`, the icon the Windows build embeds (macOS). Run it after changing the SVG. |

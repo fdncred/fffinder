@@ -66,16 +66,24 @@ impl Finder {
     }
 
     /// Read `dir`'s folder sizes and git statuses from the index, then redraw.
+    /// Outside the indexed folders, app sizes are added up from the disk.
     pub(super) fn load_folder_stats(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         if !self.wants_folder_stats() {
             return;
         }
         let engine = self.engine.clone();
+        let sizes = self.config.folder_sizes;
         cx.spawn(async move |this, cx| {
             let stats = cx
                 .background_spawn({
                     let dir = dir.clone();
-                    async move { engine.folder_stats(&dir) }
+                    async move {
+                        let mut stats = engine.folder_stats(&dir);
+                        if sizes {
+                            stats.sizes.extend(engine.bundle_sizes(&dir));
+                        }
+                        stats
+                    }
                 })
                 .await;
             this.update(cx, |this, cx| {

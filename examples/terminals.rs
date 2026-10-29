@@ -31,6 +31,7 @@ fn main() {
     let engine = use_index.then(|| {
         let config = Config::load();
         let engine = Engine::new(EngineOptions {
+            app_dirs: config.app_dirs(),
             roots: config.search_roots,
             db_dir: None,
             watch: false,

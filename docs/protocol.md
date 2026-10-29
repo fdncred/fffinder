@@ -45,12 +45,14 @@ Paths are always absolute; clients compute relative paths themselves. `size` is 
 ```json
 {
   "app": "fffinder", "version": "0.2.0", "protocol": 1, "pid": 4242,
-  "watch": true, "scanning": false, "files": 672643, "dirs": 91420,
+  "watch": true, "scanning": false, "finishing": false, "files": 672643, "dirs": 91420,
   "roots": [
-    {"path": "/Users/me", "scanning": false, "files": 264824, "dirs": 40122, "git_repo": false}
+    {"path": "/Users/me", "scanning": false, "finishing": false, "files": 264824, "dirs": 40122, "git_repo": false}
   ]
 }
 ```
+
+`scanning` is true while a location's index is being built and its results are incomplete. `finishing` is true after the scan, while fff-search still reads each file once to flag binaries; searches are complete then, but the CPU is busy.
 
 ### `GET /v1/find`
 
@@ -70,7 +72,7 @@ Rows: `{"type": "file", "path": "…", "rank": 1, "score": 812, "size": 2048, "m
 
 Every indexed file (or folder), or those matching `query` when given. `limit` caps the rows; there is no default cap.
 
-Files: `{"path": "…", "root": "…", "size": 2048, "modified": 1760000000}`. Folders: `{"path": "…", "root": "…"}`. `root` is the search location the item belongs to. Folder paths have no trailing separator, and the search locations themselves are not listed.
+Files: `{"path": "…", "root": "…", "size": 2048, "modified": 1760000000}`. Folders: `{"path": "…", "root": "…"}`. `root` is the search location the item belongs to. Folder paths have no trailing separator, and the search locations themselves are not listed. On macOS, with `search_apps` on, `/v1/dirs` also lists the apps and the folders that hold them in the app folders, which aren't indexed; their `root` is the app folder, such as `/Applications`.
 
 ### `GET /v1/search`
 

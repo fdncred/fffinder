@@ -2,7 +2,7 @@
 
 use super::toolbar::{TOOLBAR_HEIGHT, pill, pill_button, window_drag_area};
 use super::views::DraggedFiles;
-use super::{Finder, group_digits};
+use super::{Finder, IndexActivity, group_digits};
 use crate::actions::*;
 use crate::macos::IconLookup;
 use crate::model::Location;
@@ -381,11 +381,12 @@ impl Finder {
     fn render_index_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let (icon, text) = match self.indexing_progress() {
-            Some(n) => (
-                Spinner::new().xsmall().color(muted).into_any_element(),
-                format!("Indexing… {}", group_digits(n)),
-            ),
+        let spinner = || Spinner::new().xsmall().color(muted).into_any_element();
+        let (icon, text) = match self.index_activity() {
+            Some(IndexActivity::Scanning(n)) => {
+                (spinner(), format!("Indexing… {}", group_digits(n)))
+            }
+            Some(IndexActivity::Finishing) => (spinner(), "Finishing index…".to_string()),
             None => (
                 Icon::new(Lucide::ScanSearch)
                     .with_size(ui(14.))

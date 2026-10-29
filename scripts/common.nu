@@ -35,6 +35,35 @@ export def render-svg [svg: path, dir: path]: nothing -> path {
     $dir | path join $'($svg | path basename).png'
 }
 
+# The Linux desktop entry: a menu item, and on Wayland the window icon,
+# which the compositor finds through the window's app id, `fffinder`.
+export def desktop-entry [exec: string]: nothing -> string {
+    # The spec splits Exec on spaces outside double quotes.
+    let exec = if ($exec | str contains ' ') { $'"($exec)"' } else { $exec }
+    [
+        '[Desktop Entry]'
+        'Type=Application'
+        'Name=fffinder'
+        'Comment=Fast fuzzy file search'
+        $'Exec=($exec) %f'
+        'Icon=fffinder'
+        'Terminal=false'
+        'Categories=Utility;FileTools;FileManager;'
+        'Keywords=find;search;files;fuzzy;'
+        'StartupWMClass=fffinder'
+    ] | str join (char nl)
+}
+
+# Install the desktop entry, starting `exec`, and the icon for this user (Linux).
+export def install-desktop-entry [exec: string]: nothing -> nothing {
+    let share = $nu.home-dir | path join .local share
+    let apps = $share | path join applications
+    let icons = $share | path join icons hicolor scalable apps
+    mkdir $apps $icons
+    cp (repo-root | path join assets app-icon.svg) ($icons | path join fffinder.svg)
+    desktop-entry $exec | save --force ($apps | path join fffinder.desktop)
+}
+
 # Version from the workspace manifest.
 export def version []: nothing -> string {
     open (repo-root | path join Cargo.toml) | get workspace.package.version

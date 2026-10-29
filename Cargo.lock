@@ -1892,6 +1892,7 @@ dependencies = [
  "png 0.18.1",
  "quantette",
  "raw-window-handle",
+ "resvg 0.46.0",
  "serde",
  "serde_json",
  "syntect",

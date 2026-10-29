@@ -25,6 +25,7 @@ fn main() {
     let config = Config::load();
     let engine = Engine::new(EngineOptions {
         roots: config.search_roots.clone(),
+        app_dirs: config.app_dirs(),
         db_dir: Some(fffinder_core::config::data_dir().join("gui")),
         watch: true,
         search: Default::default(),

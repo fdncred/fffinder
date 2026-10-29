@@ -2,6 +2,22 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- On macOS, apps are no longer indexed. "This Computer" searches find them by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, so Calculator, Terminal, and the other apps in `/System/Applications` are found too. Leaving the files inside app bundles out of the index took memory once settled from 258 MB to 150 MB on the development Mac, and name searches from 65–100 ms to 25–35 ms. Existing settings drop `/Applications` from the search locations once; add it back with Add Folder… to search inside bundles. Settings › Search locations has an Applications switch to stop finding apps.
+- Apps in the app folders show their sizes in the list view, added up in the background the first time you open the folder.
+- Run from a terminal without a folder, fffinder opens the folder you ran it from on every system, as `--term` already did; before, it opened the last folder. When fffinder is already running, that window goes to the folder instead of only coming forward. Started from the Dock, Finder, Explorer, or a desktop menu, it still opens the last folder.
+
+### Added
+
+- The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
+
+### Fixed
+
+- The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
+
 ## [0.2.0] - 2026-10-28
 
 fffinder can now manage files as well as find them. Unless a line says otherwise, each feature works on macOS, Linux, and Windows. Shortcuts are written as on macOS; on Linux and Windows, Cmd is Ctrl. [The manual](https://github.com/fdncred/fffinder/blob/main/docs/manual.md) has the details.

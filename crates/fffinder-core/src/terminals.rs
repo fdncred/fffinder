@@ -10,6 +10,7 @@
 //! Detection takes its inputs as arguments and compiles on every platform,
 //! so the logic for all three is tested wherever the tests run.
 
+use crate::app_list::{self, AppList};
 use crate::engine::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -320,7 +321,7 @@ pub fn detect(engine: Option<&Engine>) -> Vec<Terminal> {
                 .iter()
                 .filter_map(|plist| plist.parent()?.parent().map(Path::to_path_buf))
                 .collect();
-            detect_mac(&mac_app_dirs(), &bundles, &path)
+            detect_mac(&app_list::mac_app_dirs(), &bundles, &path)
         }
         Platform::Linux => {
             let appimages = engine
@@ -379,22 +380,6 @@ fn find_program(path: &[PathBuf], name: &str, exe: bool) -> Option<PathBuf> {
 }
 
 // macOS ------------------------------------------------------------------------
-
-fn mac_app_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = [
-        "/Applications",
-        "/Applications/Utilities",
-        "/System/Applications",
-        "/System/Applications/Utilities",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect();
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join("Applications"));
-    }
-    dirs
-}
 
 /// What an app bundle's `Info.plist` says about it.
 #[derive(Debug, Default)]
@@ -531,22 +516,12 @@ fn mac_terminal(bundle: &Path, info: &BundleInfo) -> Option<Terminal> {
     })
 }
 
-/// Terminals among the apps in `app_dirs` and the `extra` bundles (found by
-/// the index), plus known terminals on `path` that have no bundle.
+/// Terminals among the apps in `app_dirs` (and their plain subfolders, as
+/// [`AppList`] reads them) and the `extra` bundles (found by the index),
+/// plus known terminals on `path` that have no bundle.
 pub fn detect_mac(app_dirs: &[PathBuf], extra: &[PathBuf], path: &[PathBuf]) -> Vec<Terminal> {
-    let mut bundles: Vec<PathBuf> = Vec::new();
-    for dir in app_dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        let mut apps: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")))
-            .collect();
-        apps.sort();
-        bundles.extend(apps);
-    }
+    let list = AppList::scan(app_dirs);
+    let mut bundles: Vec<PathBuf> = list.apps().cloned().collect();
     bundles.extend(extra.iter().filter(|b| !inside_bundle(b)).cloned());
 
     let mut seen = HashSet::new();
@@ -1329,7 +1304,13 @@ mod tests {
     fn mac_finds_known_and_service_terminals() {
         let tmp = Tmp::new("mac");
         let apps = tmp.0.join("Applications");
-        tmp.bundle("Applications/Terminal.app", "com.apple.Terminal", &[], &[]);
+        // One level down, as in `/System/Applications/Utilities`.
+        tmp.bundle(
+            "Applications/Utilities/Terminal.app",
+            "com.apple.Terminal",
+            &[],
+            &[],
+        );
         tmp.bundle(
             "Applications/Ghostty.app",
             "com.mitchellh.ghostty",
