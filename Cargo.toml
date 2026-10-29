@@ -34,6 +34,22 @@ path = "src/lib.rs"
 name = "fffinder"
 path = "src/main.rs"
 
+# `cargo binstall` downloads the archives dist uploads to each GitHub release.
+# They hold the binary in a folder named after the archive, except on Windows,
+# where the zip has no folder.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "txz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
 [features]
 # `fffinder --term`: the window drawn inside a terminal, with the kitty graphics
 # protocol on macOS and Linux and with sixel images on Windows. GPUI only builds

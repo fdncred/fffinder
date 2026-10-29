@@ -68,7 +68,15 @@ http get --unix-socket $sock 'http://localhost/v1/find?query=readme&limit=5'
 
 ## Install
 
-You need Rust 1.92 or newer and Nushell 0.116, plus:
+Each [release](https://github.com/fdncred/fffinder/releases) has binaries for macOS, Linux, and Windows on x86_64 and ARM64. [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads the one for your system into `~/.cargo/bin`:
+
+```nu
+cargo binstall --git https://github.com/fdncred/fffinder fffinder
+```
+
+That installs only the binary. For the `fff` Nushell commands, take `nu/fff.nu` from this repository or the release archive and load it as [the `fff` module](#the-fff-module) section shows. Linux also needs a Vulkan driver.
+
+To build from source, you need Rust 1.92 or newer and Nushell 0.116, plus:
 
 - macOS: Xcode Command Line Tools (`xcode-select --install`).
 - Linux: `gcc g++ clang pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev`, plus a Vulkan driver.

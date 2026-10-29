@@ -51,6 +51,7 @@ fffinder can now manage files as well as find them. Unless a line says otherwise
 #### Releases
 
 - Release archives and shell and PowerShell installers for macOS, Linux, and Windows on x86_64 and ARM64, built with dist. Each archive includes the `fff` Nushell module.
+- `cargo binstall --git https://github.com/fdncred/fffinder fffinder` installs the release binary for your system instead of building it.
 
 ### Changed
 
