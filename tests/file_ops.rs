@@ -376,6 +376,11 @@ fn open_with_lists_apps_and_sets_the_default(cx: &mut TestAppContext) {
     let notes = item_id("row", &fx.path("notes.txt"));
 
     ui.right_click(notes.clone());
+    // On Windows, Explorer's Open with dialog (Other…) sets the default.
+    assert_eq!(
+        ui.menu_labels().contains(&"Always Open With".to_string()),
+        !cfg!(windows)
+    );
     ui.click_menu_item("Open With");
     let labels = ui.menu_labels();
     for label in ["Editor (default)", "Viewer", "Other…"] {
@@ -388,15 +393,17 @@ fn open_with_lists_apps_and_sets_the_default(cx: &mut TestAppContext) {
     };
     assert_eq!(ui.system_calls(), std::slice::from_ref(&opened));
 
-    ui.right_click(notes);
-    ui.click_menu_item("Always Open With");
-    ui.click_menu_item("Viewer");
-    let calls = ui.system_calls();
-    assert!(calls.contains(&SystemCall::SetDefaultApp {
-        app: "/Apps/Viewer.app".into(),
-        file: fx.path("notes.txt"),
-    }));
-    assert_eq!(calls.last(), Some(&opened), "and opens the file with it");
+    if !cfg!(windows) {
+        ui.right_click(notes);
+        ui.click_menu_item("Always Open With");
+        ui.click_menu_item("Viewer");
+        let calls = ui.system_calls();
+        assert!(calls.contains(&SystemCall::SetDefaultApp {
+            app: "/Apps/Viewer.app".into(),
+            file: fx.path("notes.txt"),
+        }));
+        assert_eq!(calls.last(), Some(&opened), "and opens the file with it");
+    }
 
     ui.right_click(item_id("row", &fx.path("Projects")));
     assert!(

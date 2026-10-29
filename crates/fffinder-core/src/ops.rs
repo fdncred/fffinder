@@ -877,11 +877,14 @@ mod tests {
     fn staging_names_differ_per_call() {
         let target = Path::new("/a/b.txt");
         assert_ne!(staging_path(target), staging_path(target));
-        assert!(
-            staging_path(target)
-                .to_string_lossy()
-                .starts_with("/a/.b.txt.fffinder-")
-        );
+        // Compared by parts, since Windows joins the name on with `\`.
+        let staged = staging_path(target);
+        assert_eq!(staged.parent(), target.parent());
+        let name = staged
+            .file_name()
+            .expect("a staging name")
+            .to_string_lossy();
+        assert!(name.starts_with(".b.txt.fffinder-"), "{name}");
     }
 
     #[test]
