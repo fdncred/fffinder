@@ -1,9 +1,26 @@
 //! Renaming many files at once: checking a list of new names before
 //! anything changes, then renaming in two phases so swaps and case-only
-//! changes work, rolling back if a step fails.
+//! changes work, rolling back if a step fails. Undo moves items back the
+//! same way.
 
+use fffinder_core::ops::{self, TransferError};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Why [`move_all`] stopped. Everything it had moved is back where it was.
+#[derive(Debug, thiserror::Error)]
+pub enum MoveError {
+    /// Something already has the name an item was moving to.
+    #[error("An item named “{}” is already in “{}”", display(.0), folder(.0))]
+    Taken(PathBuf),
+    /// An item couldn't be moved.
+    #[error("Couldn’t move “{}”: {source}", display(.path))]
+    Failed {
+        path: PathBuf,
+        #[source]
+        source: TransferError,
+    },
+}
 
 /// What would happen to one item.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +55,8 @@ fn key(path: &Path) -> String {
     }
 }
 
-fn name_problem(name: &str) -> Option<String> {
+/// Why `name` can't be a file name, if it can't.
+pub fn name_problem(name: &str) -> Option<String> {
     let bad_chars: &[char] = if cfg!(windows) {
         &['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     } else {
@@ -135,50 +153,70 @@ pub fn apply(planned: &[Planned]) -> Result<Vec<PathBuf>, String> {
     {
         return Err(format!("“{}” can’t be renamed yet.", p.new_name));
     }
-    let moves: Vec<&Planned> = planned
+    let moves: Vec<(PathBuf, PathBuf)> = planned
         .iter()
         .filter(|p| p.outcome == Outcome::Rename)
+        .map(|p| (p.from.clone(), p.to()))
         .collect();
-    // Phase 1: every source to a temporary name next to it.
-    let stamp = format!("{}-{}", std::process::id(), nanos());
-    let mut parked: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (i, p) in moves.iter().enumerate() {
-        let temp = p.from.with_file_name(format!(".fff-rename-{stamp}-{i}"));
-        if let Err(err) = std::fs::rename(&p.from, &temp) {
-            undo(&parked);
-            return Err(format!("Couldn’t rename “{}”: {err}", display(&p.from)));
-        }
-        parked.push((temp, p.from.clone()));
-    }
-    // Phase 2: temporary names to the new ones.
-    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for (p, (temp, _)) in moves.iter().zip(&parked) {
-        let to = p.to();
-        // Checked in `plan`, but something may have appeared since.
-        if to.exists() {
-            undo(
-                &done
-                    .iter()
-                    .map(|(t, f)| (t.clone(), f.clone()))
-                    .collect::<Vec<_>>(),
-            );
-            undo(&parked[done.len()..]);
-            return Err(format!("“{}” appeared while renaming.", p.new_name));
-        }
-        if let Err(err) = std::fs::rename(temp, &to) {
-            undo(&done);
-            undo(&parked[done.len()..]);
-            return Err(format!("Couldn’t rename “{}”: {err}", display(&p.from)));
-        }
-        done.push((to, p.from.clone()));
-    }
-    Ok(done.into_iter().map(|(to, _)| to).collect())
+    move_all(&moves).map_err(|err| err.to_string())?;
+    Ok(moves.into_iter().map(|(_, to)| to).collect())
 }
 
-/// Move each `(now, original)` back, newest first.
-fn undo(moves: &[(PathBuf, PathBuf)]) {
-    for (now, original) in moves.iter().rev() {
-        let _ = std::fs::rename(now, original);
+/// Move each `(from, to)` pair, all or nothing. Every item first moves to a
+/// hidden name beside itself, then to where it goes, so items can swap
+/// names, take names others leave, or change only the case of theirs. A
+/// name that's taken by anything else stops it, and whatever had moved goes
+/// back.
+///
+/// # Errors
+///
+/// [`MoveError::Taken`] when something else has a name an item is moving
+/// to, and [`MoveError::Failed`] when an item can't be moved.
+pub fn move_all(moves: &[(PathBuf, PathBuf)]) -> Result<(), MoveError> {
+    // Phase 1: every item to a hidden name beside it.
+    let stamp = format!("{}-{}", std::process::id(), nanos());
+    let mut parked: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(moves.len());
+    for (i, (from, _)) in moves.iter().enumerate() {
+        let temp = from.with_file_name(format!(".fff-rename-{stamp}-{i}"));
+        if let Err(err) = std::fs::rename(from, &temp) {
+            put_back(&[], &parked);
+            return Err(MoveError::Failed {
+                path: from.clone(),
+                source: ops::io_error(from)(err),
+            });
+        }
+        parked.push((temp, from.clone()));
+    }
+    // Phase 2: hidden names to where the items go.
+    for (done, ((_, to), (temp, from))) in moves.iter().zip(&parked).enumerate() {
+        // Every item has left its own name, so anything there now is in the
+        // way, even one whose name differs only in case.
+        let failed = if to.symlink_metadata().is_ok() {
+            Some(MoveError::Taken(to.clone()))
+        } else {
+            ops::move_item(temp, to)
+                .err()
+                .map(|source| MoveError::Failed {
+                    path: from.clone(),
+                    source,
+                })
+        };
+        if let Some(err) = failed {
+            put_back(&moves[..done], &parked);
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+/// Undo a [`move_all`] that stopped: `moved` items go back to their hidden
+/// names, newest first, then every parked item to its own name.
+fn put_back(moved: &[(PathBuf, PathBuf)], parked: &[(PathBuf, PathBuf)]) {
+    for ((_, to), (temp, _)) in moved.iter().zip(parked).rev() {
+        let _ = ops::move_item(to, temp);
+    }
+    for (temp, from) in parked.iter().rev() {
+        let _ = std::fs::rename(temp, from);
     }
 }
 
@@ -187,6 +225,11 @@ fn display(path: &Path) -> String {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned()
+}
+
+/// The name of the folder `path` is in.
+fn folder(path: &Path) -> String {
+    path.parent().map(display).unwrap_or_default()
 }
 
 fn nanos() -> u128 {
@@ -291,6 +334,41 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["photo.jpg"]);
+    }
+
+    #[test]
+    fn moves_all_or_nothing() {
+        let dir = Dir::new("move-all", &["a.txt", "b.txt", "c.txt"]);
+        let path = |name: &str| dir.0.join(name);
+        // A swap, then the same swap again.
+        let swap = [
+            (path("a.txt"), path("b.txt")),
+            (path("b.txt"), path("a.txt")),
+        ];
+        move_all(&swap).unwrap();
+        assert_eq!(dir.contents("a.txt"), "b.txt");
+        move_all(&swap).unwrap();
+        assert_eq!(dir.contents("a.txt"), "a.txt");
+        // A name something else has stops it, and the swap before it in the
+        // list is put back too.
+        let blocked = [
+            (path("a.txt"), path("b.txt")),
+            (path("b.txt"), path("a.txt")),
+            (path("c.txt"), path("a.txt.bak")),
+            (path("a.txt.bak"), path("x.txt")),
+        ];
+        std::fs::write(path("a.txt.bak"), "in the way").unwrap();
+        std::fs::write(path("x.txt"), "taken").unwrap();
+        assert!(matches!(move_all(&blocked), Err(MoveError::Taken(_))));
+        assert_eq!(dir.contents("a.txt"), "a.txt");
+        assert_eq!(dir.contents("b.txt"), "b.txt");
+        assert_eq!(dir.contents("c.txt"), "c.txt");
+        assert_eq!(dir.contents("a.txt.bak"), "in the way");
+        assert_eq!(dir.contents("x.txt"), "taken");
+        let hidden = std::fs::read_dir(&dir.0)
+            .unwrap()
+            .any(|e| e.unwrap().file_name().to_string_lossy().starts_with('.'));
+        assert!(!hidden, "no parked names are left");
     }
 
     #[test]

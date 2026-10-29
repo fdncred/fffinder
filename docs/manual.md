@@ -9,15 +9,22 @@ Keyboard shortcuts are written with Cmd. On Linux and Windows, use Ctrl instead.
 - [Starting fffinder](#starting-fffinder)
 - [The window](#the-window)
 - [Toolbar](#toolbar)
+- [Tabs and split view](#tabs-and-split-view)
 - [Sidebar](#sidebar)
 - [Views](#views)
 - [Selecting items](#selecting-items)
 - [Sorting and hidden files](#sorting-and-hidden-files)
+- [Groups](#groups)
 - [Searching](#searching)
 - [Recents](#recents)
 - [Previews and Quick Look](#previews-and-quick-look)
 - [Opening files](#opening-files)
 - [Working with files](#working-with-files)
+- [Copying and moving](#copying-and-moving)
+- [Get Info](#get-info)
+- [Undo and Redo](#undo-and-redo)
+- [The Trash](#the-trash)
+- [Volumes and servers](#volumes-and-servers)
 - [Dragging and dropping](#dragging-and-dropping)
 - [The Nushell panel](#the-nushell-panel)
 - [Filters and Smart Folders](#filters-and-smart-folders)
@@ -98,7 +105,7 @@ The file area shows a message when there is nothing to list:
 | Message | When |
 | --- | --- |
 | Can't open this folder | The folder can't be read. The reason is shown. |
-| Indexing… | A search ran before the index was ready. It runs again when indexing finishes. |
+| Indexing… | A search ran before the index was ready. It runs again as soon as a search location finishes indexing, and again as the rest finish. |
 | No Results | The search found nothing. |
 | No Recent Files | Recents is empty. |
 | No Items | The folder is empty. |
@@ -113,13 +120,21 @@ The path bar shows the current folder as a row of crumbs, from the volume down. 
 
 The status bar shows:
 
-- How many items are shown, or "N of M selected".
+- How many items are shown, or "N of M selected", and in a folder how much space is left on its volume: "12 items, 214 GB available".
 - With a filter on, "N of M items pass the filter".
 - A `+` after the count when a search stopped at the result limit.
 - The time the search took, in milliseconds.
 - A spinner while a search or filter runs.
 - "Indexing N files…" while the index is being built, when the sidebar is hidden. The sidebar footer shows it otherwise.
 - In icon view, a slider for the icon size, from 32 to 128 points.
+
+## Tabs and split view
+
+**Tabs.** New Tab (Cmd+T, or File › New Tab) opens a tab at the folder the window shows. Each tab is a whole browser with its own history, search, filter, and selection. With two or more tabs, a tab bar appears under the toolbar: click a tab to show it, click its × to close it, drag it onto another tab to move it there, or click + for another tab. Ctrl+Tab and Cmd+Shift+] show the next tab, Ctrl+Shift+Tab and Cmd+Shift+[ the previous one, both wrapping around. Cmd+W closes the tab, and the window only when it's the last tab. Right-click a tab, or use Window › Move Tab to New Window, to give it a window of its own at the same folder and search; its back and forward history stays behind.
+
+**Split view.** Split View (Cmd+Backslash, or the Window menu) shows a second pane to the right of the current tab, starting at the same folder, without its own sidebar. It stays as you switch tabs, and Cmd+Backslash again (or Cmd+W in that pane) closes it. Each pane has its own toolbar. F5 (Window › Copy to Other Pane) copies the selected items into the other pane's folder and F6 (Move to Other Pane) moves them, as in Total Commander and Midnight Commander, with the same name-clash questions, progress, and Undo as any copy or move. The other pane must show a folder, not search results. Split view wants a wide window; in a narrow one the toolbars run out of room.
+
+When one tab or pane copies, moves, renames, or deletes files, the others in the window reload.
 
 ## Toolbar
 
@@ -145,7 +160,7 @@ The sidebar has four sections:
 - **Recents** lists files you used recently. See [Recents](#recents).
 - **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar.
 - **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
-- **Locations** lists your home folder, iCloud Drive or other cloud drives, and mounted volumes.
+- **Locations** lists your home folder, iCloud Drive or other cloud drives, mounted volumes and servers, and ends with the **Trash**. Removable disks and servers have an eject button. See [Volumes and servers](#volumes-and-servers) and [The Trash](#the-trash).
 
 Click a row to open it. The current folder's row is highlighted.
 
@@ -153,6 +168,7 @@ Right-click a Favorites or Locations row for:
 
 - **Open Nushell Here**: open `nu` in that folder in your terminal.
 - **Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux).
+- **Eject**: removable disks and servers.
 - **Remove from Sidebar**: Favorites only.
 
 Right-click a Smart Folder for **Remove from Sidebar**.
@@ -164,11 +180,33 @@ The footer shows "N files indexed", or "Indexing… N" with a spinner while scan
 Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is saved.
 
 - **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
-- **List** (Cmd+2) shows Name, Date Modified, Size, and Kind columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder.
+- **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. See [The list view](#the-list-view).
 - **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns. Selecting a folder opens it in a new column to the right. Selecting a file shows a preview card with its kind, size, modification date, and location in the last column. Search results and Recents always use the list in this view, as Finder does.
 - **Gallery** (Cmd+4) shows a large preview of the selected item above a strip of everything in the folder. Left and Right arrows move along the strip. The gallery always shows an item, so it selects the first one when nothing is selected.
 
-Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB.
+Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB, and on macOS PDFs, videos, and documents (see [Thumbnails](#thumbnails)).
+
+### The list view
+
+**Folders open in place.** In a folder, each subfolder has a disclosure triangle. Click it, or select the folder and press Right, to show what's inside, indented below it; Left closes it again. Left on an item inside an open folder selects that folder. Open folders can be opened further, every level is sorted the same way, and they all close when you go to another folder. Search results, Recents, and the Trash are flat lists.
+
+**Columns.** Right-click the header to choose the columns after Name:
+
+| Column | Shows |
+| --- | --- |
+| Date Modified | When the item last changed. |
+| Date Created | When the item was made, where the file system records it. |
+| Date Last Opened | On macOS, the date macOS records when a file is opened; elsewhere the last access time, which many systems update rarely. Read only while the column is shown or the list is sorted by it. |
+| Size | A file's size, and with Calculate All Sizes on, a folder's. |
+| Kind | The item's kind. |
+| Permissions | The Unix permission bits, as `rwxr-xr-x`. On Windows, `read-only` or `read-write` for files. |
+| Git | The git status the index last saw for a file: `modified`, `untracked`, `staged`, and so on. Clean files are blank. Search results show it too. |
+
+Drag a header onto another header to move it there. Drag the right edge of a header to make the column wider or narrower. **Reset Columns** in the header menu goes back to Date Modified, Size, and Kind. Columns, their order, and their widths are saved.
+
+**Calculate All Sizes** (in the header menu, on by default) shows each folder's size: everything the index holds under it, added up without reading the disk. Folders the index skips, such as `node_modules` and caches (see [What the index skips](#what-the-index-skips)), and folders outside the search locations show `--`. Sorting by Size sorts folders by these sizes too.
+
+**Keep Folders on Top** (the header menu, the Sort menu, or View › Keep Folders on Top) lists folders before files whatever the sort, in every view. It is saved.
 
 ## Selecting items
 
@@ -194,15 +232,32 @@ As in Finder, typing letters while the files have focus selects the first item w
 
 The Sort and View Options menu has:
 
-- **Sort By**: Relevance (only while searching), Name, Date Modified, Size, and Kind. Choosing the current key again reverses the order.
+- **Sort By**: Relevance (only while searching), Name, Date Modified, Date Created, Size, and Kind. Choosing the current key again reverses the order. The list view's Date Last Opened header sorts by that date too.
 - **Ascending** and **Descending**. Both are disabled for Relevance.
+- **Keep Folders on Top**. See [The list view](#the-list-view).
 - **Show Hidden Files**.
+- **Group By**: None, Name, Kind, Date Modified, Date Created, Date Last Opened, or Size. See [Groups](#groups).
 
-Name sorting is natural, so `file2` comes before `file10`. Date Modified and Size start with the newest and largest items. Kind sorts by kind, then name.
+Name sorting is natural, so `file2` comes before `file10`. Date Modified, Date Created, and Size start with the newest and largest items. Kind sorts by kind, then name.
 
 The folder sort is saved. A search has its own sort, which starts at Relevance and isn't saved.
 
 **Show Hidden Files** (Cmd+Shift+.) shows dot files and other hidden items in folders. It is also in the empty-space menu and the View menu, and in Settings. Searches find hidden files only when the search location is itself a git repository, because that is what fff-search indexes. See [What the index skips](#what-the-index-skips).
+
+## Groups
+
+The list and icon views can show items in groups, as Finder's Use Groups does. Choose a key from Group By in the Sort and View Options menu, or turn groups on and off with View › Use Groups, which uses the last key chosen (Kind at first). The choice is saved and applies to every folder and to search results; the column and gallery views don't use groups.
+
+| Group By | Groups, in order |
+| --- | --- |
+| Name | 0–9, then one group per first letter, then Other for names starting with a symbol. |
+| Kind | One group per kind, such as Folder or PDF Document, alphabetically. |
+| Date Modified, Date Created, Date Last Opened | Today, Yesterday, Previous 7 Days, Previous 30 Days, then the earlier months of this year, then earlier years, then No Date. |
+| Size | Huge (over 1 GB), Large (100 MB to 1 GB), Medium (1 to 100 MB), Small (100 KB to 1 MB), Tiny (under 100 KB), Empty, then folders without a size. |
+
+Items keep the current sort within their group. In the list view, an open folder's items stay under it, in its group.
+
+Each group has a header with its name and how many items it holds. Click the header to collapse the group, and click it again to expand it. A collapsed group's items are hidden: the arrow keys, Shift+click ranges, and Select All skip them. Each tab remembers which groups are collapsed until you choose another key. In the icon view, each group starts a new row, and Up and Down move to the same column in the next group.
 
 ## Searching
 
@@ -245,6 +300,10 @@ A search shows at most `result_limit` items (500 by default; **Results shown** i
 
 Search results always show where each item is. Searches can't filter by size or date themselves; use a [Nushell filter](#filters-and-smart-folders).
 
+### When the index is ready
+
+The index is kept in memory, not on disk, so each time fffinder starts it walks the search locations again. On a Mac with about 620,000 files in the home folder and `/Applications`, that takes about 4 seconds; half of those files are inside app bundles in `/Applications`. A search typed before then shows results from each location as soon as it's indexed. After that, searches take milliseconds, and watching keeps the index current while fffinder runs.
+
 ### What the index skips
 
 fff-search decides what goes into the index, and no setting changes it:
@@ -265,14 +324,32 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 
 | File | Preview |
 | --- | --- |
-| Images | The image. |
+| Images | The image. Formats GPUI can't draw, such as HEIC, RAW, and PSD, show the system's thumbnail of them (see [Thumbnails](#thumbnails)). |
+| PDFs | Read as in a PDF viewer, in the gallery and in Quick Look, drawn by fffinder itself with [hayro](https://github.com/LaurenzV/hayro) so they look the same on every system. The pages scroll by in one column, starting at the first page fitted to the width. The toolbar above them has the previous and next page buttons with "Page 2 of 12", which follows as you scroll; − and + to zoom out and in; and the zoom between them, which opens a menu of Fit Width, Fit Page, Actual Size, and sizes from 25% to 400%. Pinching on a trackpad, scrolling with Cmd held, and Cmd+Plus, Cmd+Minus, and Cmd+0 (Fit Width) zoom too, from 10% to 800%, and Page Up and Page Down go a page back or on. Zooming keeps the place you were reading at the top. Pages larger than the view scroll both ways; each is drawn as it comes into view, and again after zooming, so text stays sharp, and only the pages in view and their neighbors are kept in memory. The caption gives the page count. The column view's card, and the gallery while a PDF opens, show the system's thumbnail of the first page. Password-protected PDFs, and PDFs over 200 MB, show only the thumbnail. |
+| Videos, office and iWork documents, EPUB, 3D models | The system's thumbnail: the first page of a document, a frame of a video. Types the system can't draw show their icon. |
+| Video and audio | The running time, in the caption and in the column view's card, for MP4, MOV, M4A, M4V, WAV, and FLAC files. Audio shows its icon with the time under it. |
 | Folders | The folder icon and how many items it holds. |
+| Zip, `.tar`, `.tar.gz`, `.tgz` | A table of what's inside: each item's path and size, up to 200 items, with the count below. |
+| TrueType and OpenType fonts (`.ttf`, `.otf`, `.ttc`) | The family name, the alphabet, digits, and a sample line, drawn in the font itself. |
+| Markdown (`.md`, `.markdown`) | Rendered: headings, lists, links, tables, and code blocks. Text can be selected. |
 | CSV, TSV, JSON, JSONL, NUON, TOML, YAML, XML, INI, SQLite, XLSX, ODS, EML, ICS, VCF, MessagePack, plist | Opened with Nushell's `open` and shown as a table of up to 200 rows, with "Opened with Nushell" and the row count below. Files over 50 MB are skipped. |
 | `.nu` scripts | Colored the way `nu-highlight` colors them with your `color_config`. |
-| Other text | The first 64 KB as plain text, marked "preview truncated" when longer. |
+| Code and other text | The first 64 KB, marked "preview truncated" when longer. Code in the languages syntect knows (Rust, Python, JavaScript, C and C++, Go, Java, shell, HTML, CSS, SQL, and dozens more, found by extension, by names like `Makefile`, or by a `#!` line) is colored with a light or dark theme to match the window. Files with lines over 2,000 characters, such as minified JavaScript, stay plain. |
 | Anything else | The file's icon. |
 
 Nushell previews give up after 10 seconds and show the icon. They need `nu`; without it, structured files preview as text.
+
+### Thumbnails
+
+The icon view, the gallery strip, and the large previews show the thumbnails the system draws for PDFs, videos, documents, fonts, and images:
+
+| System | Drawn by |
+| --- | --- |
+| macOS | QuickLook, as in Finder. |
+| Windows | The shell's thumbnail handlers, as in Explorer: whatever Explorer shows for the type. |
+| Linux | The freedesktop.org thumbnailers your desktop installed (`.thumbnailer` files in the XDG data folders' `thumbnailers` folders, such as `evince-thumbnailer` for PDFs and `ffmpegthumbnailer` for videos), chosen by the file's type from `xdg-mime`. A type with no thumbnailer keeps its icon. |
+
+Each item shows its icon until its thumbnail is ready. Thumbnails are cached as PNGs in `thumbnails/` in the data folder, keyed by the file's path, modification date, and size, so an edited file gets a new one. The folder can be deleted at any time.
 
 ### Nushell highlighting
 
@@ -280,7 +357,7 @@ Nushell previews give up after 10 seconds and show the icon. They need `nu`; wit
 
 ### Quick Look
 
-Space or Cmd+Y opens Quick Look for the selected item, and pressing either again closes it. Quick Look shows the item's icon and name, a large preview, and its kind, size, and modification date.
+Space or Cmd+Y opens Quick Look for the selected item in a window of its own, over the browser, with the item's name as its title. Move it, resize it, maximize it, or make it full screen like any window; the preview fills it, with the item's kind, size, and date, and the Show in Finder and Open buttons, in a bar at the bottom. Space, Cmd+Y, or Escape in Quick Look closes it, and so does Space or Cmd+Y in the browser. Quick Look follows the browser's selection while it's open, and closes with its browser. In `--term` mode, where the terminal shows a single window, Quick Look is a dialog in it instead.
 
 The arrow keys move to other items while Quick Look stays open, as in Finder:
 
@@ -302,7 +379,7 @@ With Quick Look open, Cmd+= (or Cmd++) makes the text bigger, Cmd+- makes it sma
 
 ## Opening files
 
-**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button) opens a folder in the window, and opens a file or app with its default application. Opening several files opens each one.
+**Open** (Return, Cmd+Down, Cmd+O, double-click, or Quick Look's Open button) opens a folder in the window, and opens a file or app with its default application. Opening several files opens each one. Opening a zip, `.tar`, `.tar.gz`, or `.tgz` archive extracts it beside itself instead, as Finder's Archive Utility does; use Open With to hand it to another app.
 
 When no application is registered for a file (checked with LaunchServices on macOS and `xdg-mime` on Linux):
 
@@ -310,6 +387,10 @@ When no application is registered for a file (checked with LaunchServices on mac
 - A binary file shows a notification instead.
 
 Windows has its own "Open with" chooser, so there the file goes to Windows as usual.
+
+**Open With** in the item menu lists the apps that can open the selected files, with the default app first and marked "(default)". Choose one to open the files with it. **Other…** picks an app with the file chooser (an app bundle on macOS, a `.desktop` file or a program on Linux). **Always Open With**, for one file, lists the same apps; choosing one makes it the default for every file of that type, then opens the file with it. macOS may ask you to confirm the change. Folders don't get these menus.
+
+The apps come from Launch Services on macOS, and on Linux from the `.desktop` entries in the XDG data folders that list the file's MIME type, with the default from `xdg-mime`. On Linux, an app's `Exec` line decides how the files are passed: `%f` and `%u` open one file per app, `%F` and `%U` all of them at once. On Windows, Open With lists the apps Explorer's Open with menu lists, with the default from the file type's association, and opens the files through the shell the way Explorer does, so Microsoft Store apps work too. **Other…** shows Windows' own "Open with" dialog, which is also where Windows lets you choose a new default, so there is no Always Open With there.
 
 **Open in Editor** (File menu or item menu) opens files in Nushell's editor when that option is on and an editor is set. Otherwise it uses the file's default app, or the system text editor when there is none. Terminal editors open in your chosen terminal. See [Using your Nushell environment](#using-your-nushell-environment).
 
@@ -322,9 +403,22 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | Command | What it does |
 | --- | --- |
 | New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and opens the Rename dialog for it. |
+| New File… (Cmd+Alt+N) | Asks for a name ("untitled.txt", with the part before the extension selected) and makes an empty file with it in the current folder. A taken or invalid name is refused. |
+| Duplicate (Cmd+D) | Copies each selected item beside itself as "name copy.ext", then "name copy 2.ext", and so on. |
+| Make Alias (macOS), Create Shortcut (Windows) | Makes a Finder alias to each selected item beside it, named "name alias", which Finder and other apps follow to the original even after the original moves. On Windows it makes an Explorer shortcut, "name - Shortcut.lnk". Linux has no aliases; use Make Symbolic Link. |
+| Make Symbolic Link | Makes a symbolic link to each selected item beside it, named "name link". The link points at the name, so it keeps working when the folder moves. On Windows, making links needs Developer Mode or an administrator. |
+| Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
+| Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
-| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. You can restore items from the Trash. |
-| Copy Path (Cmd+Alt+C, Cmd+C in the files) | Copies the selected paths, one per line. |
+| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
+| Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
+| Get Info (Cmd+I) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
+| Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo and Redo](#undo-and-redo). |
+| Redo (Cmd+Shift+Z in the files) | Reverses the latest Undo. |
+| Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
+| Paste (Cmd+V in the files) | Copies the items on the clipboard into the folder shown. |
+| Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
+| Copy Path (Cmd+Alt+C) | Copies the selected paths, one per line. |
 | Copy as Nushell List (Cmd+Shift+C) | Copies the selection as NUON: a quoted string for one path, a list for several. |
 | Go to Folder… (Cmd+Shift+G) | Type a path. `~` is your home folder, and relative paths start from the current folder. A folder opens; a file opens its folder with the file selected. |
 | Add to Sidebar | Adds a selected folder to Favorites. |
@@ -332,11 +426,95 @@ Windows has its own "Open with" chooser, so there the file goes to Windows as us
 | Refresh (Cmd+R) | Reloads the folder, columns, and previews, and re-runs the search. |
 | Rescan Index | Rebuilds the search index from scratch. |
 
+## Copying and moving
+
+Cmd+C (Edit › Copy, or Copy "name" in the item menu) puts the selected items on the clipboard. Cmd+V (Edit › Paste, or Paste Item in the empty-space menu) copies them into the folder the window shows, and Cmd+Alt+V (Edit › Move Items Here) moves them there instead. Pasting needs a folder, so it does nothing while searching or in Recents.
+
+The clipboard holds the items' paths as text too, one per line, so pasting into a terminal or a text field gives the paths. On macOS and Windows it also holds them as files, so Finder or Explorer and other apps can paste them, and files copied there paste into fffinder. On Linux, files copied in GNOME Files, Dolphin, and other file managers paste into fffinder; GPUI can only put text on the Linux clipboard, so items copied in fffinder paste as files only into fffinder. Anywhere, text that is nothing but paths of existing items (or `file://` addresses), one per line, pastes those items.
+
+Pasting an item into the folder it's already in makes a copy beside it: "name copy.ext", then "name copy 2.ext", and so on.
+
+When items with the same names are already in the folder, a dialog asks what to do with all of them:
+
+| Button | What it does |
+| --- | --- |
+| Stop | Copies or moves nothing. |
+| Skip | Leaves the items that are there, and copies or moves the rest. |
+| Keep Both | Gives the new items free names: "name 2.ext", "name 3.ext", and so on. |
+| Replace | Removes the items that are there and puts the new ones in their place. The old item is removed only once its replacement is complete. |
+
+A folder can't go inside itself, and an item can't replace the folder it's in. A notification says so.
+
+Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
+
+A copy, move, Compress, or Extract that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. The work starts at once while fffinder counts the bytes to copy alongside it, and the bar stays at 0% until the count is done. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
+
+## Get Info
+
+Get Info (Cmd+I, File › Get Info, or the item and empty-space menus) shows a panel about the selected item, or about the folder the window shows when nothing is selected:
+
+| Field | What it shows |
+| --- | --- |
+| Kind | The kind, as the list view's Kind column shows it. |
+| Size | The size in bytes, and the space it takes on disk. For a folder, everything inside it, added up in the background ("Calculating…" until then), and how many items that is. |
+| Where | The folder it's in. |
+| Created, Modified, Last opened | Dates. Last opened is the date macOS records when a file is opened, and elsewhere the last access time, which many systems update rarely. |
+| Original | Where a symbolic link points. The other fields describe what it points at. |
+| Where from | The web addresses a browser recorded for a download: the file's address and the page it came from. macOS keeps them in `kMDItemWhereFroms`, Linux in the `user.xdg.origin.url` and `user.xdg.referrer.url` attributes, and Windows in the file's `Zone.Identifier` stream. |
+| Opens with | The app that opens the file by default. |
+| Owner, Group | The item's owner, and on macOS and Linux its group. Windows shows the owning account as `DOMAIN\user`. |
+| Permissions | On macOS and Linux, Read, Write, and Execute boxes for the owner, the group, and everyone, and the mode they add up to, such as `rw-r--r-- (644)`. Clicking a box changes the item's permissions at once. On Windows, a Read-only box. |
+
+With several items selected, the panel shows how many there are, their kinds, their total size (folders included), and the folder they're in when they share one.
+
+## Undo and Redo
+
+Undo (Cmd+Z with the files focused, or Edit › Undo) reverses the latest file operation, then the one before it, and so on, up to the last 100. There is one list for all windows, so Undo in any window reverses the latest operation anywhere. A notification says what was undone, such as "Undid Rename".
+
+Redo (Cmd+Shift+Z with the files focused, or Edit › Redo) reverses the latest Undo: it renames or moves the items again, takes undone copies and new items back out of the Trash, and moves items put back by Undo to the Trash again. Redo goes forward through everything you undid until you do a new file operation, which ends what Redo can do. A notification says what was redone, such as "Redid Rename". On Linux and Windows, Undo and Redo are also in the toolbar's Actions menu.
+
+| Operation | Undo |
+| --- | --- |
+| Rename, batch rename | Gives the items their old names. |
+| Move, paste with Move Items Here, drag to a folder | Moves the items back. |
+| Copy, paste, Duplicate, New Folder, New File, Make Alias, Make Symbolic Link, Compress, Extract | Moves the new items to the Trash, as Finder does. |
+| Move to Trash | Puts the items back. |
+
+While an Undo or Redo runs, no other file operation starts: copying, moving, renaming, new items, trashing, Put Back, deleting, compressing, extracting, and another Undo or Redo are refused with "Wait for Undo to finish" (or Redo) until it's done. Undo and Redo stop with a notification when they can't finish, for example when an item was moved away again or another item now has its old name. What they reversed before stopping stays reversed, and the next Cmd+Z (or Cmd+Shift+Z) tries the rest again. Delete Immediately and Empty Trash can't be undone. In a text field, Cmd+Z and Cmd+Shift+Z undo and redo typing as usual.
+
+## The Trash
+
+The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash at once, without the question.
+
+- **Put Back** (Cmd+Backspace, the item menu, or File › Put Back) moves the selected items back where they came from. It stops with a notification when the folder is gone or another item has the name.
+- **Delete Immediately…** (Cmd+Alt+Backspace, or the item menu) deletes the selected items for good.
+- **Empty…** in the bar above the items, Empty Trash… in the empty-space menu or the fffinder menu, or Cmd+Shift+Backspace, asks, then deletes everything in the Trash for good.
+
+On macOS, fffinder moves items to the Trash itself, as most Mac apps do, so macOS never asks to let it control Finder. It remembers where each one came from in `trash.json` in the data folder. fffinder can put back only items it trashed itself; for others, Put Back is unavailable. Finder's own Put Back doesn't work for items fffinder trashed, and still works for items Finder trashed. The Trash view lists your home folder's Trash, `~/.Trash`, which macOS shows only to apps with Full Disk Access. Without it, the view says so. On Linux and Windows, fffinder uses the system trash (the freedesktop.org Trash, or the Recycle Bin), which records where every item came from, so Put Back works for all of them.
+
+## Volumes and servers
+
+**Eject.** Removable disks, disk images, and servers in the sidebar's Locations have an eject button, and Eject in their right-click menu. On macOS fffinder ejects with `diskutil eject`, or unmounts with `diskutil unmount` when there's no disk to eject (a server). On Linux it uses `gio mount -e`, then `umount`. A window showing a folder on the volume goes to your home folder. On Windows, removable and optical drives are ejected with Explorer's own Eject command, and mapped network drives are disconnected with `net use /delete`. Locations names Windows drives by their volume labels, as Explorer does: "Backup (E:)", or "Removable Disk (E:)" with no label.
+
+**Free space.** The status bar ends with the space left on the current folder's volume, read when the folder loads.
+
+**Connect to Server…** (Cmd+K, or the Go menu) asks for a server's address and mounts it the way the system does, then opens it in the window. The server goes to the top of the dialog's **Recent servers**, up to ten, without any password typed in the address; click one to fill in the address. An address with no scheme, such as `nas/media`, is SMB.
+
+| System | Servers | How |
+| --- | --- | --- |
+| macOS | `smb://`, `afp://`, `nfs://`, `ftp://`, and WebDAV as `https://` or `http://` | AppleScript's `mount volume`, as Finder's Connect to Server does. macOS asks for a password in its own dialog when the server needs one, and can keep it in the keychain. Servers mount in `/Volumes`. macOS can't mount `sftp://` by itself. |
+| Linux | `smb://`, `sftp://`, WebDAV (`https://`, `davs://`, `dav://`), `afp://`, `nfs://`, `ftp://` | `gio mount`, as GNOME Files does, under `$XDG_RUNTIME_DIR/gvfs`, where the sidebar finds them. There's no terminal to type a password in, so give the user name in the address and keep the password in your keyring, or mount once from a terminal. |
+| Windows | `smb://server/share` or `\\server\share`, and WebDAV as `https://` | A share opens as its `\\server\share` path, with the credentials Windows already has. WebDAV is mapped to a drive letter with `net use`. |
+
 ## Dragging and dropping
 
+- Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder, even when only some of the items are on another volume.
+- Drag items onto empty space in a folder to move them into the folder shown.
+- Drop files from other apps on a folder, a column, a sidebar place, or the file area to copy them in.
+- Name clashes ask first, and long transfers show progress. See [Copying and moving](#copying-and-moving).
 - Drag items from any view to another app to hand it the files. This works on macOS and Wayland; GPUI doesn't support dragging out on Windows or X11.
-- Drop folders on the sidebar to add them to Favorites.
-- Drop a folder on the file area to open it, or a file to open its folder with the file selected.
+- Drop folders between the rows of the sidebar to add them to Favorites.
+- While searching or in Recents, drop a folder on the file area to open it, or a file to open its folder with the file selected.
 
 ## The Nushell panel
 
@@ -475,10 +653,19 @@ If the terminal saved in Settings isn't installed, Automatic's choice is used an
 It needs:
 
 - a build with the `term` feature: `nu scripts/install.nu --term`, or `cargo build --release --features term`.
-- macOS or Linux.
-- a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, or Konsole. It doesn't work inside tmux.
+- on macOS and Linux, a terminal that implements the kitty graphics protocol, such as kitty, Ghostty, WezTerm, Rio, Konsole, or VS Code's terminal. It doesn't work inside tmux.
+- on Windows, a terminal with kitty graphics, such as WezTerm, Rio, or VS Code's terminal, or one with sixel images, such as Windows Terminal 1.22 or later.
+- in VS Code's terminal, the `terminal.integrated.enableImages` setting turned on, and `terminal.integrated.gpuAcceleration` not off. On Windows, VS Code shows kitty graphics but not sixel images.
 
-Frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. fffinder draws a frame only when something on screen changes, at most about 60 a second, and when the terminal falls behind it skips ahead to the newest frame. `fffinder --term --fps` shows the rate in the status bar: the frames that reached the terminal in the last second, so an idle window reads 0. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+fffinder draws a frame only when something on screen changes, at most about 60 a second, and when the terminal falls behind it skips ahead to the newest frame. `fffinder --term --fps` shows the rate in the status bar: the frames that reached the terminal in the last second, so an idle window reads 0.
+
+On macOS and Linux, frames go to the terminal through shared memory when it runs on the same machine, and as compressed escape codes otherwise, such as over SSH. Where the terminal reports mouse positions in pixels, clicks land where they would in the window; otherwise they land in the middle of a character cell.
+
+On Windows, frames go to the terminal as kitty graphics when it has them, and as sixel images otherwise, as in Windows Terminal. They pass through the Windows console (ConPTY) on the way, and in a terminal that ships an older ConPTY, the images, or the terminal's answers about what it can show, may not get through. Clicks land in the middle of a character cell, and emoji are drawn in one color.
+
+With sixel images, only the cells that changed since the last frame are sent. Each image has at most 256 colors: an area with no more than that keeps its colors, and a busier one, such as a photo in a preview, is reduced to 256 without dithering. Windows Terminal draws sixel images at 10 by 20 pixels a character cell whatever the font size, so the window has fewer pixels than with kitty graphics and text looks softer, more so on a high-DPI screen.
+
+VS Code's terminal measures character cells in points, so on a high-DPI screen the window is drawn at half the screen's resolution there.
 
 What's different from the window:
 
@@ -500,11 +687,12 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 
 | Menu | Items |
 | --- | --- |
-| fffinder | Settings… (Cmd+,), Rescan Index, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Folder, Open, Open in Editor, Quick Look, Rename…, Move to Trash, Close Window (Cmd+W) |
-| Edit | Undo, Redo, Cut, Copy, Paste (for text fields), Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
-| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Toggle Light/Dark, Refresh |
-| Go | Back, Forward, Enclosing Folder, Recents, Home, Go to Folder… |
+| fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
+| File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
+| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
+| Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
+| Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
 
 New Window opens a window at the folder you last had open.
@@ -515,29 +703,43 @@ Right-click one or more items:
 
 - Choose, or Choose Items (only in `--pick` mode)
 - Open
+- Open With and Always Open With (files only; see [Opening files](#opening-files))
 - Quick Look
+- Get Info
 - Open in Editor (when a file is selected)
 - Show in Enclosing Folder (one search result)
 - Show in Finder (Show in Explorer, Show in File Manager)
+- Copy "name", or Copy N Items
 - Copy Path, or Copy Paths
 - Copy as Nushell List
 - Open Nushell Here
 - Run Nushell Pipeline…
 - Nushell Actions (submenu)
 - Rename…, or Rename N Items…
+- Duplicate
+- Make Alias (macOS), or Create Shortcut (Windows)
+- Make Symbolic Link
+- Compress "name", or Compress N Items
+- Extract (when an archive is selected)
 - Add to Sidebar (one folder that isn't a favorite)
 - Move to Trash
+
+In the Trash, the item menu has Put Back, Quick Look, Show in Finder, Copy Path, and Delete Immediately….
 
 ### Empty-space menu
 
 Right-click empty space in a view:
 
-- New Folder (in a folder)
+- New Folder and New File… (in a folder)
+- Paste Item, or Paste N Items, and Move Item Here, or Move N Items Here (in a folder, when the clipboard holds files)
 - Open Nushell Here (in a folder)
 - Run Nushell Pipeline…
+- Get Info (in a folder)
 - Add Folder to Sidebar (when the folder isn't a favorite)
 - Show Hidden Files
 - Refresh
+
+In the Trash, the empty-space menu has Empty Trash….
 
 ### Nushell Actions submenu
 
@@ -545,9 +747,10 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 
 ### Toolbar menus
 
-- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Size, Kind), Ascending, Descending, Show Hidden Files.
+- **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files, Group By.
+- **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
-- **Actions** (…): New Folder, Quick Look, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Filter with Nushell…, Go to Folder…, Search Syntax…, Settings….
+- **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Redo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
 
 ## Keyboard shortcuts
 
@@ -565,7 +768,11 @@ Cmd on macOS, Ctrl elsewhere.
 
 | Keys | Action |
 | --- | --- |
-| Cmd+W | Close the window |
+| Cmd+W | Close the tab, or the window when it's the last tab |
+| Cmd+T | New tab |
+| Ctrl+Tab, Cmd+Shift+] | Next tab |
+| Ctrl+Shift+Tab, Cmd+Shift+[ | Previous tab |
+| Cmd+Backslash | Split view on or off |
 | Cmd+F | Search |
 | Cmd+Alt+F | Filter with Nushell |
 | Cmd+/ | Search syntax |
@@ -575,11 +782,15 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Shift+H | Home |
 | Cmd+Shift+F | Recents |
 | Cmd+Shift+G | Go to folder |
+| Cmd+K | Connect to server |
 | Cmd+1, Cmd+2, Cmd+3, Cmd+4 | Icons, list, columns, gallery |
 | Cmd+Shift+. | Show hidden files |
 | Cmd+R | Refresh |
 | Cmd+Alt+S | Toggle the sidebar |
 | Cmd+Shift+N | New folder |
+| Cmd+I | Get Info |
+| Cmd+Alt+N | New file |
+| Cmd+Shift+Backspace | Empty the Trash |
 | Cmd+Alt+C | Copy path |
 | Cmd+Shift+C | Copy as Nushell list |
 | Cmd+Alt+T | Open Nushell here |
@@ -595,22 +806,35 @@ Cmd on macOS, Ctrl elsewhere.
 | Home, End | First or last item |
 | Return, Cmd+Down, Cmd+O | Open |
 | Space, Cmd+Y | Quick Look |
+| Right, Left | In the list view, open or close the selected folder in place |
 | Escape | Clear the selection, end the search, or cancel `--pick` |
 | Cmd+A | Select all |
-| Cmd+C | Copy path |
+| Cmd+C | Copy the selected items |
+| Cmd+V | Paste items into the folder |
+| Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
-| Cmd+Backspace, Delete | Move to Trash |
+| Cmd+D | Duplicate |
+| F5 | In split view, copy the selection to the other pane |
+| F6 | In split view, move the selection to the other pane |
+| Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
+| Cmd+Alt+Backspace | Delete immediately |
+| Cmd+Z | Undo the latest file operation |
+| Cmd+Shift+Z | Redo the latest Undo |
+| Page Up, Page Down | In the gallery, the previous or next page of a PDF |
+| Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit the width, or change the size of text previews |
 | Letters | Type to select |
 
 ### In Quick Look
 
 | Keys | Action |
 | --- | --- |
-| Space, Cmd+Y | Close Quick Look |
+| Space, Cmd+Y, Escape | Close Quick Look |
 | Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)) |
-| Cmd+=, Cmd++ | Bigger preview text |
-| Cmd+- | Smaller preview text |
-| Cmd+0 | Reset the preview text size |
+| Cmd+=, Cmd++ | Bigger preview text, or zoom in on a PDF |
+| Cmd+- | Smaller preview text, or zoom out of a PDF |
+| Cmd+0 | Reset the preview text size, or fit a PDF to the width |
+| Page Up, Page Down | Previous or next page of a PDF |
+| Pinch, Cmd+scroll | Zoom a PDF |
 
 ### In the search field
 
@@ -681,7 +905,13 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `favorites` | The standard folders that exist | Sidebar Favorites, in order. |
 | `show_hidden` | `false` | Show hidden files in folders. |
 | `view_mode` | `"icons"` | `icons`, `list`, `columns`, or `gallery`. |
-| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `size`, `kind`. |
+| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `created`, `last_opened`, `size`, `kind`. |
+| `folders_first` | `false` | Keep Folders on Top. |
+| `use_groups` | `false` | Show the list and icon views in groups. |
+| `group_by` | `"kind"` | What groups are by: `name`, `kind`, `modified`, `created`, `last_opened`, or `size`. |
+| `list_columns` | Date Modified 170, Size 90, Kind 160 | The list view's columns after Name, in order: `column` (`modified`, `created`, `last_opened`, `size`, `kind`, `permissions`, `git`) and `width` in points, at least 50. |
+| `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
+| `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |
 | `show_sidebar` | `true` | Show the sidebar. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |
@@ -783,6 +1013,8 @@ The settings folder holds `settings.json` and `actions.nu`. The data folder hold
 - `run/`: the socket and `server.json`, removed on a normal quit.
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
 - `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
+- `trash.json`: on macOS, where each item fffinder moved to the Trash came from, for Put Back.
+- `thumbnails/`: thumbnails of PDFs, videos, and documents, as PNGs, up to 256 MB; the least recently used go first.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
 - `term.log`: stderr from the last `fffinder --term`.
 
@@ -904,7 +1136,7 @@ A step that runs longer than 20 seconds fails the run and names the step, so a h
 cargo run --example drive -- key:cmd-, click:show-hidden key:escape key:cmd-shift-g 'type:~/src' key:enter
 ```
 
-`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change can be checked without opening it. `examples/macos_colors.rs` prints the macOS colors the themes are based on, in light and dark.
+`examples/screenshot.rs` renders the window to a PNG with Metal, so a UI change can be checked without opening it. `--tabs N` opens N tabs, `--split` turns on split view, and `--info` opens Get Info. `examples/macos_colors.rs` prints the macOS colors the themes are based on, in light and dark.
 
 `examples/terminals.rs` lists the terminals found and what Automatic picks. With `--verify` it opens each one with a short script in place of `nu` that records the folder it started in, then closes it. Terminal and iTerm2 keep their windows open, so it checks them only when you name them.
 

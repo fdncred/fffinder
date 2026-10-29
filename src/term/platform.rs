@@ -1,6 +1,10 @@
 //! The platform: the regular one for this OS, started without windows, with
 //! the one window it opens shown in the terminal instead.
 //!
+//! On Windows the regular platform is created windowed, since a headless one
+//! has no fonts, but starts without a display, so it opens no window and
+//! needs no DirectX. Emoji then draw in one color.
+//!
 //! Executors, text shaping, the clipboard, and opening or revealing files all
 //! go to the regular platform. Menus, native dialogs, and other windows have
 //! nowhere to appear in a terminal.
@@ -11,8 +15,8 @@ use futures::channel::oneshot;
 use gpui_kit::{
     Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
     ForegroundExecutor, Keymap, Menu, MenuItem, PathPromptOptions, Platform, PlatformDisplay,
-    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Task,
-    ThermalState, WindowAppearance, WindowParams,
+    PlatformHeadlessRenderer, PlatformInfo, PlatformKeyboardLayout, PlatformKeyboardMapper,
+    PlatformTextSystem, PlatformWindow, Task, ThermalState, WindowAppearance, WindowParams,
 };
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
@@ -20,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use super::frames::Writer;
 use super::input;
-use super::kitty::Writer;
 use super::tty::{self, Session};
 use super::window::{TerminalWindow, WindowConfig};
 
@@ -42,8 +46,8 @@ pub struct TerminalPlatform {
 impl TerminalPlatform {
     pub fn new(session: Session) -> TerminalPlatform {
         TerminalPlatform {
-            inner: gpui_kit::platform::current_platform(true),
-            writer: Writer::spawn(session.caps.shared_memory),
+            inner: regular_platform(),
+            writer: Writer::spawn(&session.caps),
             input: RefCell::new(Some(input::spawn_reader())),
             session,
             window: Cell::new(None),
@@ -51,6 +55,34 @@ impl TerminalPlatform {
             cursor: Cell::new(CursorStyle::Arrow),
         }
     }
+}
+
+/// This OS's own platform, running without windows.
+#[cfg(unix)]
+fn regular_platform() -> Rc<dyn Platform> {
+    gpui_kit::platform::current_platform(true)
+}
+
+/// This OS's own platform, running without windows.
+#[cfg(windows)]
+fn regular_platform() -> Rc<dyn Platform> {
+    let platform = gpui_kit::platform::current_platform(false);
+    platform.set_initial_windowing(gpui_kit::WindowingRequest::Headless);
+    platform
+}
+
+/// What draws frames offscreen: GPUI's own renderer on macOS and Linux.
+#[cfg(unix)]
+fn offscreen_renderer() -> Result<Box<dyn PlatformHeadlessRenderer>> {
+    gpui_kit::platform::current_headless_renderer()?
+        .context("this platform has no offscreen renderer")
+}
+
+/// What draws frames offscreen: GPUI has no renderer for that on Windows,
+/// so wgpu's, through Direct3D 12 or Vulkan.
+#[cfg(windows)]
+fn offscreen_renderer() -> Result<Box<dyn PlatformHeadlessRenderer>> {
+    Ok(Box::new(gpui_wgpu::WgpuHeadlessRenderer::new()?))
 }
 
 /// Shut the app down, put the terminal back, and exit. Runs as its own task,
@@ -105,6 +137,10 @@ fn no_dialog<T>() -> oneshot::Receiver<Result<T>> {
 }
 
 impl Platform for TerminalPlatform {
+    fn platform_info(&self) -> PlatformInfo {
+        self.inner.platform_info()
+    }
+
     fn background_executor(&self) -> BackgroundExecutor {
         self.inner.background_executor()
     }
@@ -163,8 +199,7 @@ impl Platform for TerminalPlatform {
             .borrow_mut()
             .take()
             .context("the terminal shows only one window")?;
-        let renderer = gpui_kit::platform::current_headless_renderer()?
-            .context("this platform has no offscreen renderer")?;
+        let renderer = offscreen_renderer()?;
         let foreground = self.inner.foreground_executor();
         let on_quit = self.on_quit.clone();
         let hangup_executor = foreground.clone();

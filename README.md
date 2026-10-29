@@ -12,11 +12,11 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 
 - Indexes your home folder (and `/Applications` on macOS) in the background and keeps the index live. On the development Mac that's about 670,000 files in 4 to 6 seconds, and a search over all of them returns in 30 to 110 ms.
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
-- Browses folders as icons, a list, columns, or a gallery, with a sidebar, back and forward history, and a clickable path bar.
-- Previews files in the gallery, the column view, and Quick Look (Space). CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
-- Handles everyday file work: open, open in your editor, show in Finder, copy paths, rename one item or many, new folder, move to Trash, and drag files out to other apps.
+- Browses folders as icons, a list, columns, or a gallery, with a sidebar, tabs, a split view with F5 to copy and F6 to move between panes, back and forward history, and a clickable path bar. The list and icon views can show items in collapsible groups by kind, date, size, or name. The list opens folders in place and has a column chooser (dates created and last opened, permissions, git status), resizable and movable columns, Keep Folders on Top, and folder sizes added up from the index.
+- Previews files in the gallery, the column view, and Quick Look (Space): syntax-highlighted code, rendered Markdown, fonts, archive contents, media durations, PDFs you can scroll through and zoom, and the system's thumbnails of PDFs, videos, and documents (QuickLook, Explorer's, or the desktop's thumbnailers), which also show in the icon view. CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
+- Handles everyday file work: open, open with another app or change the default, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, undo and redo, Get Info with folder sizes and permissions, duplicate, aliases and symbolic links, zip and tar archives, copy paths, rename one item or many, new file and folder, a Trash view with Put Back and Empty, eject, free space in the status bar, and Connect to Server for SMB, SFTP, and WebDAV.
 - Has light and dark themes that follow the system, and a text size setting for the whole window.
-- Runs inside a terminal with `fffinder --term`, drawn with the kitty graphics protocol so it looks the same as the window. It needs a build with `--features term` and a terminal like kitty, Ghostty, or WezTerm.
+- Runs inside a terminal with `fffinder --term`. On macOS and Linux it's drawn with the kitty graphics protocol, so it looks the same as the window, in a terminal like kitty, Ghostty, or WezTerm. On Windows it's drawn with kitty graphics in terminals that have them, such as WezTerm, and as sixel images in Windows Terminal 1.22 or later. It needs a build with `--features term`.
 
 ![fffinder --term running in a Ghostty tab](docs/images/term-dark.png)
 
@@ -68,7 +68,15 @@ http get --unix-socket $sock 'http://localhost/v1/find?query=readme&limit=5'
 
 ## Install
 
-You need Rust 1.92 or newer and Nushell 0.116, plus:
+Each [release](https://github.com/fdncred/fffinder/releases) has binaries for macOS, Linux, and Windows on x86_64 and ARM64. [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads the one for your system into `~/.cargo/bin`:
+
+```nu
+cargo binstall --git https://github.com/fdncred/fffinder fffinder
+```
+
+That installs only the binary. For the `fff` Nushell commands, take `nu/fff.nu` from this repository or the release archive and load it as [the `fff` module](#the-fff-module) section shows. Linux also needs a Vulkan driver.
+
+To build from source, you need Rust 1.92 or newer and Nushell 0.116, plus:
 
 - macOS: Xcode Command Line Tools (`xcode-select --install`).
 - Linux: `gcc g++ clang pkg-config libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev`, plus a Vulkan driver.
@@ -125,7 +133,7 @@ In Settings you choose the search locations (or the entire disk), fff-search's o
 ## How it's built
 
 ```text
-crates/fffinder-core   search engine wrapper, file model, listing, places, settings, terminals
+crates/fffinder-core   search engine wrapper, file model, listing, copy and move, places, settings, terminals
 src/                     the GPUI Kit app (src/finder/ holds the window and its views)
 src/server/              the local socket server and its client
 src/macos.rs             macOS integration through AppKit

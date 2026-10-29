@@ -1,21 +1,27 @@
 //! The terminal itself: taking it over, asking what it supports, its size,
 //! writing to it, and putting it back the way it was.
 //!
-//! All drawing goes to `/dev/tty`, never stdout, so `--pick` can still print
-//! its JSON to stdout for a script.
+//! All drawing goes to the terminal (`/dev/tty`, or the console on Windows),
+//! never stdout, so `--pick` can still print its JSON to stdout for a script.
 
 use anyhow::{Context as _, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use crossterm::terminal::WindowSize;
 use fffinder_core::config;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read as _, Write as _};
-use std::os::fd::AsRawFd as _;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::io::{self, Write as _};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
-use super::kitty;
+#[cfg(windows)]
+mod console;
+#[cfg(unix)]
+mod unix;
+
+#[cfg(windows)]
+use console as sys;
+#[cfg(unix)]
+use unix as sys;
 
 /// The window is never laid out smaller than this, in logical pixels, unless
 /// the terminal is too small even at a scale of 1. Matches the GUI's minimum.
@@ -23,41 +29,11 @@ const MIN_LOGICAL: (f32, f32) = (850., 470.);
 /// How long to wait for the terminal to answer the startup queries.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Escape codes that set the terminal up, sent once the probe is done.
-const ENTER: &str = concat!(
-    "\x1b[?1049h",                                  // alternate screen
-    "\x1b[?25l",                                    // hide the text cursor
-    "\x1b[22;0t",                                   // save the window title
-    "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h", // every mouse event, SGR encoded
-    "\x1b[?1004h",                                  // focus in and out
-    "\x1b[?2004h",                                  // bracketed paste
-    // Kitty keyboard protocol: unambiguous codes, presses, repeats, and
-    // releases, shifted keys from the layout, and modifier keys on their own.
-    "\x1b[>15u",
-);
-/// Mouse positions in pixels instead of cells; sent only when supported.
-const PIXEL_MOUSE: &str = "\x1b[?1016h";
-/// Undoes [`ENTER`] and [`PIXEL_MOUSE`].
-const LEAVE: &str = concat!(
-    // Ends an image the writer may have been stopped in the middle of.
-    "\x1b\\",
-    "\x1b_Ga=d,d=A,q=2\x1b\\",
-    "\x1b[<u",
-    "\x1b[?2004l\x1b[?1004l",
-    "\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l",
-    "\x1b]22;default\x1b\\",
-    "\x1b[23;0t",
-    "\x1b[?25h",
-    "\x1b[?1049l",
-);
-
 /// The terminal, open for writing. Frames and restoring share it, so neither
 /// interrupts the other's escape codes.
 static OUT: OnceLock<Mutex<File>> = OnceLock::new();
 /// Set while the terminal is taken over.
 static ENTERED: AtomicBool = AtomicBool::new(false);
-/// The original stderr while it's redirected to the log, or -1.
-static SAVED_STDERR: AtomicI32 = AtomicI32::new(-1);
 
 /// What the terminal said it supports.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -67,6 +43,11 @@ pub struct Caps {
     /// Images handed over in POSIX shared memory instead of escape codes.
     /// Only works when the terminal runs on this machine.
     pub shared_memory: bool,
+    /// Sixel images, from the primary device attributes.
+    pub sixel: bool,
+    /// Mode 8452, which leaves the cursor beside a sixel image rather than
+    /// below it, so an image at the bottom doesn't scroll the screen.
+    pub sixel_cursor: bool,
     /// Mouse positions in pixels (mode 1016) rather than cells.
     pub pixel_mouse: bool,
     /// One cell's size in pixels, from `CSI 16 t`.
@@ -104,7 +85,7 @@ pub struct Session {
 }
 
 impl Session {
-    /// Put the terminal in raw mode, check that it can show kitty images, and
+    /// Put the terminal in raw mode, check that it can show images, and
     /// switch to the alternate screen with mouse and keyboard reporting on.
     /// From then on stderr goes to `term.log` in the data folder, and the
     /// terminal is put back on exit or on a panic in the main thread.
@@ -112,37 +93,37 @@ impl Session {
     /// # Errors
     ///
     /// Fails, leaving the terminal as it was, when there is no terminal, it
-    /// doesn't answer, it has no kitty graphics, or it doesn't report its
-    /// size in pixels.
+    /// doesn't answer, it can't show images this platform sends, or it doesn't
+    /// report its size in pixels.
     pub fn start() -> anyhow::Result<Session> {
-        let out = OpenOptions::new()
-            .write(true)
-            .open("/dev/tty")
-            .context("fffinder --term needs a terminal")?;
-        crossterm::terminal::enable_raw_mode().context("could not put the terminal in raw mode")?;
-        let checked = probe(&out).and_then(|caps| {
-            if !caps.kitty {
-                bail!(
-                    "this terminal can't show kitty graphics; fffinder --term works in \
-                     kitty, Ghostty, WezTerm, and Konsole (not inside tmux)"
-                );
-            }
-            Ok((caps, geometry(caps.cell)?))
-        });
+        let out = sys::open().context("fffinder --term needs a terminal")?;
+        // Every step after the first change to the terminal is checked
+        // together, so a failure at any of them puts it all back.
+        let checked = sys::prepare(&out)
+            .context("could not set the terminal up")
+            .and_then(|()| {
+                crossterm::terminal::enable_raw_mode()
+                    .context("could not put the terminal in raw mode")
+            })
+            .and_then(|()| probe(&out))
+            .and_then(|caps| {
+                sys::check(&caps)?;
+                let geometry = geometry(caps.cell)?;
+                sys::start_input().context("could not read the mouse")?;
+                Ok((caps, geometry))
+            });
         let (caps, geometry) = match checked {
             Ok(found) => found,
             Err(err) => {
                 let _ = crossterm::terminal::disable_raw_mode();
+                sys::restore_modes();
                 return Err(err);
             }
         };
 
-        let mut enter = String::from(ENTER);
-        if caps.pixel_mouse {
-            enter.push_str(PIXEL_MOUSE);
-        }
         let out = OUT.get_or_init(|| Mutex::new(out));
-        write_locked(out, enter.as_bytes()).context("could not write to the terminal")?;
+        write_locked(out, sys::enter(&caps).as_bytes())
+            .context("could not write to the terminal")?;
         ENTERED.store(true, Ordering::SeqCst);
         install_restore_hooks();
         redirect_stderr();
@@ -153,7 +134,7 @@ impl Session {
             .filter(|scale: &f32| scale.is_finite() && *scale > 0.);
         let cell = geometry.cell();
         log::info!(
-            "{}x{} cells of {:.1}x{:.1} px ({}x{} px), scale {}, frames by {}, mouse in {}",
+            "{}x{} cells of {:.1}x{:.1} px ({}x{} px), scale {}, frames as {}, mouse in {}",
             geometry.cols,
             geometry.rows,
             cell.0,
@@ -161,11 +142,7 @@ impl Session {
             geometry.width,
             geometry.height,
             scale(&geometry, requested_scale),
-            if caps.shared_memory {
-                "shared memory"
-            } else {
-                "escape codes"
-            },
+            sys::frames_as(&caps),
             if caps.pixel_mouse { "pixels" } else { "cells" },
         );
         Ok(Session {
@@ -207,25 +184,30 @@ fn install_logger() {
     }
 }
 
-/// The terminal's size now. Pixels come from the kernel's window size, or
-/// from the cell size when the terminal leaves those at zero.
+/// The terminal's size now. Pixels come from the terminal's own report, or
+/// from the cell size when it gives none, as the Windows console never does.
 ///
 /// # Errors
 ///
 /// Fails when the size can't be read, or there are no pixels to go by.
 pub fn geometry(cell: Option<(u16, u16)>) -> anyhow::Result<Geometry> {
-    let size = crossterm::terminal::window_size().context("could not read the terminal size")?;
-    let (width, height) = match (size.width, size.height, cell) {
+    let WindowSize {
+        rows,
+        columns,
+        width,
+        height,
+    } = sys::window_size().context("could not read the terminal size")?;
+    let (width, height) = match (width, height, cell) {
         (width, height, _) if width > 0 && height > 0 => (u32::from(width), u32::from(height)),
         (_, _, Some((cell_width, cell_height))) => (
-            u32::from(cell_width) * u32::from(size.columns),
-            u32::from(cell_height) * u32::from(size.rows),
+            u32::from(cell_width) * u32::from(columns),
+            u32::from(cell_height) * u32::from(rows),
         ),
         _ => bail!("the terminal doesn't report its size in pixels"),
     };
     Ok(Geometry {
-        cols: size.columns,
-        rows: size.rows,
+        cols: columns,
+        rows,
         width,
         height,
     })
@@ -256,7 +238,7 @@ pub fn write(bytes: &[u8]) -> io::Result<()> {
 
 fn write_locked(out: &Mutex<File>, bytes: &[u8]) -> io::Result<()> {
     let mut file = out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    file.write_all(bytes)?;
+    sys::write_all(&mut file, bytes)?;
     file.flush()
 }
 
@@ -282,30 +264,24 @@ pub fn restore() {
         };
         match guard {
             Some(mut file) => {
-                let _ = file.write_all(LEAVE.as_bytes());
+                let _ = sys::write_all(&mut file, sys::LEAVE.as_bytes());
                 let _ = file.flush();
                 std::mem::forget(file);
             }
             None => {
-                if let Ok(mut file) = OpenOptions::new().write(true).open("/dev/tty") {
-                    let _ = file.write_all(LEAVE.as_bytes());
+                if let Ok(mut file) = sys::open() {
+                    let _ = sys::write_all(&mut file, sys::LEAVE.as_bytes());
                 }
             }
         }
     }
+    sys::restore_modes();
     let _ = crossterm::terminal::disable_raw_mode();
-    let saved = SAVED_STDERR.swap(-1, Ordering::SeqCst);
-    if saved >= 0 {
-        // SAFETY: `saved` is the descriptor `redirect_stderr` duplicated.
-        unsafe {
-            libc::dup2(saved, libc::STDERR_FILENO);
-            libc::close(saved);
-        }
-    }
+    sys::restore_stderr();
 }
 
-/// Restore on any exit, including `std::process::exit` from the picker, and
-/// on a panic in the main thread. Other threads' panics only reach the log,
+/// Restore on any exit that runs the C runtime's exit handlers, and on a
+/// panic in the main thread. Other threads' panics only reach the log,
 /// since the window keeps running.
 fn install_restore_hooks() {
     extern "C" fn restore_at_exit() {
@@ -331,94 +307,20 @@ fn redirect_stderr() {
         .map(std::fs::create_dir_all)
         .transpose()
         .and_then(|_| File::create(&path))
-        .or_else(|_| OpenOptions::new().write(true).open("/dev/null"));
-    let Ok(log) = log else {
-        return;
-    };
-    // SAFETY: duplicates and replaces standard descriptors this process owns.
-    unsafe {
-        let saved = libc::dup(libc::STDERR_FILENO);
-        if saved >= 0 && libc::dup2(log.as_raw_fd(), libc::STDERR_FILENO) >= 0 {
-            SAVED_STDERR.store(saved, Ordering::SeqCst);
-        }
+        .or_else(|_| OpenOptions::new().write(true).open(sys::NULL_DEVICE));
+    if let Ok(log) = log {
+        sys::redirect_stderr(log);
     }
 }
 
 /// Ask what the terminal supports and read its answers, ending with the
 /// primary device attributes every terminal answers.
-fn probe(mut out: &File) -> anyhow::Result<Caps> {
-    let shm_name = format!("/fff-probe-{}", std::process::id());
-    let shm = kitty::write_shm(&shm_name, &[0; 3]).is_ok();
-    let mut query = String::from("\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\");
-    if shm {
-        query.push_str(&format!(
-            "\x1b_Gi=32,s=1,v=1,a=q,t=s,f=24,S=3;{}\x1b\\",
-            BASE64.encode(&shm_name)
-        ));
-    }
-    query.push_str("\x1b[?1016$p\x1b[16t\x1b[c");
-    out.write_all(query.as_bytes())?;
-    out.flush()?;
-    let replies = read_replies(PROBE_TIMEOUT);
-    if shm {
-        // The terminal removes it after reading it, if it did.
-        kitty::unlink_shm(&shm_name);
-    }
-    let replies = replies.context("could not read the terminal's answers")?;
+fn probe(out: &File) -> anyhow::Result<Caps> {
+    let replies = sys::probe(out).context("could not read the terminal's answers")?;
     if !has_device_attributes(&replies) {
         bail!("the terminal didn't answer within {PROBE_TIMEOUT:?}");
     }
     Ok(parse_replies(&replies))
-}
-
-/// Read from the terminal until it has sent its device attributes, or the
-/// time is up. Uses `select`, since macOS can't `poll` a terminal.
-fn read_replies(timeout: Duration) -> io::Result<Vec<u8>> {
-    let mut tty = File::open("/dev/tty")?;
-    let fd = tty.as_raw_fd();
-    let deadline = Instant::now() + timeout;
-    let mut replies = Vec::new();
-    let mut chunk = [0u8; 1024];
-    while !has_device_attributes(&replies) {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
-        }
-        let mut wait = libc::timeval {
-            tv_sec: left.as_secs() as libc::time_t,
-            tv_usec: left.subsec_micros() as libc::suseconds_t,
-        };
-        // SAFETY: `fd_set` is plain data, set up by FD_ZERO and FD_SET for one
-        // open descriptor below FD_SETSIZE.
-        let ready = unsafe {
-            let mut readable: libc::fd_set = std::mem::zeroed();
-            libc::FD_ZERO(&mut readable);
-            libc::FD_SET(fd, &mut readable);
-            libc::select(
-                fd + 1,
-                &mut readable,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut wait,
-            )
-        };
-        if ready < 0 {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(err);
-        }
-        if ready == 0 {
-            break;
-        }
-        let read = tty.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        replies.extend_from_slice(&chunk[..read]);
-    }
-    Ok(replies)
 }
 
 /// The capabilities in the terminal's answers to [`probe`]'s queries.
@@ -427,8 +329,15 @@ fn parse_replies(replies: &[u8]) -> Caps {
     Caps {
         kitty: text.contains("\x1b_Gi=31;OK"),
         shared_memory: text.contains("\x1b_Gi=32;OK"),
+        // Extension 4 is sixel graphics.
+        sixel: device_attributes(replies).is_some_and(|params| {
+            params
+                .split(|byte| *byte == b';')
+                .any(|param| param == b"4")
+        }),
         // 1 set, 2 reset, 3 permanently set; 0 is unknown, 4 permanently reset.
         pixel_mouse: mode_report(&text, 1016).is_some_and(|state| matches!(state, 1..=3)),
+        sixel_cursor: mode_report(&text, 8452).is_some_and(|state| matches!(state, 1..=3)),
         cell: cell_size(&text),
     }
 }
@@ -449,15 +358,24 @@ fn cell_size(text: &str) -> Option<(u16, u16)> {
     Some((width.parse().ok()?, height.parse().ok()?))
 }
 
-/// Whether the answers include primary device attributes, `CSI ? … c`.
-fn has_device_attributes(replies: &[u8]) -> bool {
-    replies.windows(3).enumerate().any(|(start, window)| {
-        window == b"\x1b[?"
-            && replies[start + 3..]
-                .iter()
-                .find(|byte| !(byte.is_ascii_digit() || **byte == b';'))
-                == Some(&b'c')
+/// The parameters of the primary device attributes in the answers,
+/// `CSI ? … c`, such as `62;22;52`.
+fn device_attributes(replies: &[u8]) -> Option<&[u8]> {
+    replies.windows(3).enumerate().find_map(|(start, window)| {
+        if window != b"\x1b[?" {
+            return None;
+        }
+        let params = &replies[start + 3..];
+        let end = params
+            .iter()
+            .position(|byte| !(byte.is_ascii_digit() || *byte == b';'))?;
+        (params[end] == b'c').then_some(&params[..end])
     })
+}
+
+/// Whether the answers include primary device attributes.
+fn has_device_attributes(replies: &[u8]) -> bool {
+    device_attributes(replies).is_some()
 }
 
 #[cfg(test)]
@@ -466,6 +384,8 @@ mod tests {
 
     const GHOSTTY: &[u8] = b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\\x1b[?1016;2$y\
         \x1b[6;34;16t\x1b[?62;22;52c";
+    /// Windows Terminal 1.22's answers to `CSI 16 t` and `CSI c`.
+    const WINDOWS_TERMINAL: &[u8] = b"\x1b[6;20;10t\x1b[?61;4;6;7;14;21;22;23;24;28;32;42c";
 
     #[test]
     fn reads_a_full_set_of_answers() {
@@ -474,11 +394,31 @@ mod tests {
             Caps {
                 kitty: true,
                 shared_memory: true,
+                sixel: false,
+                sixel_cursor: false,
                 pixel_mouse: true,
                 cell: Some((16, 34)),
             }
         );
         assert!(has_device_attributes(GHOSTTY));
+    }
+
+    #[test]
+    fn reads_windows_terminals_sixel_and_cell_size() {
+        assert_eq!(
+            parse_replies(WINDOWS_TERMINAL),
+            Caps {
+                sixel: true,
+                cell: Some((10, 20)),
+                ..Caps::default()
+            }
+        );
+        // A sixel terminal that leaves the cursor beside an image.
+        assert!(parse_replies(b"\x1b[?8452;2$y\x1b[?62;4c").sixel_cursor);
+        assert!(!parse_replies(b"\x1b[?8452;0$y\x1b[?62;4c").sixel_cursor);
+        // 42 isn't 4, and neither is a 4 inside another sequence.
+        assert!(!parse_replies(b"\x1b[?62;42;14c").sixel);
+        assert!(!parse_replies(b"\x1b[?4;2$y\x1b[?62;22c").sixel);
     }
 
     #[test]
@@ -497,6 +437,10 @@ mod tests {
         assert!(!has_device_attributes(b"\x1b[?1016;2$y"));
         assert!(!has_device_attributes(b"\x1b[?62;22"));
         assert!(has_device_attributes(b"noise\x1b[?1016;2$y\x1b[?62;4c"));
+        assert_eq!(
+            device_attributes(b"\x1b[?1016;2$y\x1b[?62;4c"),
+            Some(&b"62;4"[..])
+        );
     }
 
     fn grid(width: u32, height: u32, rows: u16) -> Geometry {
@@ -518,5 +462,7 @@ mod tests {
         assert!((small - 1400. / 850.).abs() < 1e-4, "{small}");
         assert_eq!(scale(&grid(600, 300, 25), None), 1.);
         assert_eq!(scale(&grid(3000, 1800, 50), Some(1.5)), 1.5);
+        // Windows Terminal's 10x20 cells.
+        assert_eq!(scale(&grid(1200, 600, 30), None), 1.);
     }
 }

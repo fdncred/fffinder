@@ -40,6 +40,12 @@ pub fn human_date(time: SystemTime) -> String {
     }
 }
 
+/// "Tuesday, 27 October 2026 at 09:53", for Get Info.
+pub fn long_date(time: SystemTime) -> String {
+    let dt: DateTime<Local> = time.into();
+    dt.format("%A, %-d %B %Y at %H:%M").to_string()
+}
+
 /// RFC 3339 timestamp for machine-readable output.
 pub fn iso_date(time: SystemTime) -> String {
     let dt: DateTime<Local> = time.into();

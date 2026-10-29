@@ -4,10 +4,12 @@
 
 pub mod actions;
 pub mod ansi;
+pub mod apps;
 pub mod args;
 pub mod assets;
 pub mod finder;
 pub mod graphics;
+pub mod highlight;
 pub mod macos;
 pub mod model;
 pub mod nu_env;
@@ -18,8 +20,14 @@ pub mod server;
 pub mod system;
 pub mod term;
 pub mod theme;
+pub mod thumbnails;
+pub mod trash_bin;
+pub mod undo;
 pub mod user_actions;
 pub mod watchdog;
+#[cfg(windows)]
+pub mod win;
+pub mod workspace;
 
 use crate::finder::{AppState, Finder, PickerOptions};
 use crate::model::Location;
@@ -119,7 +127,7 @@ pub fn run(args: args::Args) {
 
 /// Browser windows, oldest first, for requests that need "the window".
 #[derive(Default)]
-struct Windows(Vec<(AnyWindowHandle, WeakEntity<Finder>)>);
+struct Windows(Vec<(AnyWindowHandle, WeakEntity<workspace::Workspace>)>);
 
 impl Global for Windows {}
 
@@ -128,7 +136,8 @@ struct ServerGuard(#[allow(dead_code)] server::Server);
 
 impl Global for ServerGuard {}
 
-/// The window a request should go to: the active one, else the newest.
+/// The window a request should go to (the active one, else the newest),
+/// and the tab it shows.
 fn frontmost(cx: &mut App) -> Option<(AnyWindowHandle, Entity<Finder>)> {
     let active = cx.active_window();
     let windows = &mut cx.default_global::<Windows>().0;
@@ -138,7 +147,9 @@ fn frontmost(cx: &mut App) -> Option<(AnyWindowHandle, Entity<Finder>)> {
         .rev()
         .find(|(handle, _)| Some(*handle) == active)
         .or_else(|| windows.last())?;
-    Some((pick.0, pick.1.upgrade()?))
+    let (handle, workspace) = (pick.0, pick.1.upgrade()?);
+    let finder = workspace.read(cx).active().clone();
+    Some((handle, finder))
 }
 
 /// Answer the control socket (see `docs/protocol.md`).
@@ -295,8 +306,8 @@ pub fn open_window(
         if picker.is_some() {
             window.on_window_should_close(cx, |_, _| picker::cancel());
         }
-        let view = cx.new(|cx| Finder::new(start, query, picker, window, cx));
-        let focus = view.read(cx).files_focus_handle();
+        let view = cx.new(|cx| workspace::Workspace::new(start, query, picker, window, cx));
+        let focus = view.read(cx).active().read(cx).files_focus_handle();
         focus.focus(window, cx);
         view
     });
@@ -305,7 +316,8 @@ pub fn open_window(
             cx.default_global::<Windows>()
                 .0
                 .push((handle, view.downgrade()));
-            Some((handle, view))
+            let finder = view.read(cx).active().clone();
+            Some((handle, finder))
         }
         Err(err) => {
             eprintln!("fffinder: could not open a window: {err}");

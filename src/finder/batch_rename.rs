@@ -203,7 +203,7 @@ impl Finder {
     }
 
     fn apply_batch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.batch_ready() {
+        if !self.batch_ready() || self.wait_for_undo(window, cx) {
             return;
         }
         let Some(BatchRename {
@@ -215,11 +215,17 @@ impl Finder {
         };
         match rename::apply(&planned) {
             Ok(moved) => {
+                let pairs = planned
+                    .iter()
+                    .filter(|p| p.outcome == rename::Outcome::Rename)
+                    .map(|p| (p.from.clone(), p.to()))
+                    .collect();
+                crate::undo::record("Rename", crate::undo::Change::Moved(pairs), cx);
                 window.close_dialog(cx);
                 for (from, _) in planned.iter().map(|p| (&p.from, ())) {
                     self.previews.remove(from);
                 }
-                self.load_listing(moved.first().cloned(), true, cx);
+                self.load_listing(moved.clone(), true, cx);
                 if self.is_searching() {
                     self.run_search(false, cx);
                 }

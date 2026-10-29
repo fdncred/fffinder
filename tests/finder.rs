@@ -367,3 +367,133 @@ fn typing_jumps_to_matching_names(cx: &mut TestAppContext) {
         "the folder opens to the right"
     );
 }
+
+#[gpui_kit::test]
+fn pdfs_scroll_and_zoom(cx: &mut TestAppContext) {
+    use gpui_kit::{
+        InputEvent as _, Modifiers, PinchEvent, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
+        point, px,
+    };
+    let fx = Fixture::new("pdf-pages");
+    let pdf = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/fffinder-core/testdata/pages.pdf"
+    );
+    std::fs::copy(pdf, fx.path("Manual.pdf")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    let shown = |ui: &Ui| ui.read(|f| f.shown_pdf_page());
+    let zoom = |ui: &Ui| {
+        ui.read(|f| f.shown_pdf_zoom())
+            .expect("the pages are laid out")
+    };
+
+    ui.click("view-gallery");
+    ui.select("Manual.pdf");
+    assert_eq!(shown(&ui), Some((1, 2)), "a PDF opens at its first page");
+    let fit_width = zoom(&ui);
+
+    // The pages scroll in one column; the arrows and Page Up and Down go
+    // from page to page.
+    ui.click("pdf-next");
+    assert_eq!(shown(&ui), Some((2, 2)));
+    ui.click("pdf-next");
+    assert_eq!(shown(&ui), Some((2, 2)), "the last page has no next");
+    ui.press("pageup");
+    assert_eq!(shown(&ui), Some((1, 2)), "Page Up in the gallery");
+
+    // Zooming: the buttons, the keys, and the zoom menu.
+    ui.click("pdf-zoom-in");
+    let once = zoom(&ui);
+    assert!(once > fit_width, "Zoom In makes the pages bigger");
+    ui.press(&cmd("="));
+    assert!(zoom(&ui) > once, "Cmd+= zooms in the gallery");
+    ui.press(&cmd("0"));
+    assert_eq!(zoom(&ui), fit_width, "Cmd+0 fits the width again");
+    ui.click("pdf-zoom");
+    ui.click_menu_item("Actual Size");
+    assert_eq!(zoom(&ui), 100);
+    ui.click("pdf-zoom");
+    ui.click_menu_item("Fit Page");
+    let whole = zoom(&ui);
+    assert!(whole < fit_width, "a whole page is smaller than the width");
+
+    // Pinching and Cmd+scrolling zoom too.
+    let center = ui.snapshot("pdf-pages").bounds().center();
+    ui.window(|window, cx| {
+        let pinch = PinchEvent {
+            position: center,
+            delta: 0.5,
+            modifiers: Modifiers::default(),
+            phase: TouchPhase::Moved,
+        };
+        window.dispatch_event(pinch.to_platform_input(), cx);
+    });
+    ui.settle();
+    let pinched = zoom(&ui);
+    assert!(pinched > whole, "pinching out zooms in");
+    ui.window(|window, cx| {
+        let scroll = ScrollEvent {
+            position: center,
+            delta: ScrollDelta::Pixels(point(px(0.), px(-30.))),
+            modifiers: Modifiers::secondary_key(cx),
+            touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
+        };
+        window.dispatch_event(scroll.to_platform_input(), cx);
+    });
+    ui.settle();
+    assert!(zoom(&ui) < pinched, "Cmd+scrolling zooms");
+    ui.press(&cmd("0"));
+
+    // Quick Look shows the PDF in its window, scrolled on its own.
+    ui.click("pdf-next");
+    ui.press("space");
+    assert!(ui.read(|f| f.quick_look_is_open()));
+    ui.in_quick_look(|ui| {
+        assert_eq!(shown(ui), Some((1, 2)), "Quick Look starts at the top");
+        ui.press("pagedown");
+        assert_eq!(shown(ui), Some((2, 2)), "Page Down in Quick Look");
+        ui.press("pageup");
+        assert_eq!(shown(ui), Some((1, 2)), "Page Up in Quick Look");
+        let fitted = zoom(ui);
+        ui.press(&cmd("="));
+        assert!(zoom(ui) > fitted, "Cmd+= zooms in Quick Look");
+    });
+}
+
+#[gpui_kit::test]
+fn long_pdfs_keep_only_the_pages_near_view(cx: &mut TestAppContext) {
+    let fx = Fixture::new("pdf-long");
+    let pdf = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/fffinder-core/testdata/twelve.pdf"
+    );
+    std::fs::copy(pdf, fx.path("Long.pdf")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    let pages = |ui: &Ui| ui.read(|f| f.pdf_pages_for_test());
+
+    ui.click("view-gallery");
+    ui.select("Long.pdf");
+    ui.settle();
+    let (drawn, waiting) = pages(&ui);
+    assert_eq!(
+        waiting, 0,
+        "the pages in view are drawn once, not over and over"
+    );
+    assert!(
+        (1..=4).contains(&drawn),
+        "only the pages in view and their neighbors are kept: {drawn}"
+    );
+
+    for _ in 0..11 {
+        ui.press("pagedown");
+    }
+    assert_eq!(ui.read(|f| f.shown_pdf_page()), Some((12, 12)));
+    ui.settle();
+    let (drawn, waiting) = pages(&ui);
+    assert_eq!(waiting, 0);
+    assert!(
+        (1..=4).contains(&drawn),
+        "the first pages were let go: {drawn}"
+    );
+}

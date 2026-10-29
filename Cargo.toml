@@ -3,7 +3,7 @@ members = [".", "crates/fffinder-core"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Darren Schroeder"]
 repository = "https://github.com/fdncred/fffinder"
@@ -14,8 +14,9 @@ fff-search = "0.11.0"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs = "6"
+dirs = "7"
 log = "0.4"
+thiserror = "2"
 
 [package]
 name = "fffinder"
@@ -33,47 +34,72 @@ path = "src/lib.rs"
 name = "fffinder"
 path = "src/main.rs"
 
+# `cargo binstall` downloads the archives dist uploads to each GitHub release.
+# They hold the binary in a folder named after the archive, except on Windows,
+# where the zip has no folder.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "txz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
 [features]
-# `fffinder --term`: the window drawn inside a terminal with the kitty graphics
-# protocol (macOS and Linux). GPUI only builds its offscreen renderer with
-# gpui-kit's `test-support`, so this turns that on for the whole app.
+# `fffinder --term`: the window drawn inside a terminal, with the kitty graphics
+# protocol on macOS and Linux and with sixel images on Windows. GPUI only builds
+# its offscreen renderers with `test-support`, so this turns that on for the
+# whole app.
 term = [
     "gpui-kit/test-support",
     "dep:base64",
     "dep:crossterm",
     "dep:flate2",
     "dep:futures",
+    "dep:gpui-pre-wgpu",
     "dep:libc",
+    "dep:quantette",
     "dep:raw-window-handle",
 ]
 
 [dependencies]
 fffinder-core.workspace = true
-gpui-kit = "0.7.3"
+gpui-kit = "0.8.1"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 log.workspace = true
-trash = "5"
+thiserror.workspace = true
 # Hands control-socket requests to the UI thread.
 async-channel = "2"
+# Code previews: grammars and themes for syntax highlighting, in pure Rust.
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+# Font previews: the family name inside a font file.
+ttf-parser = "0.25"
 # Colors file names the way Nushell's `ls` does.
 lscolors = { version = "0.21", default-features = false }
-# `term` feature: frames as kitty graphics escape codes, and the types GPUI's
-# platform traits are written in.
-base64 = { version = "0.22", optional = true }
-flate2 = { version = "1", optional = true }
-futures = { version = "0.3", optional = true }
-raw-window-handle = { version = "0.6", optional = true }
-
-# `term` feature: terminal input and raw mode, ioctl, and shared memory.
-[target.'cfg(unix)'.dependencies]
+# PDF previews: the pixel buffer GPUI takes drawn pages in.
+image = { version = "0.25", default-features = false }
+# `term` feature: terminal input and raw mode, frames as kitty graphics escape
+# codes, putting the terminal back at exit, and the types GPUI's platform
+# traits are written in.
+base64 = { version = "0.23", optional = true }
 crossterm = { version = "0.29", optional = true, default-features = false, features = [
     "bracketed-paste",
     "events",
+    "windows",
 ] }
+flate2 = { version = "1", optional = true }
+futures = { version = "0.3", optional = true }
 libc = { version = "0.2", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
 
 # Finder's own colors and icons, read from AppKit at run time.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -81,14 +107,50 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 block2 = "0.6"
+# Thumbnails of PDFs, videos, and every other type macOS understands.
+objc2-quick-look-thumbnailing = "0.3"
+
+# Linux and Windows: the system trash. macOS uses NSFileManager directly, which
+# says where each item went.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+trash = "5"
+
+# Linux: a thumbnailer that hangs is stopped after a while.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wait-timeout = "0.2"
+
+# Windows: files on the clipboard, Open With, shortcuts, and thumbnails, as
+# Explorer has them. `png` saves the thumbnails.
+[target.'cfg(windows)'.dependencies]
+png = "0.18"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+# `term` feature: frames drawn offscreen with wgpu, since GPUI has no offscreen
+# renderer of its own on Windows, and turned into sixel images of at most 256
+# colors each for terminals without kitty graphics.
+gpui-pre-wgpu = { version = "0.3.10", optional = true, features = ["test-support"] }
+quantette = { version = "0.6", optional = true, default-features = false, features = ["threads"] }
 
 # Embeds the app icon in the Windows executable.
 [build-dependencies]
 embed-resource = "3"
 
 [dev-dependencies]
-gpui-kit = { version = "0.7.3", features = ["test-support"] }
+gpui-kit = { version = "0.8.1", features = ["test-support"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# The sixel encoder's tests run everywhere: they quantize as Windows does, and
+# decode what it writes with a decoder of someone else's.
+icy_sixel = "0.7"
+quantette = { version = "0.6", default-features = false, features = ["threads"] }
 
 [profile.dev]
 debug = "limited"

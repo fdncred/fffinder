@@ -264,6 +264,10 @@ mod tests {
             kind: fffinder_core::FileKind::Other,
             hidden: false,
             is_symlink: false,
+            created: None,
+            mode: None,
+            last_opened: None,
+            readonly: false,
         }
     }
 

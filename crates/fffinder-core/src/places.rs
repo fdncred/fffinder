@@ -19,6 +19,8 @@ pub enum PlaceIcon {
     Drive,
     External,
     Folder,
+    /// A server mounted over the network.
+    Network,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -88,7 +90,8 @@ pub fn favorite_for(path: &Path) -> Place {
         })
 }
 
-/// Home, cloud drive, and mounted volumes.
+/// Home, cloud drive, and mounted volumes. Reading a volume's name can wait
+/// on the drive (a CD spinning up), so call it off the UI thread.
 pub fn locations() -> Vec<Place> {
     let mut places = Vec::new();
     if let Some(home) = dirs::home_dir() {
@@ -179,27 +182,79 @@ fn volumes() -> Vec<Place> {
         place.ejectable = true;
         out.push(place);
     }
+    // Servers GIO mounted (Connect to Server, or a desktop's file manager).
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR")
+        && let Ok(read) = std::fs::read_dir(PathBuf::from(runtime).join("gvfs"))
+    {
+        for entry in read.flatten() {
+            let path = entry.path();
+            let mut place = Place::new(crate::entry::display_name(&path), path, PlaceIcon::Network);
+            place.ejectable = true;
+            out.push(place);
+        }
+    }
     out
 }
 
+/// Space left for new files on the volume holding `path`, in bytes.
+pub fn free_space(path: &Path) -> Option<u64> {
+    fs4::available_space(path).ok()
+}
+
+/// What kind of drive a Windows drive root is.
+#[cfg(windows)]
+fn drive_type(root: &Path) -> u32 {
+    let name = windows::core::HSTRING::from(root.as_os_str());
+    // SAFETY: GetDriveTypeW only reads the path.
+    unsafe { windows::Win32::Storage::FileSystem::GetDriveTypeW(&name) }
+}
+
+/// Whether `path` is on a mapped network drive (Windows).
+#[cfg(windows)]
+pub fn is_network_drive(path: &Path) -> bool {
+    let root: PathBuf = path.components().take(2).collect();
+    drive_type(&root) == windows::Win32::System::WindowsProgramming::DRIVE_REMOTE
+}
+
+/// Drive letters, named by their volume labels as Explorer names them, with
+/// removable, optical, and network drives ejectable. Network drives aren't
+/// asked for a label: one whose server is offline can take seconds to say.
 #[cfg(windows)]
 fn volumes() -> Vec<Place> {
+    use windows::Win32::Storage::FileSystem::GetVolumeInformationW;
+    use windows::Win32::System::WindowsProgramming::{
+        DRIVE_CDROM, DRIVE_NO_ROOT_DIR, DRIVE_REMOTE, DRIVE_REMOVABLE, DRIVE_UNKNOWN,
+    };
     let mut out = Vec::new();
     // A: and B: are skipped: probing an empty floppy drive can raise a system dialog.
     for letter in b'C'..=b'Z' {
         let root = PathBuf::from(format!("{}:\\", letter as char));
-        if root.exists() {
-            let icon = if letter == b'C' {
-                PlaceIcon::Drive
-            } else {
-                PlaceIcon::External
-            };
-            out.push(Place::new(
-                format!("Local Disk ({}:)", letter as char),
-                root,
-                icon,
-            ));
+        // The drive's type comes from the system's own table, without
+        // touching the drive, so it also says which letters are in use.
+        let kind = drive_type(&root);
+        if kind == DRIVE_NO_ROOT_DIR || kind == DRIVE_UNKNOWN {
+            continue;
         }
+        let (icon, ejectable, kind_name) = match kind {
+            DRIVE_REMOVABLE | DRIVE_CDROM => (PlaceIcon::External, true, "Removable Disk"),
+            DRIVE_REMOTE => (PlaceIcon::Network, true, "Network Drive"),
+            _ => (PlaceIcon::Drive, false, "Local Disk"),
+        };
+        let label = (kind != DRIVE_REMOTE)
+            .then(|| {
+                let name = windows::core::HSTRING::from(root.as_os_str());
+                let mut label = [0u16; 261];
+                // SAFETY: the label buffer holds the longest volume name and its NUL.
+                unsafe { GetVolumeInformationW(&name, Some(&mut label), None, None, None, None) }
+                    .ok()?;
+                let len = label.iter().position(|&c| c == 0).unwrap_or(0);
+                Some(String::from_utf16_lossy(&label[..len])).filter(|l| !l.trim().is_empty())
+            })
+            .flatten();
+        let shown = label.unwrap_or_else(|| kind_name.to_string());
+        let mut place = Place::new(format!("{shown} ({}:)", letter as char), root, icon);
+        place.ejectable = ejectable;
+        out.push(place);
     }
     out
 }

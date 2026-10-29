@@ -294,6 +294,16 @@ impl Finder {
         } else {
             format!("{}{plus} items", group_digits(count))
         };
+        // Finder's "12 items, 214 GB available", for a folder.
+        let text = match self.free_space.filter(|_| !self.is_searching()) {
+            Some(free) if self.current_folder().is_some() => {
+                format!(
+                    "{text}, {} available",
+                    fffinder_core::format::human_size(free)
+                )
+            }
+            _ => text,
+        };
         let timing = self
             .search_stats
             .as_ref()
@@ -320,7 +330,13 @@ impl Finder {
             .bg(bar)
             .text_size(ui(11.))
             .text_color(muted)
-            .child(text)
+            .child(
+                div()
+                    .id("status-text")
+                    .aria_label(SharedString::from(text.clone()))
+                    .child(text)
+                    .test_support(),
+            )
             .when_some(timing, |this, timing| {
                 this.child("·").child(
                     div()

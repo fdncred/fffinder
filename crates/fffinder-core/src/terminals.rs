@@ -585,7 +585,9 @@ pub fn detect_mac(app_dirs: &[PathBuf], extra: &[PathBuf], path: &[PathBuf]) -> 
 
 // Linux ------------------------------------------------------------------------
 
-fn desktop_dirs() -> Vec<PathBuf> {
+/// Where `.desktop` entries live: `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`
+/// `applications` folders, and snap's.
+pub fn desktop_dirs() -> Vec<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
@@ -610,7 +612,11 @@ pub struct DesktopEntry {
     pub name: String,
     /// `Exec` split into words, without field codes like `%U`.
     pub exec: Vec<String>,
+    /// `Exec` as written, field codes and all.
+    pub exec_line: String,
     pub try_exec: Option<String>,
+    /// The MIME types it opens.
+    pub mime_types: Vec<String>,
     pub terminal_emulator: bool,
     /// `NoDisplay` or `Hidden`.
     pub hidden: bool,
@@ -621,7 +627,9 @@ pub fn parse_desktop_entry(text: &str) -> Option<DesktopEntry> {
     let mut in_entry = false;
     let mut name = None;
     let mut exec = None;
+    let mut exec_line = String::new();
     let mut try_exec = None;
+    let mut mime_types = Vec::new();
     let mut is_app = false;
     let mut terminal_emulator = false;
     let mut hidden = false;
@@ -639,7 +647,17 @@ pub fn parse_desktop_entry(text: &str) -> Option<DesktopEntry> {
         let value = value.trim();
         match key.trim() {
             "Name" => name = Some(value.to_string()),
-            "Exec" => exec = Some(split_exec(value)),
+            "Exec" => {
+                exec = Some(split_exec(value));
+                exec_line = value.to_string();
+            }
+            "MimeType" => {
+                mime_types = value
+                    .split(';')
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            }
             "TryExec" => try_exec = Some(value.to_string()),
             "Type" => is_app = value == "Application",
             "Categories" => terminal_emulator = value.split(';').any(|c| c == "TerminalEmulator"),
@@ -651,7 +669,9 @@ pub fn parse_desktop_entry(text: &str) -> Option<DesktopEntry> {
     is_app.then_some(DesktopEntry {
         name: name?,
         exec,
+        exec_line,
         try_exec,
+        mime_types,
         terminal_emulator,
         hidden,
     })
@@ -660,6 +680,20 @@ pub fn parse_desktop_entry(text: &str) -> Option<DesktopEntry> {
 /// Split an `Exec` value into words: double quotes group, a backslash
 /// escapes, and field codes (`%f`, `%U`, …) are dropped.
 fn split_exec(exec: &str) -> Vec<String> {
+    exec_words(exec)
+        .into_iter()
+        .filter(|w| !is_field_code(w))
+        .map(|w| w.replace("%%", "%"))
+        .collect()
+}
+
+/// `%f`, `%U`, and the other two-letter field codes of an `Exec` line.
+pub fn is_field_code(word: &str) -> bool {
+    word.len() == 2 && word.starts_with('%') && word != "%%"
+}
+
+/// Split an `Exec` value into words, keeping field codes and `%%`.
+pub fn exec_words(exec: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quoted = false;
@@ -690,10 +724,6 @@ fn split_exec(exec: &str) -> Vec<String> {
         words.push(word);
     }
     words
-        .into_iter()
-        .filter(|w| !(w.len() == 2 && w.starts_with('%')))
-        .map(|w| w.replace("%%", "%"))
-        .collect()
 }
 
 fn resolve_program(word: &str, path: &[PathBuf]) -> Option<PathBuf> {

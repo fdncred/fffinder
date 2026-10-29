@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 use fffinder_core::FileEntry;
 
+#[cfg(target_os = "macos")]
+use crate::system::SystemError;
+
 /// Colors as 0xRRGGBBAA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemColors {
@@ -173,6 +176,133 @@ mod imp {
         })
     }
 
+    pub fn default_app(path: &Path) -> Option<PathBuf> {
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let app = NSWorkspace::sharedWorkspace().URLForApplicationToOpenURL(&url)?;
+            app.path().map(|p| PathBuf::from(p.to_string()))
+        })
+    }
+
+    /// A Finder alias is a bookmark written to a file.
+    pub fn make_alias(target: &Path, alias: &Path) -> Result<(), SystemError> {
+        use objc2_foundation::NSURLBookmarkCreationOptions;
+        let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+        autoreleasepool(|_| {
+            let data = url(target)
+                .bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
+                    NSURLBookmarkCreationOptions::SuitableForBookmarkFile,
+                    None,
+                    None,
+                )
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))?;
+            NSURL::writeBookmarkData_toURL_options_error(&data, &url(alias), 0)
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))
+        })
+    }
+
+    /// QuickLook writes the thumbnail itself and calls back when done.
+    pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), SystemError> {
+        use objc2_foundation::NSError;
+        use objc2_quick_look_thumbnailing::{
+            QLThumbnailGenerationRequest, QLThumbnailGenerationRequestRepresentationTypes,
+            QLThumbnailGenerator,
+        };
+        let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        autoreleasepool(|_| {
+            let points = f64::from(px) / 2.;
+            let done = block2::RcBlock::new(move |error: *mut NSError| {
+                // SAFETY: QuickLook passes a valid error or null.
+                let message =
+                    unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+                let _ = tx.send(message);
+            });
+            // SAFETY: the request and URLs live until the call returns, and
+            // QuickLook keeps what it needs; the block is 'static.
+            unsafe {
+                let request =
+                    QLThumbnailGenerationRequest::initWithFileAtURL_size_scale_representationTypes(
+                        QLThumbnailGenerationRequest::alloc(),
+                        &url(file),
+                        NSSize::new(points, points),
+                        2.,
+                        QLThumbnailGenerationRequestRepresentationTypes::Thumbnail,
+                    );
+                // Icon-sized thumbnails get Finder's decorations (a border,
+                // a page curl), so a white page still shows on white.
+                request.setIconMode(px <= 512);
+                // The replacement takes a UTType, which needs another binding crate.
+                #[allow(deprecated)]
+                QLThumbnailGenerator::sharedGenerator()
+                    .saveBestRepresentationForRequest_toFileAtURL_withContentType_completionHandler(
+                        &request,
+                        &url(out),
+                        &NSString::from_str("public.png"),
+                        &done,
+                    );
+            }
+        });
+        match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(None) => Ok(()),
+            Ok(Some(message)) => Err(SystemError::Refused(message)),
+            Err(_) => Err(SystemError::NoAnswer("QuickLook")),
+        }
+    }
+
+    pub fn trash_item(path: &Path) -> Result<PathBuf, SystemError> {
+        use objc2_foundation::NSFileManager;
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let mut landed = None;
+            NSFileManager::defaultManager()
+                .trashItemAtURL_resultingItemURL_error(&url, Some(&mut landed))
+                .map_err(|e| SystemError::Refused(e.localizedDescription().to_string()))?;
+            landed
+                .and_then(|url| url.path())
+                .map(|p| PathBuf::from(p.to_string()))
+                .ok_or(SystemError::NoAnswer("The Trash"))
+        })
+    }
+
+    pub fn apps_for(path: &Path) -> Vec<PathBuf> {
+        autoreleasepool(|_| {
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            NSWorkspace::sharedWorkspace()
+                .URLsForApplicationsToOpenURL(&url)
+                .iter()
+                .filter_map(|app| app.path().map(|p| PathBuf::from(p.to_string())))
+                .collect()
+        })
+    }
+
+    /// Launch Services answers on another thread, after the user confirms
+    /// the change, so this waits for it.
+    pub fn set_default_app(app: &Path, file: &Path) -> Result<(), SystemError> {
+        use objc2_foundation::NSError;
+        let (tx, rx) = std::sync::mpsc::channel();
+        autoreleasepool(|_| {
+            let url = |p: &Path| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+            let done = block2::RcBlock::new(move |error: *mut NSError| {
+                // SAFETY: Launch Services passes a valid error or null.
+                let message =
+                    unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+                let _ = tx.send(message);
+            });
+            NSWorkspace::sharedWorkspace()
+                .setDefaultApplicationAtURL_toOpenContentTypeOfFileAtURL_completionHandler(
+                    &url(app),
+                    &url(file),
+                    Some(&done),
+                );
+        });
+        match rx.recv_timeout(Duration::from_secs(300)) {
+            Ok(None) => Ok(()),
+            Ok(Some(message)) => Err(SystemError::Refused(message)),
+            Err(_) => Err(SystemError::NoAnswer("macOS")),
+        }
+    }
+
     fn rgba(color: &NSColor) -> Option<u32> {
         let c = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
         let byte = |v: f64| (v.clamp(0., 1.) * 255.).round() as u32;
@@ -278,6 +408,42 @@ mod imp {
         png(&image, px, None)
     }
 
+    /// One pasteboard item per file URL, with `text` on the first, so
+    /// Finder pastes the files and a terminal pastes the paths.
+    pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
+        use objc2::runtime::ProtocolObject;
+        use objc2_app_kit::{
+            NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeString,
+            NSPasteboardWriting,
+        };
+        use objc2_foundation::NSArray;
+        autoreleasepool(|_| {
+            let items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = paths
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, path)| {
+                    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
+                        .absoluteString()?;
+                    let item = NSPasteboardItem::new();
+                    // SAFETY: the type constants are AppKit's own statics.
+                    unsafe {
+                        item.setString_forType(&url, NSPasteboardTypeFileURL);
+                        if ix == 0 {
+                            item.setString_forType(
+                                &NSString::from_str(text),
+                                NSPasteboardTypeString,
+                            );
+                        }
+                    }
+                    Some(ProtocolObject::from_retained(item))
+                })
+                .collect();
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
+            pasteboard.writeObjects(&NSArray::from_retained_slice(&items))
+        })
+    }
+
     pub fn template_png(file: &Path, px: usize, tint: u32) -> Option<Vec<u8>> {
         let image = NSImage::initWithContentsOfFile(
             NSImage::alloc(),
@@ -312,6 +478,69 @@ pub fn system_colors() -> Option<SystemColors> {
     {
         None
     }
+}
+
+/// Put `paths` on the general pasteboard as files, and `text` as a string.
+/// Returns whether that worked.
+#[cfg(target_os = "macos")]
+pub fn write_file_clipboard(paths: &[PathBuf], text: &str) -> bool {
+    imp::write_file_clipboard(paths, text)
+}
+
+/// The app bundle Launch Services opens the file at `path` with.
+#[cfg(target_os = "macos")]
+pub fn default_app(path: &Path) -> Option<PathBuf> {
+    imp::default_app(path)
+}
+
+/// Make a Finder alias to `target` at `alias`.
+///
+/// # Errors
+///
+/// macOS's reason when the bookmark can't be made or written.
+#[cfg(target_os = "macos")]
+pub fn make_alias(target: &Path, alias: &Path) -> Result<(), SystemError> {
+    imp::make_alias(target, alias)
+}
+
+/// Have QuickLook write a `px`-wide PNG thumbnail of `file` to `out`.
+///
+/// # Errors
+///
+/// QuickLook's reason when it can't draw the file, or
+/// [`SystemError::NoAnswer`] when it takes longer than 30 seconds.
+#[cfg(target_os = "macos")]
+pub fn save_thumbnail(file: &Path, px: u32, out: &Path) -> Result<(), SystemError> {
+    imp::save_thumbnail(file, px, out)
+}
+
+/// Move the item at `path` to its volume's Trash, in this process, so
+/// macOS doesn't ask to let fffinder control Finder. Returns where the item
+/// is now.
+///
+/// # Errors
+///
+/// macOS's reason when it can't, as when the volume has no Trash.
+#[cfg(target_os = "macos")]
+pub fn trash_item(path: &Path) -> Result<PathBuf, SystemError> {
+    imp::trash_item(path)
+}
+
+/// Every app Launch Services says can open the file at `path`.
+#[cfg(target_os = "macos")]
+pub fn apps_for(path: &Path) -> Vec<PathBuf> {
+    imp::apps_for(path)
+}
+
+/// Make `app` the default for files of `file`'s type.
+///
+/// # Errors
+///
+/// Launch Services' reason, as when the user declines the change, or
+/// [`SystemError::NoAnswer`] after five minutes without one.
+#[cfg(target_os = "macos")]
+pub fn set_default_app(app: &Path, file: &Path) -> Result<(), SystemError> {
+    imp::set_default_app(app, file)
 }
 
 /// Whether Launch Services knows an app that opens the file at `path`.
@@ -392,6 +621,10 @@ mod tests {
             kind: fffinder_core::FileKind::Other,
             hidden: false,
             is_symlink: false,
+            created: None,
+            mode: None,
+            last_opened: None,
+            readonly: false,
         }
     }
 

@@ -52,9 +52,17 @@ impl Fixture {
     }
 }
 
+/// Where a window opened on `dir` puts trashed items, instead of the real Trash.
+pub fn trash_dir(dir: &Path) -> PathBuf {
+    let mut name = dir.as_os_str().to_os_string();
+    name.push("-trash");
+    PathBuf::from(name)
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_dir_all(trash_dir(&self.dir));
     }
 }
 
@@ -124,7 +132,10 @@ impl Drop for StepGuard {
 pub struct Ui<'a> {
     pub cx: &'a mut TestAppContext,
     pub handle: AnyWindowHandle,
+    /// The browser the test drives: the window's first tab, with tabs.
     pub view: Entity<Finder>,
+    /// The window's tabs, when opened with them.
+    pub workspace: Option<Entity<fffinder::workspace::Workspace>>,
     pub dir: PathBuf,
 }
 
@@ -137,6 +148,8 @@ pub struct Open {
     pub terminals: Vec<Terminal>,
     /// Frames per second in the status bar, as with `--fps`.
     pub fps: bool,
+    /// Open the window with tabs and split view, as the app does.
+    pub workspace: bool,
 }
 
 impl<'a> Ui<'a> {
@@ -166,6 +179,9 @@ impl<'a> Ui<'a> {
                 Appearance::Light,
             );
             cx.set_global(Recorder::default());
+            cx.set_global(fffinder::trash_bin::TrashOverride(std::sync::Arc::new(
+                fffinder::trash_bin::FolderBin::new(trash_dir(dir)),
+            )));
             if options.fps {
                 cx.set_global(fffinder::finder::ShowFps);
             }
@@ -175,16 +191,34 @@ impl<'a> Ui<'a> {
         });
         let start = Location::Folder(dir.to_path_buf());
         let picker = options.picker;
-        let (handle, view) = cx
-            .update(|cx| {
-                gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
-                    let view = cx.new(|cx| Finder::new(start, None, picker, window, cx));
-                    let focus = view.read(cx).files_focus_handle();
-                    focus.focus(window, cx);
-                    view
+        let (handle, view, workspace) = if options.workspace {
+            let (handle, workspace) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                        let view = cx.new(|cx| {
+                            fffinder::workspace::Workspace::new(start, None, picker, window, cx)
+                        });
+                        let focus = view.read(cx).active().read(cx).files_focus_handle();
+                        focus.focus(window, cx);
+                        view
+                    })
                 })
-            })
-            .unwrap();
+                .unwrap();
+            let view = workspace.read_with(cx, |w, _| w.active().clone());
+            (handle, view, Some(workspace))
+        } else {
+            let (handle, view) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(WindowOptions::default(), cx, move |window, cx| {
+                        let view = cx.new(|cx| Finder::new(start, None, picker, window, cx));
+                        let focus = view.read(cx).files_focus_handle();
+                        focus.focus(window, cx);
+                        view
+                    })
+                })
+                .unwrap();
+            (handle, view, None)
+        };
         let root = dir.to_path_buf();
         view.update(cx, |f, cx| {
             f.set_persist(false);
@@ -195,6 +229,7 @@ impl<'a> Ui<'a> {
             cx,
             handle,
             view,
+            workspace,
             dir: dir.to_path_buf(),
         };
         ui.settle();
@@ -263,6 +298,30 @@ impl<'a> Ui<'a> {
         self.click_in("dialog", "close");
     }
 
+    /// Drive the Quick Look window instead of the browser's: clicks, keys,
+    /// and lookups inside `f` go to it.
+    pub fn in_quick_look<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let quick_look = self
+            .read(|f| f.quick_look_window())
+            .expect("Quick Look is open");
+        let browser = std::mem::replace(&mut self.handle, quick_look);
+        let result = f(self);
+        self.handle = browser;
+        self.settle();
+        result
+    }
+
+    /// Close the Quick Look window, as its close button does.
+    pub fn close_quick_look(&mut self) {
+        let quick_look = self
+            .read(|f| f.quick_look_window())
+            .expect("Quick Look is open");
+        self.cx
+            .update_window(quick_look, |_, window, _| window.remove_window())
+            .expect("Quick Look's window is open");
+        self.settle();
+    }
+
     /// Click without letting spawned work run afterwards, so a test can
     /// replace that work before it starts.
     pub fn click_without_settling(&mut self, id: impl Into<ElementId>) {
@@ -298,6 +357,63 @@ impl<'a> Ui<'a> {
         let origin = self.snapshot(id.clone()).bounds().origin;
         self.step(format!("right-click {id:?} at {offset:?}"), |window, cx| {
             click_point(window, origin + offset, MouseButton::Right, cx)
+        });
+    }
+
+    /// Drag `from` onto `to` with the mouse, holding `modifiers`.
+    pub fn drag(
+        &mut self,
+        from: impl Into<ElementId>,
+        to: impl Into<ElementId>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
+        let (from, to) = (from.into(), to.into());
+        let start = self.snapshot(from.clone()).bounds().center();
+        let end = self.snapshot(to.clone()).bounds().center();
+        self.step(format!("drag {from:?} to {to:?}"), |window, cx| {
+            let pressed = Some(MouseButton::Left);
+            let moves = [
+                (start, None),
+                (start + point(px(8.), px(8.)), pressed),
+                (end, pressed),
+            ];
+            for (ix, (position, pressed_button)) in moves.into_iter().enumerate() {
+                window.render_frame(cx);
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position,
+                        pressed_button,
+                        modifiers,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                if ix == 0 {
+                    window.dispatch_event(
+                        MouseDownEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers,
+                            click_count: 1,
+                            first_mouse: false,
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                }
+            }
+            window.render_frame(cx);
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: end,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
         });
     }
 

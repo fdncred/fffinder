@@ -13,6 +13,33 @@ serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
 log.workspace = true
+thiserror.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Reads app bundles' Info.plist to find terminals; pure Rust, so it builds everywhere.
 plist = "1"
+# Directory walks for folder sizes, in parallel.
+rayon = "1"
+# Compress and Extract: zip, and gzipped tar archives.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs", "chrono"] }
+tar = "0.4"
+flate2 = "1"
+# Free space on a volume, for the status bar.
+fs4 = "1"
+# PDF pages for previews, drawn in pure Rust on every system.
+hayro = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+# Owner and group names for Get Info.
+uzers = "0.12"
+# Extended attributes: where a download came from, and macOS's last opened date.
+xattr = "1"
+
+# Get Info's owner and size on disk, and drive kinds and names.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming",
+] }

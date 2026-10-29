@@ -1,26 +1,32 @@
 //! `fffinder --term`: the same window, drawn inside the terminal.
 //!
 //! GPUI lays out and paints the window as usual, the frame is rendered
-//! offscreen (Metal on macOS, wgpu on Linux), and the pixels go to the
-//! terminal through the kitty graphics protocol. Keys and the mouse come back
-//! as escape codes and reach GPUI as the input events a native window sends.
-//! Everything else, such as the clipboard and opening files, is the regular
-//! platform running without windows.
+//! offscreen (Metal on macOS, wgpu on Linux and Windows), and the pixels go
+//! to the terminal through the kitty graphics protocol, or on Windows as
+//! sixel images when the terminal has no kitty graphics. Keys and the mouse come back as escape
+//! codes, or as console input records on Windows, and reach GPUI as the input
+//! events a native window sends. Everything else, such as the clipboard and
+//! opening files, is the regular platform running without windows.
 //!
-//! Needs the `term` cargo feature, macOS or Linux, and a terminal with kitty
-//! graphics.
+//! Needs the `term` cargo feature, and a terminal with kitty graphics, or on
+//! Windows one with sixel images, such as Windows Terminal 1.22 or later.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-#[cfg(all(feature = "term", unix))]
+#[cfg(feature = "term")]
+mod frames;
+#[cfg(feature = "term")]
 mod input;
-#[cfg(all(feature = "term", unix))]
+#[cfg(feature = "term")]
 mod kitty;
-#[cfg(all(feature = "term", unix))]
+#[cfg(feature = "term")]
 mod platform;
-#[cfg(all(feature = "term", unix))]
+// The encoder's tests run everywhere, though only Windows sends sixel.
+#[cfg(all(feature = "term", any(windows, test)))]
+mod sixel;
+#[cfg(feature = "term")]
 mod tty;
-#[cfg(all(feature = "term", unix))]
+#[cfg(feature = "term")]
 mod window;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -45,9 +51,9 @@ pub fn frames_shown() -> u64 {
 /// # Errors
 ///
 /// Fails, leaving the terminal alone, when there is no terminal, it can't
-/// show kitty graphics or report its size in pixels, or this build lacks the
-/// `term` feature.
-#[cfg(all(feature = "term", unix))]
+/// show the images this platform sends or report its size in pixels, or this
+/// build lacks the `term` feature.
+#[cfg(feature = "term")]
 pub fn application() -> anyhow::Result<gpui_kit::Application> {
     let session = tty::Session::start()?;
     ACTIVE.store(true, Ordering::Relaxed);
@@ -61,17 +67,16 @@ pub fn application() -> anyhow::Result<gpui_kit::Application> {
 /// # Errors
 ///
 /// Always.
-#[cfg(not(all(feature = "term", unix)))]
+#[cfg(not(feature = "term"))]
 pub fn application() -> anyhow::Result<gpui_kit::Application> {
     anyhow::bail!(
-        "this build has no terminal mode; build it with `cargo build --release --features term` \
-         on macOS or Linux"
+        "this build has no terminal mode; build it with `cargo build --release --features term`"
     )
 }
 
 /// Put the terminal back the way it was, before printing to it. Does nothing
 /// when the terminal wasn't taken over, or was already put back.
 pub fn restore() {
-    #[cfg(all(feature = "term", unix))]
+    #[cfg(feature = "term")]
     tty::restore();
 }

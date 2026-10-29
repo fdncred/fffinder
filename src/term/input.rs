@@ -8,7 +8,7 @@ use crossterm::event::{
 use gpui_kit::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
-    ScrollWheelEvent, TouchPhase, point, px,
+    ScrollEvent, ScrollSource, TouchPhase, point, px,
 };
 use std::time::{Duration, Instant};
 
@@ -162,11 +162,12 @@ impl Translator {
         };
         let step = mapping.wheel_step();
         let wheel = |x: Pixels, y: Pixels| {
-            PlatformInput::ScrollWheel(ScrollWheelEvent {
+            PlatformInput::Scroll(ScrollEvent {
                 position,
                 delta: ScrollDelta::Pixels(point(x, y)),
                 modifiers,
                 touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
             })
         };
         match event.kind {
@@ -332,9 +333,10 @@ mod tests {
         }
     }
 
+    /// Spelled as on macOS, where the platform modifier is `cmd`.
     fn unparse(code: KeyCode, modifiers: KeyModifiers) -> String {
         keystroke(code, modifiers)
-            .map(|k| k.unparse())
+            .map(|k| k.unparse(gpui_kit::OperatingSystem::Mac))
             .unwrap_or_default()
     }
 
@@ -345,13 +347,9 @@ mod tests {
         assert_eq!(unparse(KeyCode::Char('A'), none), "shift-a");
         assert_eq!(unparse(KeyCode::Char('>'), none), ">");
         assert_eq!(unparse(KeyCode::Char('c'), KeyModifiers::CONTROL), "ctrl-c");
-        // gpui spells the platform modifier per OS: cmd, super, or win.
-        let platform_shift_q = Keystroke::parse("cmd-shift-q")
-            .expect("a valid keystroke")
-            .unparse();
         assert_eq!(
             unparse(KeyCode::Char('Q'), KeyModifiers::SUPER),
-            platform_shift_q
+            "cmd-shift-q"
         );
         assert_eq!(unparse(KeyCode::Char(' '), none), "space");
         assert_eq!(unparse(KeyCode::BackTab, none), "shift-tab");
@@ -503,7 +501,7 @@ mod tests {
             row: 0,
             modifiers: KeyModifiers::NONE,
         };
-        let PlatformInput::ScrollWheel(ScrollWheelEvent {
+        let PlatformInput::Scroll(ScrollEvent {
             delta: ScrollDelta::Pixels(delta),
             ..
         }) = translator.mouse(event, &mapping, Instant::now())

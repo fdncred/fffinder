@@ -72,6 +72,7 @@ fn main() {
                                 Location::Folder(p) => p.display().to_string(),
                                 Location::Recents => "Recents".into(),
                                 Location::Results { title, .. } => title.clone(),
+                                Location::Trash => "Trash".into(),
                             };
                             format!(
                                 "view={:?} hidden={} dialog={} files-focused={} rows={} selected={} in {place}",

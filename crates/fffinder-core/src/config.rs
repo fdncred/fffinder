@@ -2,8 +2,9 @@
 //! platform config directory (`~/Library/Application Support/fffinder` on
 //! macOS, `~/.config/fffinder` on Linux, `%APPDATA%\fffinder` on Windows).
 
+use crate::grouping::GroupKey;
 use crate::kind::KindFilter;
-use crate::listing::SortOrder;
+use crate::listing::{SortKey, SortOrder};
 use crate::terminals::{CUSTOM, Platform, TerminalSetting};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,6 +65,85 @@ impl ViewMode {
     }
 }
 
+/// A column the list view can show after Name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListColumn {
+    Modified,
+    Created,
+    LastOpened,
+    Size,
+    Kind,
+    Permissions,
+    Git,
+}
+
+impl ListColumn {
+    pub const ALL: [ListColumn; 7] = [
+        ListColumn::Modified,
+        ListColumn::Created,
+        ListColumn::LastOpened,
+        ListColumn::Size,
+        ListColumn::Kind,
+        ListColumn::Permissions,
+        ListColumn::Git,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ListColumn::Modified => "Date Modified",
+            ListColumn::Created => "Date Created",
+            ListColumn::LastOpened => "Date Last Opened",
+            ListColumn::Size => "Size",
+            ListColumn::Kind => "Kind",
+            ListColumn::Permissions => "Permissions",
+            ListColumn::Git => "Git",
+        }
+    }
+
+    /// Width in points before the user drags it.
+    pub fn default_width(self) -> f32 {
+        match self {
+            ListColumn::Modified | ListColumn::Created | ListColumn::LastOpened => 170.,
+            ListColumn::Size | ListColumn::Git => 90.,
+            ListColumn::Kind => 160.,
+            ListColumn::Permissions => 100.,
+        }
+    }
+
+    /// What clicking the column's header sorts by, if anything.
+    pub fn sort_key(self) -> Option<SortKey> {
+        match self {
+            ListColumn::Modified => Some(SortKey::Modified),
+            ListColumn::Created => Some(SortKey::Created),
+            ListColumn::LastOpened => Some(SortKey::LastOpened),
+            ListColumn::Size => Some(SortKey::Size),
+            ListColumn::Kind => Some(SortKey::Kind),
+            ListColumn::Permissions | ListColumn::Git => None,
+        }
+    }
+}
+
+/// One of the list view's columns, in order, and how wide it is.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ColumnSetting {
+    pub column: ListColumn,
+    pub width: f32,
+}
+
+/// The narrowest a list column can be dragged.
+pub const MIN_COLUMN_WIDTH: f32 = 50.;
+
+pub fn default_list_columns() -> Vec<ColumnSetting> {
+    [ListColumn::Modified, ListColumn::Size, ListColumn::Kind]
+        .into_iter()
+        .map(|column| ColumnSetting {
+            column,
+            width: column.default_width(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Appearance {
@@ -83,6 +163,17 @@ pub struct Config {
     pub show_hidden: bool,
     pub view_mode: ViewMode,
     pub sort: SortOrder,
+    /// Folders before files, whatever the sort ("Keep Folders on Top").
+    pub folders_first: bool,
+    /// Show the list and icon views in groups ("Use Groups"), by `group_by`.
+    pub use_groups: bool,
+    pub group_by: GroupKey,
+    /// The list view's columns after Name, in order, with their widths.
+    pub list_columns: Vec<ColumnSetting>,
+    /// Show folder sizes, added up from the index ("Calculate All Sizes").
+    pub folder_sizes: bool,
+    /// Servers connected to with Connect to Server, newest first.
+    pub recent_servers: Vec<String>,
     pub icon_size: f32,
     pub show_sidebar: bool,
     pub appearance: Appearance,
@@ -126,6 +217,12 @@ impl Default for Config {
             show_hidden: false,
             view_mode: ViewMode::Icons,
             sort: SortOrder::default(),
+            folders_first: false,
+            use_groups: false,
+            group_by: GroupKey::default(),
+            list_columns: default_list_columns(),
+            folder_sizes: true,
+            recent_servers: Vec::new(),
             icon_size: 64.0,
             show_sidebar: true,
             appearance: Appearance::System,

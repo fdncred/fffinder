@@ -6,6 +6,7 @@ use crate::theme::ui;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IconName;
+use gpui_kit::component::input;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -103,6 +104,9 @@ pub fn item_menu(
     let Some(first) = entries.first().cloned() else {
         return menu;
     };
+    if finder.in_trash() {
+        return trash_item_menu(finder, &entries, menu);
+    }
     let single = entries.len() == 1;
     let searching = finder.is_searching() || finder.current_folder().is_none();
     let folder_for_nu: Option<PathBuf> = if first.is_dir {
@@ -116,6 +120,7 @@ pub fn item_menu(
     let enclosing = first.path.clone();
     let nu_dir = folder_for_nu.clone();
     let favorite = first.path.clone();
+    let opens_files = !picker && entries.iter().all(|e| !e.is_dir);
 
     let menu = menu
         .when(picker, |menu| {
@@ -129,11 +134,22 @@ pub fn item_menu(
             PopupMenuItem::new("Open")
                 .icon(IconName::FolderOpen)
                 .action(Box::new(OpenSelected)),
-        )
+        );
+    let menu = if opens_files {
+        super::open_with::open_with_submenus(view, &entries, menu, window, cx)
+    } else {
+        menu
+    };
+    let menu = menu
         .item(
             PopupMenuItem::new("Quick Look")
                 .icon(IconName::Eye)
                 .action(Box::new(QuickLook)),
+        )
+        .item(
+            PopupMenuItem::new("Get Info")
+                .icon(IconName::Info)
+                .action(Box::new(GetInfo)),
         )
         .when(entries.iter().any(|e| !e.is_dir), |menu| {
             menu.item(
@@ -161,8 +177,17 @@ pub fn item_menu(
         )
         .separator()
         .item(
+            PopupMenuItem::new(if single {
+                format!("Copy “{}”", first.name)
+            } else {
+                format!("Copy {} Items", entries.len())
+            })
+            .icon(IconName::Copy)
+            .action(Box::new(input::Copy)),
+        )
+        .item(
             PopupMenuItem::new(if single { "Copy Path" } else { "Copy Paths" })
-                .icon(IconName::Copy)
+                .icon(Lucide::Link)
                 .action(Box::new(CopyPath)),
         )
         .item(
@@ -205,6 +230,42 @@ pub fn item_menu(
             .icon(Lucide::Pencil)
             .action(Box::new(Rename)),
         )
+        .item(
+            PopupMenuItem::new("Duplicate")
+                .icon(Lucide::CopyPlus)
+                .action(Box::new(Duplicate)),
+        )
+        .when_some(alias_label(), |menu, label| {
+            menu.item(
+                PopupMenuItem::new(label)
+                    .icon(Lucide::Link2)
+                    .action(Box::new(MakeAlias)),
+            )
+        })
+        .item(
+            PopupMenuItem::new("Make Symbolic Link")
+                .icon(Lucide::FileSymlink)
+                .action(Box::new(MakeSymlink)),
+        )
+        .item(
+            PopupMenuItem::new(if single {
+                format!("Compress “{}”", first.name)
+            } else {
+                format!("Compress {} Items", entries.len())
+            })
+            .icon(Lucide::FileArchive)
+            .action(Box::new(Compress)),
+        )
+        .when(
+            entries.iter().any(|e| super::make::is_archive(&e.path)),
+            |menu| {
+                menu.item(
+                    PopupMenuItem::new("Extract")
+                        .icon(Lucide::PackageOpen)
+                        .action(Box::new(Extract)),
+                )
+            },
+        )
         .when(single && first.is_navigable() && !is_favorite, |menu| {
             menu.item(
                 PopupMenuItem::new("Add to Sidebar")
@@ -226,6 +287,43 @@ pub fn item_menu(
         .min_w(ui(230.))
 }
 
+/// Right-click on items in the Trash.
+fn trash_item_menu(
+    finder: &Finder,
+    entries: &[fffinder_core::FileEntry],
+    menu: PopupMenu,
+) -> PopupMenu {
+    let single = entries.len() == 1;
+    menu.item(
+        PopupMenuItem::new("Put Back")
+            .icon(Lucide::Undo2)
+            .disabled(!super::trash::can_put_back(&finder.trashed, entries))
+            .action(Box::new(PutBack)),
+    )
+    .item(
+        PopupMenuItem::new("Quick Look")
+            .icon(IconName::Eye)
+            .action(Box::new(QuickLook)),
+    )
+    .item(
+        PopupMenuItem::new(reveal_label())
+            .icon(IconName::ExternalLink)
+            .action(Box::new(RevealInFileManager)),
+    )
+    .item(
+        PopupMenuItem::new(if single { "Copy Path" } else { "Copy Paths" })
+            .icon(Lucide::Link)
+            .action(Box::new(CopyPath)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Delete Immediately…")
+            .icon(Lucide::Trash)
+            .action(Box::new(DeleteImmediately)),
+    )
+    .min_w(ui(220.))
+}
+
 /// Right-click on empty space in a view.
 pub fn background_menu(
     view: &Entity<Finder>,
@@ -240,17 +338,53 @@ pub fn background_menu(
         return menu;
     }
     let finder = view.read(cx);
+    if finder.in_trash() {
+        return menu
+            .item(
+                PopupMenuItem::new("Empty Trash…")
+                    .icon(Lucide::Trash)
+                    .disabled(finder.rows_for_test().is_empty())
+                    .action(Box::new(EmptyTrash)),
+            )
+            .min_w(ui(220.));
+    }
     let folder = finder.current_folder().map(Path::to_path_buf);
     let hidden = finder.config.show_hidden;
     let is_favorite = folder
         .as_ref()
         .is_some_and(|f| finder.config.favorites.contains(f));
     let nu_folder = folder.clone();
+    // Pasting goes into the folder shown, so not into search results.
+    let pasteable = match finder.is_searching() || folder.is_none() {
+        true => 0,
+        false => crate::system::clipboard_files(cx).len(),
+    };
+    let items = |n: usize| match n {
+        1 => "Item".to_string(),
+        n => format!("{n} Items"),
+    };
     menu.when(folder.is_some(), |menu| {
         menu.item(
             PopupMenuItem::new("New Folder")
                 .icon(Lucide::FolderPlus)
                 .action(Box::new(NewFolder)),
+        )
+        .item(
+            PopupMenuItem::new("New File…")
+                .icon(Lucide::FilePlus)
+                .action(Box::new(NewFile)),
+        )
+    })
+    .when(pasteable > 0, |menu| {
+        menu.item(
+            PopupMenuItem::new(format!("Paste {}", items(pasteable)))
+                .icon(Lucide::ClipboardPaste)
+                .action(Box::new(input::Paste)),
+        )
+        .item(
+            PopupMenuItem::new(format!("Move {} Here", items(pasteable)))
+                .icon(Lucide::FolderInput)
+                .action(Box::new(MoveItemsHere)),
         )
     })
     .when_some(nu_folder, |menu, dir| {
@@ -270,6 +404,13 @@ pub fn background_menu(
             .icon(Lucide::Terminal)
             .action(Box::new(ToggleNuPanel)),
     )
+    .when(folder.is_some(), |menu| {
+        menu.item(
+            PopupMenuItem::new("Get Info")
+                .icon(IconName::Info)
+                .action(Box::new(GetInfo)),
+        )
+    })
     .separator()
     .when_some(folder.filter(|_| !is_favorite), |menu, folder| {
         menu.item(

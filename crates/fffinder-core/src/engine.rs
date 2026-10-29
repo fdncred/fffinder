@@ -90,6 +90,16 @@ impl RootIndex {
         }
     }
 
+    /// Whether its index is still being built; cheaper than [`Self::status`],
+    /// which counts folders.
+    fn scanning(&self) -> bool {
+        let guard = self.picker.read().ok();
+        guard
+            .as_ref()
+            .and_then(|g| g.as_ref())
+            .is_none_or(|p| p.get_scan_progress().is_scanning)
+    }
+
     fn status(&self) -> RootStatus {
         let guard = self.picker.read().ok();
         let picker = guard.as_ref().and_then(|g| g.as_ref());
@@ -140,6 +150,15 @@ pub struct SearchRequest {
     pub show_hidden: bool,
     /// With [`KindFilter::Any`], leave folders out.
     pub files_only: bool,
+}
+
+/// What the index knows about one folder's items: see [`Engine::folder_stats`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FolderStats {
+    /// Bytes under each subfolder.
+    pub sizes: std::collections::HashMap<PathBuf, u64>,
+    /// Git status of each file that isn't clean: `modified`, `untracked`, …
+    pub git: std::collections::HashMap<PathBuf, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -335,7 +354,17 @@ impl Engine {
     }
 
     pub fn is_scanning(&self) -> bool {
-        self.status().iter().any(|s| s.scanning)
+        self.roots_indexing() > 0
+    }
+
+    /// How many roots are still building their index. A search made while
+    /// one is can run again as soon as this drops.
+    pub fn roots_indexing(&self) -> usize {
+        self.read_indexes()
+            .roots
+            .iter()
+            .filter(|root| root.scanning())
+            .count()
     }
 
     /// Block until every root finished its initial scan, or `timeout` passes.
@@ -910,11 +939,12 @@ impl Engine {
                 modified,
             };
             match (dirs, query.map(str::trim).filter(|q| !q.is_empty())) {
+                // The overflow files (added since the scan) are the end of
+                // `get_files`, so they're already in it.
                 (false, None) => items.extend(
                     picker
                         .get_files()
                         .iter()
-                        .chain(picker.get_overflow_files())
                         .filter(|f| !f.is_deleted())
                         .take(left)
                         .map(|f| item(f.relative_path(picker), false, f.size, f.modified)),
@@ -973,6 +1003,93 @@ impl Engine {
         }
         items.truncate(limit);
         items
+    }
+
+    /// Folder sizes and git statuses for the items directly in `dir`, read
+    /// from the index without touching the disk: each subfolder's total is
+    /// every indexed file under it, and each file's git status is what the
+    /// index last saw. Folders and files the index skips aren't included.
+    pub fn folder_stats(&self, dir: &Path) -> FolderStats {
+        self.folder_stats_for(&[dir.to_path_buf()])
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// [`Self::folder_stats`] for several folders at once, in the order
+    /// given, with one pass over each root's files for all of them.
+    pub fn folder_stats_for(&self, dirs: &[PathBuf]) -> Vec<FolderStats> {
+        let mut all = vec![FolderStats::default(); dirs.len()];
+        let indexes = self.read_indexes();
+        // `set_roots` leaves out roots inside others, so no file counts twice.
+        for root in &indexes.roots {
+            let Ok(guard) = root.picker.read() else {
+                continue;
+            };
+            let Some(picker) = guard.as_ref() else {
+                continue;
+            };
+            // The overflow files (added since the scan) are the end of
+            // `get_files`, so they're already in it.
+            let files = || picker.get_files().iter().filter(|f| !f.is_deleted());
+            let base = picker.base_path();
+            let mut root_total: Option<u64> = None;
+            // Each folder in this root, as the start of fff-search's relative
+            // paths: `/` between names on every system, and one at the end.
+            let mut wanted: Vec<(usize, String)> = Vec::new();
+            for (ix, dir) in dirs.iter().enumerate() {
+                // A root inside `dir` adds up as one of its subfolders.
+                if let Ok(below) = root.path.strip_prefix(dir)
+                    && let Some(first) = below.components().next()
+                {
+                    let total = *root_total.get_or_insert_with(|| files().map(|f| f.size).sum());
+                    *all[ix].sizes.entry(dir.join(first)).or_default() += total;
+                    continue;
+                }
+                if let Ok(rel) = root.in_base(dir, base).strip_prefix(base) {
+                    let mut prefix = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if !prefix.is_empty() {
+                        prefix.push('/');
+                    }
+                    wanted.push((ix, prefix));
+                }
+            }
+            if wanted.is_empty() {
+                continue;
+            }
+            // A file can only be under a folder whose path is no longer than
+            // its own folder's, which is known without reading the path.
+            let shortest = wanted.iter().map(|(_, p)| p.len()).min().unwrap_or(0);
+            for file in files() {
+                if file.filename_offset_in_relative_path() < shortest {
+                    continue;
+                }
+                let path = file.relative_path(picker);
+                for (ix, prefix) in &wanted {
+                    let Some(rest) = path.strip_prefix(prefix.as_str()) else {
+                        continue;
+                    };
+                    let (dir, stats) = (&dirs[*ix], &mut all[*ix]);
+                    match rest.split_once('/') {
+                        Some((child, _)) => {
+                            *stats.sizes.entry(dir.join(child)).or_default() += file.size;
+                        }
+                        None => {
+                            if let Some(status) =
+                                fff_search::git::format_git_status_opt(file.git_status)
+                                    .filter(|s| *s != "clean" && *s != "unknown")
+                            {
+                                stats.git.insert(dir.join(rest), status.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        all
     }
 
     /// Subscribe to changes under the roots. `pattern` is a glob relative to
@@ -1114,6 +1231,10 @@ impl RawHit {
                 size: Some(self.size),
                 modified: meta_modified,
                 is_symlink: false,
+                created: None,
+                mode: None,
+                last_opened: None,
+                readonly: false,
                 path: self.path,
             }
         };
@@ -1409,6 +1530,70 @@ mod tests {
     }
 
     #[test]
+    fn adds_up_folders_from_the_index() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-stats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::fs::write(dir.join("a/one.txt"), "12345").unwrap();
+        std::fs::write(dir.join("a/deep/two.txt"), "123").unwrap();
+        std::fs::write(dir.join("b/three.txt"), "1").unwrap();
+        std::fs::write(dir.join("top.txt"), "xx").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone()],
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        let stats = engine.folder_stats(&dir);
+        assert_eq!(stats.sizes.get(&dir.join("a")), Some(&8));
+        assert_eq!(stats.sizes.get(&dir.join("b")), Some(&1));
+        assert_eq!(stats.sizes.len(), 2, "files at the top aren't folders");
+        let above = engine.folder_stats(dir.parent().unwrap());
+        assert_eq!(
+            above.sizes.get(&dir),
+            Some(&11),
+            "a root inside counts whole"
+        );
+        let both = engine.folder_stats_for(&[dir.join("a"), dir.clone()]);
+        assert_eq!(both[0].sizes.get(&dir.join("a/deep")), Some(&3));
+        assert_eq!(
+            both[1], stats,
+            "one pass gives what one folder at a time does"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_root_inside_another_counts_once() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("inner/deep")).unwrap();
+        std::fs::write(dir.join("inner/deep/one.txt"), "12345").unwrap();
+        std::fs::write(dir.join("inner/two.txt"), "123").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone(), dir.join("inner")],
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        assert_eq!(
+            engine.folder_stats(&dir).sizes.get(&dir.join("inner")),
+            Some(&8)
+        );
+        assert_eq!(
+            engine
+                .folder_stats(&dir.join("inner"))
+                .sizes
+                .get(&dir.join("inner/deep")),
+            Some(&5)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn searches_a_folder() {
         let dir = std::env::temp_dir().join(format!("fff-engine-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("docs/notes")).unwrap();
@@ -1422,6 +1607,8 @@ mod tests {
             search: Default::default(),
         });
         assert!(engine.wait_ready(Duration::from_secs(10)));
+        assert!(!engine.is_scanning());
+        assert_eq!(engine.roots_indexing(), 0);
 
         let res = engine.search(&SearchRequest {
             query: "atlas".into(),

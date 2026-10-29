@@ -7,12 +7,23 @@ mod dialogs;
 mod editor;
 mod filter;
 mod fps;
+mod groups;
+mod info;
+mod list;
+mod make;
 mod menus;
 mod nu_panel;
+mod open_with;
+mod pdf;
 mod preview;
+mod quick_look;
 mod sidebar;
+mod tab_bar;
 mod toolbar;
+mod transfer;
+mod trash;
 mod views;
+mod volumes;
 
 use crate::actions::*;
 use crate::model::{History, Location, Selection};
@@ -81,6 +92,10 @@ pub struct Row {
     pub highlights: Vec<(usize, usize)>,
     /// How `LS_COLORS` draws the name, when that option is on.
     pub name_style: Option<crate::nu_env::NameStyle>,
+    /// Git status (`modified`, `untracked`, …), or empty when clean.
+    pub git: SharedString,
+    /// How deep inside open folders the row is, in the list view's tree.
+    pub depth: usize,
 }
 
 impl Row {
@@ -99,10 +114,42 @@ impl Row {
                 .unwrap_or_else(|| "--".into())
                 .into(),
             kind: entry.kind_label().into(),
+            git: SharedString::default(),
+            depth: 0,
             detail: detail.into(),
             highlights,
             name_style: None,
             entry,
+        }
+    }
+
+    /// When the item was made, for the list view's column. This and the
+    /// next two are only made for rows drawn with those columns showing.
+    pub fn created(&self) -> SharedString {
+        self.entry
+            .created
+            .map(format::human_date)
+            .unwrap_or_default()
+            .into()
+    }
+
+    /// When the item was last opened, for the list view's column.
+    pub fn opened(&self) -> SharedString {
+        self.entry
+            .last_opened
+            .map(format::human_date)
+            .unwrap_or_default()
+            .into()
+    }
+
+    /// `rwxr-xr-x`, for the list view's column. Windows has no permission
+    /// bits, only read-only files.
+    pub fn permissions(&self) -> SharedString {
+        match (self.entry.mode, self.entry.is_dir, self.entry.readonly) {
+            (Some(mode), _, _) => fffinder_core::info::mode_string(mode).into(),
+            (None, true, _) => "--".into(),
+            (None, false, true) => "read-only".into(),
+            (None, false, false) => "read-write".into(),
         }
     }
 }
@@ -161,11 +208,17 @@ pub struct Finder {
     search_gen: u64,
 
     rows: Vec<Row>,
+    /// The groups `rows` are in, when the view uses groups.
+    groups: Vec<fffinder_core::grouping::GroupSpan>,
+    /// Groups collapsed in this browser, by name.
+    collapsed_groups: HashSet<String>,
     selection: Selection,
     result_sort: SortOrder,
     grid_cols: usize,
     list_scroll: UniformListScrollHandle,
-    grid_scroll: UniformListScrollHandle,
+    grid_scroll: gpui_kit::component::VirtualListScrollHandle,
+    /// The icon view's lines, kept between frames.
+    icon_layout: Option<groups::IconLayout>,
     strip_scroll: gpui_kit::component::VirtualListScrollHandle,
     columns_scroll: ScrollHandle,
     columns: Vec<ColumnPane>,
@@ -174,8 +227,12 @@ pub struct Finder {
 
     previews: HashMap<PathBuf, Preview>,
     preview_tasks: HashMap<PathBuf, Task<()>>,
+    /// The PDF the large preview shows page by page.
+    pdf: Option<pdf::PdfView>,
     quick_look_open: bool,
     quick_look_focus: FocusHandle,
+    /// Quick Look's own window, while it's open (outside `--term` mode).
+    quick_look_window: Option<AnyWindowHandle>,
     /// Type-to-select: the letters typed so far and when the last arrived.
     type_select: String,
     type_select_at: Option<std::time::Instant>,
@@ -226,6 +283,8 @@ pub struct Finder {
 
     favorites: Vec<Place>,
     locations: Vec<Place>,
+    /// Rereads the locations; a newer reread replaces it.
+    locations_task: Task<()>,
     index_status: Vec<RootStatus>,
     status_task: Task<()>,
     /// Applies a change of search roots; a newer change replaces it.
@@ -234,6 +293,26 @@ pub struct Finder {
     search_settings_task: Task<()>,
     watch_task: Task<()>,
     save_task: Task<()>,
+    /// The open Get Info panel's contents.
+    info: Option<info::InfoPanel>,
+    /// Folders open in the list view's tree, and what they hold.
+    expanded: HashSet<PathBuf>,
+    children: HashMap<PathBuf, Vec<FileEntry>>,
+    /// Folder sizes and git statuses from the index, by folder.
+    folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
+    /// A list column being resized: which, where the drag began, its width then.
+    column_resize: Option<(usize, Pixels, f32)>,
+    /// Space left on the current folder's volume.
+    free_space: Option<u64>,
+    /// The window's tabs, when this browser is one of them.
+    host: Option<WeakEntity<crate::workspace::Workspace>>,
+    /// This is split view's second pane.
+    split_pane: bool,
+    /// What's in the Trash, while the Trash is showing.
+    trashed: Vec<crate::trash_bin::Trashed>,
+    /// Copies and moves under way, and the task redrawing their progress.
+    transfers: Vec<transfer::Job>,
+    transfers_task: Task<()>,
     /// Frames per second for the status bar, with `--fps`.
     fps: Option<fps::FpsMeter>,
     fps_task: Task<()>,
@@ -301,11 +380,13 @@ impl Finder {
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.config.appearance == fffinder_core::Appearance::System {
                     crate::theme::apply(this.config.appearance, Some(window), cx);
+                    // Code previews are colored for light or dark.
+                    this.previews.clear();
                 }
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
-                    this.locations = places::locations();
+                    this.reload_locations(cx);
                     this.check_for_changes(cx);
                 }
             }),
@@ -335,6 +416,8 @@ impl Finder {
             search_task: Task::ready(()),
             search_gen: 0,
             rows: Vec::new(),
+            groups: Vec::new(),
+            collapsed_groups: HashSet::new(),
             selection: Selection::default(),
             result_sort: SortOrder {
                 key: SortKey::Relevance,
@@ -342,7 +425,8 @@ impl Finder {
             },
             grid_cols: 1,
             list_scroll: UniformListScrollHandle::new(),
-            grid_scroll: UniformListScrollHandle::new(),
+            grid_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
+            icon_layout: None,
             strip_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
             columns_scroll: ScrollHandle::new(),
             columns: Vec::new(),
@@ -350,8 +434,10 @@ impl Finder {
             content_height: ui(400.),
             previews: HashMap::new(),
             preview_tasks: HashMap::new(),
+            pdf: None,
             quick_look_open: false,
             quick_look_focus: cx.focus_handle(),
+            quick_look_window: None,
             item_menu_at: None,
             type_select: String::new(),
             type_select_at: None,
@@ -384,13 +470,27 @@ impl Finder {
             nu_running: false,
             nu_task: Task::ready(()),
             favorites,
-            locations: places::locations(),
+            // Read in the background below: naming a volume can wait on a
+            // slow drive.
+            locations: Vec::new(),
+            locations_task: Task::ready(()),
             index_status: Vec::new(),
             status_task: Task::ready(()),
             roots_task: Task::ready(()),
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
             save_task: Task::ready(()),
+            info: None,
+            free_space: None,
+            host: None,
+            split_pane: false,
+            expanded: HashSet::new(),
+            children: HashMap::new(),
+            folder_stats: HashMap::new(),
+            column_resize: None,
+            trashed: Vec::new(),
+            transfers: Vec::new(),
+            transfers_task: Task::ready(()),
             fps: None,
             fps_task: Task::ready(()),
             icon_slider,
@@ -400,7 +500,8 @@ impl Finder {
             _subscriptions: subscriptions,
             config,
         };
-        this.load_listing(None, false, cx);
+        this.load_listing(Vec::new(), false, cx);
+        this.reload_locations(cx);
         this.poll_index_status(cx);
         this.watch_folder(cx);
         this.detect_terminals(cx);
@@ -437,6 +538,14 @@ impl Finder {
     #[doc(hidden)]
     pub fn has_preview_for_test(&self, path: &Path) -> bool {
         self.previews.contains_key(path)
+    }
+
+    /// Show these sidebar Locations instead of the machine's (tests).
+    #[doc(hidden)]
+    pub fn set_locations_for_test(&mut self, locations: Vec<Place>) {
+        self.locations = locations;
+        // A reread still running would replace them.
+        self.locations_task = Task::ready(());
     }
 
     #[doc(hidden)]
@@ -558,6 +667,7 @@ impl Finder {
                 Location::Folder(_) => "folder",
                 Location::Recents => "recents",
                 Location::Results { .. } => "results",
+                Location::Trash => "trash",
             }
         };
         let items: Vec<FileEntry> = if all {
@@ -617,6 +727,9 @@ impl Finder {
         self.selection.clear();
         self.columns.clear();
         self.active_column = 0;
+        self.expanded.clear();
+        self.children.clear();
+        self.folder_stats.clear();
         self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
         if let Some(folder) = self.current_folder() {
@@ -624,7 +737,7 @@ impl Finder {
             self.schedule_save(cx);
         }
         window.set_window_title(&self.history.current().title());
-        self.load_listing(select, false, cx);
+        self.load_listing(select.into_iter().collect(), false, cx);
         cx.notify();
     }
 
@@ -668,6 +781,10 @@ impl Finder {
         self.navigate(Location::Recents, window, cx);
     }
 
+    fn go_trash(&mut self, _: &GoTrash, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Location::Trash, window, cx);
+    }
+
     /// Open a folder and select `item` in it.
     pub fn reveal_in_place(&mut self, item: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(parent) = item.parent() else { return };
@@ -679,10 +796,13 @@ impl Finder {
 
     // ----- listing -----------------------------------------------------------
 
-    fn load_listing(&mut self, select: Option<PathBuf>, quiet: bool, cx: &mut Context<Self>) {
+    /// List the current location, then select the items at `select`.
+    fn load_listing(&mut self, select: Vec<PathBuf>, quiet: bool, cx: &mut Context<Self>) {
         let location = self.history.current().clone();
         let show_hidden = self.config.show_hidden;
+        let last_opened = self.wants_last_opened();
         let engine = self.engine.clone();
+        let bin = crate::trash_bin::bin(cx);
         if !quiet {
             self.loading = true;
         }
@@ -691,39 +811,70 @@ impl Finder {
                 .background_spawn(async move {
                     match &location {
                         Location::Folder(dir) => listing::list_dir(dir, show_hidden)
-                            .map(|entries| (entries, dir_stamp(dir)))
+                            .map(|mut entries| {
+                                if last_opened {
+                                    entries.iter_mut().for_each(FileEntry::read_last_opened);
+                                }
+                                (entries, dir_stamp(dir), Vec::new())
+                            })
                             .map_err(|e| e.to_string()),
                         Location::Recents => {
                             engine.wait_ready(Duration::from_secs(60));
-                            Ok((engine.recents(500), None))
+                            Ok((engine.recents(500), None, Vec::new()))
                         }
                         Location::Results { paths, .. } => Ok((
                             paths.iter().filter_map(FileEntry::from_path).collect(),
                             None,
+                            Vec::new(),
                         )),
+                        Location::Trash => bin
+                            .list()
+                            .map(|items| {
+                                let entries = items
+                                    .iter()
+                                    .filter_map(|item| {
+                                        let mut entry = FileEntry::from_path(&item.path)?;
+                                        entry.name = item.name();
+                                        Some(entry)
+                                    })
+                                    .collect();
+                                (entries, None, items)
+                            })
+                            .map_err(|e| e.to_string()),
                     }
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok((entries, stamp)) => {
+                    Ok((entries, stamp, trashed)) => {
                         this.listing = entries;
                         this.listing_error = None;
                         this.listing_stamp = stamp;
+                        this.trashed = trashed;
+                        if let Some(dir) = this.current_folder().map(Path::to_path_buf) {
+                            this.load_folder_stats(dir, cx);
+                        }
+                        this.load_free_space(cx);
                     }
                     Err(err) => {
                         this.listing.clear();
                         this.listing_error = Some(err);
                         this.listing_stamp = None;
+                        this.trashed.clear();
                     }
                 }
                 this.rebuild_rows(cx);
-                if let Some(path) = select
-                    && let Some(ix) = this.rows.iter().position(|r| r.entry.path == path)
-                {
-                    this.selection.select_only(ix);
-                    this.scroll_to(ix);
+                let found: Vec<usize> = select
+                    .iter()
+                    .filter_map(|path| this.rows.iter().position(|r| r.entry.path == *path))
+                    .collect();
+                if let Some((&first, rest)) = found.split_first() {
+                    this.selection.select_only(first);
+                    for &ix in rest {
+                        this.selection.toggle(ix);
+                    }
+                    this.scroll_to(first);
                     this.selection_changed(cx);
                 }
                 cx.notify();
@@ -746,7 +897,7 @@ impl Finder {
         if let Some(dir) = self.current_folder()
             && dir_stamp(dir) != self.listing_stamp
         {
-            self.load_listing(None, true, cx);
+            self.load_listing(Vec::new(), true, cx);
         }
     }
 
@@ -766,10 +917,16 @@ impl Finder {
 
     fn refresh(&mut self, _: &Refresh, _: &mut Window, cx: &mut Context<Self>) {
         self.previews.clear();
-        self.load_listing(None, true, cx);
+        self.load_listing(Vec::new(), true, cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
+        self.reload_columns(cx);
+        self.reload_children(cx);
+    }
+
+    /// Reload the column view's panes after the first, which mirrors the rows.
+    fn reload_columns(&mut self, cx: &mut Context<Self>) {
         let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
         for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
             self.load_column(ix, dir, cx);
@@ -779,22 +936,45 @@ impl Finder {
     /// Rebuild the displayed rows from the listing or search results.
     pub fn rebuild_rows(&mut self, cx: &mut Context<Self>) {
         let old: Vec<PathBuf> = self.rows.iter().map(|r| r.entry.path.clone()).collect();
+        let order = self.sort_order();
+        let tree = self.tree_mode();
         let mut rows: Vec<Row> = if self.is_searching() {
             self.results.clone()
+        } else if tree {
+            let mut rows = Vec::with_capacity(self.listing.len());
+            self.tree_rows(self.listing.clone(), 0, &mut rows);
+            rows
         } else {
+            // Items in the Trash show the folder they came from.
+            let came_from: HashMap<&Path, String> = self
+                .trashed
+                .iter()
+                .map(|t| (t.path.as_path(), trash::original_folder(t)))
+                .collect();
             self.listing
                 .iter()
-                .map(|e| Row::new(e.clone(), Vec::new(), None))
+                .map(|e| {
+                    let detail = came_from.get(e.path.as_path()).cloned();
+                    let mut entry = e.clone();
+                    let git = self.decorate(&mut entry);
+                    let mut row = Row::new(entry, Vec::new(), detail);
+                    row.git = git.unwrap_or_default().into();
+                    row
+                })
                 .collect()
         };
-        let order = self.sort_order();
         // Recents and sent results keep their own order until a sort is chosen.
         let keep_order = matches!(
             self.history.current(),
-            Location::Recents | Location::Results { .. }
+            Location::Recents | Location::Results { .. } | Location::Trash
         ) && order == SortOrder::default();
-        if order.key != SortKey::Relevance && !keep_order {
-            rows.sort_by(|a, b| listing::compare(&a.entry, &b.entry, order));
+        // The tree sorts each folder's items as it builds them.
+        if order.key != SortKey::Relevance && !keep_order && !tree {
+            let folders_first = self.config.folders_first;
+            rows.sort_by(|a, b| {
+                listing::folders_on_top(&a.entry, &b.entry, folders_first)
+                    .then_with(|| listing::compare(&a.entry, &b.entry, order))
+            });
         }
         self.unfiltered_len = rows.len();
         self.apply_filter_to(&mut rows, cx);
@@ -803,6 +983,7 @@ impl Finder {
                 row.name_style = crate::nu_env::name_style(colors, &row.entry);
             }
         }
+        let rows = self.group_rows(rows);
         let new: Vec<PathBuf> = rows.iter().map(|r| r.entry.path.clone()).collect();
         self.selection.remap(&old, &new);
         self.rows = rows;
@@ -899,6 +1080,7 @@ impl Finder {
         self.search_gen += 1;
         let generation = self.search_gen;
         let engine = self.engine.clone();
+        let engine_for_retry = self.engine.clone();
         let scope = match self.scope {
             SearchScope::Computer => None,
             SearchScope::Folder => self.current_folder().map(Path::to_path_buf),
@@ -936,7 +1118,11 @@ impl Finder {
                         let rows = response
                             .hits
                             .into_iter()
-                            .map(|hit| Row::new(hit.entry, hit.highlights, None))
+                            .map(|hit| {
+                                let mut row = Row::new(hit.entry, hit.highlights, None);
+                                row.git = hit.git_status.unwrap_or_default().into();
+                                row
+                            })
                             .collect();
                         let stats = SearchStats {
                             elapsed: response.elapsed,
@@ -963,10 +1149,21 @@ impl Finder {
                 })
                 .unwrap_or(false);
             if retry {
-                // The index is still being built: try again shortly.
-                cx.background_executor()
-                    .timer(Duration::from_millis(600))
-                    .await;
+                // The index is still being built: search again as soon as
+                // a location finishes indexing, or after a while anyway, as
+                // results from the rest come in. Asking takes each index's
+                // lock, which a scan may hold, so it's asked off the UI thread.
+                let executor = cx.background_executor().clone();
+                cx.background_spawn(async move {
+                    let indexing = engine_for_retry.roots_indexing();
+                    for _ in 0..24 {
+                        executor.timer(Duration::from_millis(25)).await;
+                        if engine_for_retry.roots_indexing() < indexing {
+                            break;
+                        }
+                    }
+                })
+                .await;
                 this.update(cx, |this, cx| {
                     if this.search_gen == generation {
                         this.run_search(false, cx);
@@ -1029,8 +1226,9 @@ impl Finder {
                                 this.run_search(false, cx);
                             }
                             if matches!(this.history.current(), Location::Recents) {
-                                this.load_listing(None, true, cx);
+                                this.load_listing(Vec::new(), true, cx);
                             }
+                            this.reload_folder_stats(cx);
                         }
                         cx.notify();
                         scanning
@@ -1142,7 +1340,7 @@ impl Finder {
             self.open_rows(vec![ix], window, cx);
             return;
         }
-        if modifiers.secondary() {
+        if modifiers.secondary(cx) {
             self.selection.toggle(ix);
         } else if modifiers.shift {
             self.selection.extend_to(ix);
@@ -1180,6 +1378,10 @@ impl Finder {
             || self.quick_look_open;
         if wants_preview && let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
+            // Quick Look's window follows clicks in the browser.
+            if self.quick_look_open {
+                self.ensure_pdf(&entry, cx);
+            }
         }
     }
 
@@ -1220,8 +1422,17 @@ impl Finder {
             self.move_in_columns(dx, dy, window, cx);
             return;
         }
+        if dy == 0 && !extend && self.tree_key(dx, cx) {
+            return;
+        }
         let delta = match view {
-            ViewMode::Icons => dx + dy * self.grid_cols.max(1) as isize,
+            // Up and Down keep the column, across group headers.
+            ViewMode::Icons => match self.selection.cursor() {
+                Some(ix) if dy != 0 => self
+                    .icon_step(ix, dy > 0)
+                    .map_or(0, |to| to as isize - ix as isize),
+                _ => dx + dy * self.grid_cols.max(1) as isize,
+            },
             ViewMode::Gallery => dx + dy,
             _ => dy,
         };
@@ -1240,9 +1451,11 @@ impl Finder {
         match self.effective_view() {
             ViewMode::Icons => self
                 .grid_scroll
-                .scroll_to_item(ix / self.grid_cols.max(1), ScrollStrategy::Nearest),
+                .scroll_to_item(self.icon_line_index(ix), ScrollStrategy::Nearest),
             ViewMode::Gallery => self.strip_scroll.scroll_to_item(ix, ScrollStrategy::Center),
-            _ => self.list_scroll.scroll_to_item(ix, ScrollStrategy::Nearest),
+            _ => self
+                .list_scroll
+                .scroll_to_item(self.list_line_of(ix), ScrollStrategy::Nearest),
         }
     }
 
@@ -1357,7 +1570,13 @@ impl Finder {
             self.navigate(Location::Folder(folder.path.clone()), window, cx);
             return;
         }
-        self.open_files(entries.iter().map(|e| e.path.clone()).collect(), window, cx);
+        // Archives unpack beside themselves, as Finder's Archive Utility does.
+        let (archives, files): (Vec<PathBuf>, Vec<PathBuf>) = entries
+            .iter()
+            .map(|e| e.path.clone())
+            .partition(|p| make::is_archive(p));
+        self.extract_archives(archives, window, cx);
+        self.open_files(files, window, cx);
         let engine = self.engine.clone();
         let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
         cx.background_spawn(async move {
@@ -1391,6 +1610,11 @@ impl Finder {
             return;
         }
         self.config.view_mode = mode;
+        if mode != ViewMode::Gallery {
+            self.forget_pdf_surface(pdf::Surface::Gallery);
+        }
+        // Only the list shows open folders' items.
+        self.rebuild_rows(cx);
         if mode == ViewMode::Columns {
             self.columns.clear();
             self.sync_root_column();
@@ -1422,6 +1646,10 @@ impl Finder {
         } else {
             self.config.sort = order;
             self.schedule_save(cx);
+            if key == SortKey::LastOpened {
+                // Last-opened dates are only read when something needs them.
+                self.load_listing(Vec::new(), true, cx);
+            }
         }
         self.rebuild_rows(cx);
     }
@@ -1450,11 +1678,9 @@ impl Finder {
         }
         self.config.show_hidden = show;
         self.schedule_save(cx);
-        self.load_listing(None, true, cx);
-        let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
-        for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
-            self.load_column(ix, dir, cx);
-        }
+        self.load_listing(Vec::new(), true, cx);
+        self.reload_columns(cx);
+        self.reload_children(cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
@@ -1538,6 +1764,7 @@ impl Finder {
             Appearance::Dark
         };
         crate::theme::apply(self.config.appearance, Some(window), cx);
+        self.previews.clear();
         self.schedule_save(cx);
     }
 
@@ -1549,6 +1776,7 @@ impl Finder {
     ) {
         self.config.appearance = appearance;
         crate::theme::apply(appearance, Some(window), cx);
+        self.previews.clear();
         self.schedule_save(cx);
         cx.notify();
     }
@@ -1951,6 +2179,9 @@ impl Finder {
         let Some(dir) = self.current_folder().map(Path::to_path_buf) else {
             return;
         };
+        if self.wait_for_undo(window, cx) {
+            return;
+        }
         let mut name = "untitled folder".to_string();
         let mut n = 2;
         while dir.join(&name).exists() {
@@ -1960,8 +2191,13 @@ impl Finder {
         let path = dir.join(&name);
         match std::fs::create_dir(&path) {
             Ok(()) => {
+                crate::undo::record(
+                    "New Folder",
+                    crate::undo::Change::Created(vec![path.clone()]),
+                    cx,
+                );
                 self.end_search(window, cx);
-                self.load_listing(Some(path.clone()), true, cx);
+                self.load_listing(vec![path.clone()], true, cx);
                 self.open_rename_dialog(path, window, cx);
             }
             Err(err) => window.push_notification(
@@ -1981,34 +2217,6 @@ impl Finder {
         } else if let Some(entry) = self.primary_entry() {
             self.open_rename_dialog(entry.path, window, cx);
         }
-    }
-
-    fn move_to_trash(&mut self, _: &MoveToTrash, window: &mut Window, cx: &mut Context<Self>) {
-        let entries = self.selected_entries();
-        if !entries.is_empty() {
-            self.confirm_trash(entries, window, cx);
-        }
-    }
-
-    pub fn trash_now(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { trash::delete_all(&paths).map(|_| paths.len()) })
-                .await;
-            this.update(cx, |this, cx| {
-                this.selection.clear();
-                this.load_listing(None, true, cx);
-                if this.is_searching() {
-                    this.results.retain(|r| r.entry.path.exists());
-                    this.rebuild_rows(cx);
-                }
-                if let Err(err) = result {
-                    log::warn!("trash: {err}");
-                }
-            })
-            .ok();
-        })
-        .detach();
     }
 
     // ----- columns ----------------------------------------------------------------
@@ -2088,13 +2296,14 @@ impl Finder {
     fn load_column(&mut self, col: usize, dir: PathBuf, cx: &mut Context<Self>) {
         let show_hidden = self.config.show_hidden;
         let sort = self.config.sort;
+        let folders_first = self.config.folders_first;
         cx.spawn(async move |this, cx| {
             let entries = cx
                 .background_spawn({
                     let dir = dir.clone();
                     async move {
                         let mut entries = listing::list_dir(&dir, show_hidden).unwrap_or_default();
-                        listing::sort_entries(&mut entries, sort);
+                        listing::sort_entries(&mut entries, sort, folders_first);
                         entries
                     }
                 })
@@ -2222,12 +2431,36 @@ impl Render for Finder {
             .on_action(cx.listener(Self::go_up))
             .on_action(cx.listener(Self::go_home))
             .on_action(cx.listener(Self::go_recents))
+            .on_action(cx.listener(Self::go_trash))
+            .on_action(cx.listener(Self::get_info))
+            .on_action(cx.listener(Self::toggle_folders_first))
+            .on_action(cx.listener(Self::toggle_groups))
+            .on_action(cx.listener(Self::connect_to_server))
+            .on_action(cx.listener(Self::new_file))
+            .on_action(cx.listener(Self::duplicate))
+            .on_action(cx.listener(Self::make_alias))
+            .on_action(cx.listener(Self::make_symlink))
+            .on_action(cx.listener(Self::compress))
+            .on_action(cx.listener(Self::extract))
+            .on_action(cx.listener(Self::undo_file_operation))
+            .on_action(cx.listener(Self::redo_file_operation))
+            .on_action(cx.listener(Self::next_pdf_page))
+            .on_action(cx.listener(Self::previous_pdf_page))
+            .on_action(cx.listener(Self::preview_bigger))
+            .on_action(cx.listener(Self::preview_smaller))
+            .on_action(cx.listener(Self::preview_reset))
+            .on_action(cx.listener(Self::put_back))
+            .on_action(cx.listener(Self::delete_immediately))
+            .on_action(cx.listener(Self::empty_trash))
             .on_action(cx.listener(Self::focus_search))
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(Self::toggle_hidden))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::copy_files))
+            .on_action(cx.listener(Self::paste_files))
+            .on_action(cx.listener(Self::move_items_here))
             .on_action(cx.listener(Self::copy_as_nuon))
             .on_action(cx.listener(Self::reveal))
             .on_action(cx.listener(Self::open_in_nushell))
@@ -2249,7 +2482,18 @@ impl Render for Finder {
                     .collect();
                 this.open_in_editor(paths, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &CloseWindow, window, _| this.close_window(window)))
+            .on_action(
+                cx.listener(|this, _: &CloseWindow, window, cx| {
+                    this.close_tab_or_window(window, cx)
+                }),
+            )
+            .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::show_next_tab))
+            .on_action(cx.listener(Self::show_previous_tab))
+            .on_action(cx.listener(Self::move_tab_to_new_window))
+            .on_action(cx.listener(Self::toggle_split_view))
+            .on_action(cx.listener(Self::copy_to_other_pane))
+            .on_action(cx.listener(Self::move_to_other_pane))
             .on_action(
                 cx.listener(|this, _: &ViewIcons, _, cx| this.set_view_mode(ViewMode::Icons, cx)),
             )
@@ -2279,6 +2523,10 @@ impl Render for Finder {
                             .h_full()
                             .min_w_0()
                             .child(self.render_toolbar(window, cx))
+                            .children(self.render_tab_bar(cx))
+                            .when(self.in_trash(), |this| {
+                                this.child(self.render_trash_bar(cx))
+                            })
                             .when(self.is_searching(), |this| {
                                 this.child(self.render_scope_bar(window, cx))
                             })
@@ -2288,6 +2536,9 @@ impl Render for Finder {
                             .child(self.render_content(window, cx))
                             .when(self.nu_open, |this| {
                                 this.child(self.render_nu_panel(window, cx))
+                            })
+                            .when(self.transfers_running(), |this| {
+                                this.child(self.render_transfers(cx))
                             })
                             .child(self.render_path_bar(window, cx))
                             .child(self.render_status_bar(window, cx)),
@@ -2301,8 +2552,11 @@ impl Finder {
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.effective_view();
         let body = if let Some(err) = self.listing_error.clone().filter(|_| !self.is_searching()) {
-            self.render_message("Can’t open this folder", &err, cx)
-                .into_any_element()
+            let title = match self.history.current() {
+                Location::Trash => "Can’t show the Trash",
+                _ => "Can’t open this folder",
+            };
+            self.render_message(title, &err, cx).into_any_element()
         } else if self.rows.is_empty() && !self.loading && !self.searching {
             let (title, detail) = if self.is_searching() {
                 match self.indexing_progress() {
@@ -2322,6 +2576,11 @@ impl Finder {
                 (
                     "No Recent Files".into(),
                     "Files you change appear here.".into(),
+                )
+            } else if matches!(self.history.current(), Location::Trash) {
+                (
+                    "The Trash Is Empty".into(),
+                    "Items you move to the Trash appear here.".into(),
                 )
             } else {
                 ("No Items".into(), "This folder is empty.".into())
@@ -2405,8 +2664,12 @@ impl Finder {
                     cx.stop_propagation();
                 }
             }))
+            // Files from other apps are copied into the folder; with no
+            // folder showing, a dropped folder opens instead.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                if let Some(path) = paths.paths().first() {
+                if let Some(dest) = this.drop_folder() {
+                    this.drop_files(paths.paths().to_vec(), dest, false, window, cx);
+                } else if let Some(path) = paths.paths().first() {
                     if path.is_dir() {
                         this.navigate(Location::Folder(path.clone()), window, cx);
                     } else {
@@ -2414,10 +2677,25 @@ impl Finder {
                     }
                 }
             }))
+            .on_drop(
+                cx.listener(|this, files: &views::DraggedFiles, window, cx| {
+                    if let Some(dest) = this.drop_folder() {
+                        this.drop_files(files.0.clone(), dest, true, window, cx);
+                    }
+                }),
+            )
             .on_prepaint(move |bounds, _, cx| {
                 entity.update(cx, |this, _| this.content_height = bounds.size.height);
             })
             .child(body)
+    }
+
+    /// The folder that files dropped on the view go into: the one shown,
+    /// when it isn't search results.
+    fn drop_folder(&self) -> Option<PathBuf> {
+        self.current_folder()
+            .filter(|_| !self.is_searching())
+            .map(Path::to_path_buf)
     }
 
     fn render_message(&self, title: &str, detail: &str, cx: &Context<Self>) -> impl IntoElement {

@@ -5,7 +5,7 @@ use super::{Finder, SearchScope};
 use crate::actions::*;
 use crate::theme::palette;
 use crate::theme::ui;
-use fffinder_core::{SortKey, ViewMode};
+use fffinder_core::{GroupKey, SortKey, ViewMode};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::input::Input;
@@ -154,8 +154,10 @@ impl Finder {
         let view = cx.entity();
         let mode = self.config.view_mode;
         // A terminal window has no traffic lights to make room for.
-        let traffic =
-            cfg!(target_os = "macos") && !self.config.show_sidebar && !crate::term::active();
+        let traffic = cfg!(target_os = "macos")
+            && !self.config.show_sidebar
+            && !crate::term::active()
+            && !self.split_pane;
         let can_back = self.history.can_back();
         let can_forward = self.history.can_forward();
 
@@ -359,6 +361,7 @@ fn sort_menu(
     let sort = finder.current_sort();
     let searching = finder.is_searching();
     let hidden = finder.config.show_hidden;
+    let folders_first = finder.config.folders_first;
     let mut keys: Vec<SortKey> = Vec::new();
     if searching {
         keys.push(SortKey::Relevance);
@@ -399,10 +402,36 @@ fn sort_menu(
         )
         .separator()
         .item(
+            PopupMenuItem::new("Keep Folders on Top")
+                .checked(folders_first)
+                .action(Box::new(ToggleFoldersFirst)),
+        )
+        .item(
             PopupMenuItem::new("Show Hidden Files")
                 .checked(hidden)
                 .action(Box::new(ToggleHidden)),
         )
+        .separator()
+        .submenu("Group By", window, cx, {
+            let view = view.clone();
+            move |mut menu, window, cx| {
+                let config = &view.read(cx).config;
+                let grouped = config.use_groups.then_some(config.group_by);
+                for key in [None].into_iter().chain(GroupKey::ALL.map(Some)) {
+                    menu = menu.item(
+                        PopupMenuItem::new(key.map_or("None", GroupKey::label))
+                            .checked(grouped == key)
+                            .on_click(window.listener_for(
+                                &view,
+                                move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                                    this.set_group_by(key, cx)
+                                },
+                            )),
+                    );
+                }
+                menu
+            }
+        })
         .min_w(ui(200.))
 }
 
@@ -454,6 +483,7 @@ fn actions_menu(
     let is_favorite = folder
         .as_ref()
         .is_some_and(|f| finder.config.favorites.contains(f));
+    let split = finder.has_split_view(cx);
     menu.item(
         PopupMenuItem::new("New Folder")
             .icon(Lucide::FolderPlus)
@@ -461,10 +491,36 @@ fn actions_menu(
             .action(Box::new(NewFolder)),
     )
     .item(
+        PopupMenuItem::new("New File…")
+            .icon(Lucide::FilePlus)
+            .disabled(!in_folder)
+            .action(Box::new(NewFile)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("New Tab")
+            .icon(Lucide::Plus)
+            .disabled(finder.picker.is_some())
+            .action(Box::new(NewTab)),
+    )
+    .item(
+        PopupMenuItem::new("Split View")
+            .icon(Lucide::Columns2)
+            .checked(split)
+            .disabled(finder.picker.is_some())
+            .action(Box::new(ToggleSplitView)),
+    )
+    .item(
         PopupMenuItem::new("Quick Look")
             .icon(IconName::Eye)
             .disabled(!has_selection)
             .action(Box::new(QuickLook)),
+    )
+    .item(
+        PopupMenuItem::new("Get Info")
+            .icon(IconName::Info)
+            .disabled(!has_selection && !in_folder)
+            .action(Box::new(GetInfo)),
     )
     .item(
         PopupMenuItem::new("Rename…")
@@ -504,6 +560,22 @@ fn actions_menu(
             .disabled(!has_selection)
             .action(Box::new(MoveToTrash)),
     )
+    .item(
+        PopupMenuItem::new("Delete Immediately…")
+            .disabled(!has_selection)
+            .action(Box::new(DeleteImmediately)),
+    )
+    // The menu bar's Edit › Undo and Redo, for systems without one.
+    .item(
+        PopupMenuItem::new("Undo")
+            .icon(Lucide::Undo2)
+            .action(Box::new(gpui_kit::component::input::Undo)),
+    )
+    .item(
+        PopupMenuItem::new("Redo")
+            .icon(Lucide::Redo2)
+            .action(Box::new(gpui_kit::component::input::Redo)),
+    )
     .separator()
     .item(
         PopupMenuItem::new("Filter with Nushell…")
@@ -511,6 +583,11 @@ fn actions_menu(
             .action(Box::new(ToggleFilter)),
     )
     .item(PopupMenuItem::new("Go to Folder…").action(Box::new(GoToFolder)))
+    .item(
+        PopupMenuItem::new("Connect to Server…")
+            .icon(Lucide::Server)
+            .action(Box::new(ConnectToServer)),
+    )
     .item(PopupMenuItem::new("Search Syntax…").action(Box::new(SearchHelp)))
     .item(
         PopupMenuItem::new("Settings…")

@@ -1,111 +1,50 @@
-//! Frames to the terminal through the kitty graphics protocol, on a thread of
-//! their own so a slow terminal never holds up the UI.
+//! Frames as kitty graphics escape codes: on macOS and Linux, and on
+//! Windows when the terminal has them.
 //!
 //! Each frame is one RGBA image covering the whole grid. Frames alternate
 //! between two image ids, so the new one is up before the old one is deleted
-//! and nothing flickers. When frames arrive faster than the terminal takes
-//! them, only the newest is sent.
+//! and nothing flickers.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
+#[cfg(unix)]
 use std::ffi::CString;
-use std::io::{self, Write as _};
-use std::sync::atomic::Ordering;
-use std::sync::mpsc;
+#[cfg(unix)]
+use std::io;
+use std::io::Write as _;
 
-use super::tty;
+use super::frames::Frame;
+use super::tty::Caps;
 
 /// Input bytes per escape code: 3072 bytes encode to 4096 base64 characters,
 /// the protocol's limit for one chunk.
 const CHUNK: usize = 3072;
 
-/// One rendered window, and the cells it covers.
-pub struct Frame {
-    pub rgba: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-    pub cols: u16,
-    pub rows: u16,
-}
-
-enum Message {
-    Frame(Frame),
-    /// Other escape codes: the title, the pointer shape.
-    Codes(String),
-}
-
-/// Sends frames and escape codes to the writer thread.
-#[derive(Clone)]
-pub struct Writer(mpsc::Sender<Message>);
-
-impl Writer {
-    /// Start the writer thread. `shared_memory` hands frames over in POSIX
-    /// shared memory, which only a terminal on this machine can read.
-    pub fn spawn(shared_memory: bool) -> Writer {
-        let (tx, rx) = mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("fffinder-term-writer".into())
-            .spawn(move || run(&rx, shared_memory));
-        if let Err(err) = spawned {
-            log::error!("could not start the terminal writer: {err}");
-        }
-        Writer(tx)
-    }
-
-    pub fn frame(&self, frame: Frame) {
-        let _ = self.0.send(Message::Frame(frame));
-    }
-
-    pub fn codes(&self, codes: String) {
-        let _ = self.0.send(Message::Codes(codes));
-    }
-}
-
-fn run(rx: &mpsc::Receiver<Message>, shared_memory: bool) {
-    let mut encoder = Encoder::new(shared_memory);
-    let mut out = Vec::new();
-    while let Ok(first) = rx.recv() {
-        out.clear();
-        let mut newest = None;
-        for message in std::iter::once(first).chain(rx.try_iter()) {
-            match message {
-                Message::Frame(frame) => newest = Some(frame),
-                Message::Codes(codes) => out.extend_from_slice(codes.as_bytes()),
-            }
-        }
-        let has_frame = newest.is_some();
-        if let Some(frame) = newest {
-            encoder.encode(&frame, &mut out);
-        }
-        if let Err(err) = tty::write(&out) {
-            log::error!("writing to the terminal: {err}");
-            return;
-        }
-        if has_frame {
-            super::FRAMES.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
 /// Turns frames into escape codes.
-struct Encoder {
+pub struct Encoder {
+    /// Hand frames over in POSIX shared memory, which only a terminal on this
+    /// machine can read.
+    #[cfg(unix)]
     shared_memory: bool,
     frames: u64,
 }
 
 impl Encoder {
-    fn new(shared_memory: bool) -> Encoder {
+    pub fn new(caps: &Caps) -> Encoder {
+        #[cfg(not(unix))]
+        let _ = caps;
         Encoder {
-            shared_memory,
+            #[cfg(unix)]
+            shared_memory: caps.shared_memory,
             frames: 0,
         }
     }
 
     /// Append the codes that show `frame` at the top left and delete the
     /// frame before it.
-    fn encode(&mut self, frame: &Frame, out: &mut Vec<u8>) {
+    pub fn encode(&mut self, frame: Frame, out: &mut Vec<u8>) {
         self.frames += 1;
         let (id, old) = if self.frames.is_multiple_of(2) {
             (2, 1)
@@ -117,25 +56,7 @@ impl Encoder {
             frame.width, frame.height, frame.cols, frame.rows
         );
         out.extend_from_slice(b"\x1b[H");
-        let shared = self.shared_memory && {
-            let name = format!("/fff-{}-{}", std::process::id(), self.frames);
-            match write_shm(&name, &frame.rgba) {
-                Ok(()) => {
-                    let _ = write!(
-                        out,
-                        "\x1b_G{keys},t=s,S={};{}\x1b\\",
-                        frame.rgba.len(),
-                        BASE64.encode(&name)
-                    );
-                    true
-                }
-                Err(err) => {
-                    log::warn!("shared memory for a frame: {err}; sending it inline");
-                    false
-                }
-            }
-        };
-        if !shared {
+        if !self.shared(&frame, &keys, out) {
             let mut zlib = ZlibEncoder::new(
                 Vec::with_capacity(frame.rgba.len() / 16),
                 Compression::fast(),
@@ -150,6 +71,38 @@ impl Encoder {
             }
         }
         let _ = write!(out, "\x1b_Ga=d,d=I,i={old},q=2\x1b\\");
+    }
+}
+
+impl Encoder {
+    /// Hand `frame` over in shared memory, if the terminal can read it.
+    #[cfg(unix)]
+    fn shared(&self, frame: &Frame, keys: &str, out: &mut Vec<u8>) -> bool {
+        if !self.shared_memory {
+            return false;
+        }
+        let name = format!("/fff-{}-{}", std::process::id(), self.frames);
+        match write_shm(&name, &frame.rgba) {
+            Ok(()) => {
+                let _ = write!(
+                    out,
+                    "\x1b_G{keys},t=s,S={};{}\x1b\\",
+                    frame.rgba.len(),
+                    BASE64.encode(&name)
+                );
+                true
+            }
+            Err(err) => {
+                log::warn!("shared memory for a frame: {err}; sending it inline");
+                false
+            }
+        }
+    }
+
+    /// Windows has no POSIX shared memory, so frames always go inline.
+    #[cfg(not(unix))]
+    fn shared(&self, _frame: &Frame, _keys: &str, _out: &mut Vec<u8>) -> bool {
+        false
     }
 }
 
@@ -180,6 +133,7 @@ fn chunked(data: &[u8], keys: &str, out: &mut Vec<u8>) {
 /// # Errors
 ///
 /// Fails when the object exists or can't be created, sized, or mapped.
+#[cfg(unix)]
 pub fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
     let cname = CString::new(name).map_err(io::Error::other)?;
     // SAFETY: plain POSIX calls on a new object sized to `data`. The mapping
@@ -221,6 +175,7 @@ pub fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
 }
 
 /// Remove a shared-memory object; a missing one is fine.
+#[cfg(unix)]
 pub fn unlink_shm(name: &str) {
     if let Ok(cname) = CString::new(name) {
         // SAFETY: unlinks a name; it touches no memory of ours.
@@ -233,6 +188,14 @@ mod tests {
     use super::*;
     use flate2::read::ZlibDecoder;
     use std::io::Read as _;
+
+    fn encoder(shared_memory: bool) -> Encoder {
+        Encoder::new(&Caps {
+            kitty: true,
+            shared_memory,
+            ..Caps::default()
+        })
+    }
 
     fn frame(width: u32, height: u32) -> Frame {
         Frame {
@@ -263,8 +226,9 @@ mod tests {
     #[test]
     fn inline_frames_decompress_to_the_pixels() {
         let frame = frame(300, 40);
+        let rgba = frame.rgba.clone();
         let mut out = Vec::new();
-        Encoder::new(false).encode(&frame, &mut out);
+        encoder(false).encode(frame, &mut out);
         assert!(out.starts_with(b"\x1b[H"));
         let images = images(&out);
         assert_eq!(images.len(), 2, "one image and one delete");
@@ -274,7 +238,7 @@ mod tests {
         ZlibDecoder::new(&data[..])
             .read_to_end(&mut pixels)
             .unwrap();
-        assert_eq!(pixels, frame.rgba);
+        assert_eq!(pixels, rgba);
         assert_eq!(images[1].0, "a=d,d=I,i=2,q=2");
     }
 
@@ -297,12 +261,11 @@ mod tests {
 
     #[test]
     fn ids_alternate_so_the_old_frame_outlives_the_new_one() {
-        let mut encoder = Encoder::new(false);
-        let frame = frame(4, 4);
+        let mut encoder = encoder(false);
         let ids: Vec<(String, String)> = (0..3)
             .map(|_| {
                 let mut out = Vec::new();
-                encoder.encode(&frame, &mut out);
+                encoder.encode(frame(4, 4), &mut out);
                 let images = images(&out);
                 (images[0].0.clone(), images[1].0.clone())
             })
@@ -312,15 +275,16 @@ mod tests {
         assert!(ids[2].0.contains(",i=1,"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn shared_memory_frames_send_only_a_name() {
         let frame = frame(16, 8);
+        let size = frame.rgba.len();
         let mut out = Vec::new();
-        let mut encoder = Encoder::new(true);
-        encoder.encode(&frame, &mut out);
+        encoder(true).encode(frame, &mut out);
         let images = images(&out);
         let (keys, name) = &images[0];
-        assert!(keys.ends_with(&format!("t=s,S={}", frame.rgba.len())));
+        assert!(keys.ends_with(&format!("t=s,S={size}")));
         let name = String::from_utf8(name.clone()).unwrap();
         assert_eq!(name, format!("/fff-{}-1", std::process::id()));
         unlink_shm(&name);

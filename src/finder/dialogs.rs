@@ -718,6 +718,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.wait_for_undo(window, cx) {
+            return false;
+        }
         let new_name = input.read(cx).value().trim().to_string();
         let mut notify = |kind, message: String| {
             window.push_notification((kind, message), cx);
@@ -742,13 +745,18 @@ impl Finder {
             notify(Error, format!("Couldn’t rename: {err}"));
             return false;
         }
+        crate::undo::record(
+            "Rename",
+            crate::undo::Change::Moved(vec![(path.to_path_buf(), target.clone())]),
+            cx,
+        );
         self.previews.remove(path);
         for row in self.results.iter_mut().filter(|r| r.entry.path == path) {
             if let Some(entry) = FileEntry::from_path(&target) {
                 *row = super::Row::new(entry, Vec::new(), None);
             }
         }
-        self.load_listing(Some(target), true, cx);
+        self.load_listing(vec![target], true, cx);
         true
     }
 
@@ -860,8 +868,8 @@ impl Finder {
                 .description("You can restore items from the Trash.")
                 .ok_text("Move to Trash")
                 .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.trash_now(paths.clone(), cx));
+                .on_ok(move |_, window, cx| {
+                    view.update(cx, |this, cx| this.trash_now(paths.clone(), window, cx));
                     true
                 })
         });
