@@ -35,11 +35,19 @@ const FILES: &[(&str, &[u8])] = embedded![
     "app-icon.svg",
 ];
 
+/// One of fffinder's own embedded files, such as `app-icon.svg`.
+pub fn embedded(path: &str) -> Option<&'static [u8]> {
+    FILES
+        .iter()
+        .find(|(p, _)| *p == path)
+        .map(|(_, bytes)| *bytes)
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) = FILES.iter().find(|(p, _)| *p == path) {
+        if let Some(bytes) = embedded(path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         if let Some(bytes) = ExtraIcons.load(path)? {

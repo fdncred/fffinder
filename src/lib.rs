@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod ansi;
+pub mod app_icon;
 pub mod apps;
 pub mod args;
 pub mod assets;
@@ -39,18 +40,15 @@ use std::path::PathBuf;
 pub fn run(args: args::Args) {
     config::migrate_legacy_dirs();
     let config = Config::load();
-    // A window in a terminal opens where it was started, like a shell command.
-    // `bool::then` gives `Some(current_dir())` only with `--term`.
-    let cwd = args.term.then(std::env::current_dir).and_then(Result::ok);
-    let start = start_location(args.path.as_ref().or(cwd.as_ref()), &config);
+    let folder = args.path.clone().or_else(|| shell_folder(args.term));
+    let start = start_location(folder.as_ref(), &config);
     let picker = args.pick.then_some(PickerOptions {
         multiple: args.multiple,
     });
     // One app, one index: a second launch hands its folder and search to the
     // window that is already open. A window in a terminal is its own.
     if picker.is_none() && !args.term {
-        let path = args
-            .path
+        let path = folder
             .as_ref()
             .map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()));
         if server::client::forward_open(path.as_deref(), args.query.as_deref()) {
@@ -70,6 +68,7 @@ pub fn run(args: args::Args) {
     // Indexing starts right away, in the background.
     let engine = Engine::new(EngineOptions {
         roots: config.search_roots.clone(),
+        app_dirs: config.app_dirs(),
         db_dir: Some(config::data_dir().join("gui")),
         watch: true,
         search: config.search.clone(),
@@ -103,6 +102,10 @@ pub fn run(args: args::Args) {
             config.appearance,
         );
         watchdog::start_if_enabled(cx);
+        #[cfg(target_os = "macos")]
+        if !args.term {
+            app_icon::set_dock_icon();
+        }
         if args.fps {
             cx.set_global(finder::ShowFps);
         }
@@ -251,6 +254,34 @@ pub fn init(cx: &mut App, state: AppState, appearance: fffinder_core::Appearance
 }
 
 /// The folder to open: the argument, the last folder, or home.
+/// The folder to open when none is given: where the shell that started
+/// fffinder is, like any command run from a terminal. A launch from the
+/// Dock, Finder, Explorer, or a desktop menu has none, so it opens the last
+/// folder. `--term` always draws in a terminal, so it always has one.
+pub fn shell_folder(term: bool) -> Option<PathBuf> {
+    // `bool::then` gives `Some(current_dir())` only when the test passes.
+    (term || started_from_shell())
+        .then(std::env::current_dir)
+        .and_then(Result::ok)
+}
+
+#[cfg(not(windows))]
+fn started_from_shell() -> bool {
+    use std::io::IsTerminal as _;
+    std::io::stdin().is_terminal()
+}
+
+/// A console program started from Explorer or a shortcut gets a console of
+/// its own, so its input is a terminal there too. One started from a shell
+/// shares the shell's console with it.
+#[cfg(windows)]
+fn started_from_shell() -> bool {
+    let mut ids = [0u32; 2];
+    // SAFETY: the call writes at most `ids.len()` process ids into `ids`.
+    let attached = unsafe { ::windows::Win32::System::Console::GetConsoleProcessList(&mut ids) };
+    attached > 1
+}
+
 pub fn start_location(arg: Option<&PathBuf>, config: &Config) -> Location {
     if let Some(path) = arg {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.clone());
@@ -284,6 +315,7 @@ pub fn window_options(title: SharedString, cx: &App) -> WindowOptions {
         }),
         app_owns_titlebar_drag: mac,
         app_id: Some("fffinder".into()),
+        icon: app_icon::window_icon(),
         ..Default::default()
     }
 }

@@ -30,8 +30,8 @@ fffinder - fast Finder-style file search
 Usage: fffinder [PATH] [OPTIONS]
 
 Arguments:
-  [PATH]             Folder to open (default: the current folder with --term,
-                     else the last folder or home)
+  [PATH]             Folder to open (default: the current folder when run
+                     from a terminal, else the last folder or home)
 
 Options:
   -s, --startup-path PATH

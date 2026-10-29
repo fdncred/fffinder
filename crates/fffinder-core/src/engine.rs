@@ -1,7 +1,9 @@
 //! Search engine: one `fff-search` index per search root, searched in
 //! parallel and merged by score. Folders outside every root get a temporary
-//! index on demand, so "search this folder" works anywhere.
+//! index on demand, so "search this folder" works anywhere. Apps come from
+//! an [`AppList`] instead of an index.
 
+use crate::app_list::AppList;
 use crate::config::{SearchCase, SearchSettings};
 use crate::entry::{FileEntry, display_name};
 use crate::kind::{self, KindFilter};
@@ -12,10 +14,11 @@ use fff_search::{
     PaginationArgs, QueryParser, QueryTracker, SharedFilePicker, SharedFrecency,
     SharedQueryTracker, WatchEvent, WatchId, WatchOptions,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -25,6 +28,9 @@ const MAX_ADHOC: usize = 3;
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
     pub roots: Vec<PathBuf>,
+    /// Folders whose apps "This Computer" searches find by name without
+    /// indexing them (see [`AppList`]); empty for none.
+    pub app_dirs: Vec<PathBuf>,
     /// Directory for frecency/query-history databases; `None` disables them.
     pub db_dir: Option<PathBuf>,
     /// Keep indexes live with filesystem watchers (when `search.watch` is on).
@@ -109,6 +115,7 @@ impl RootIndex {
                 RootStatus {
                     path: self.path.clone(),
                     scanning: progress.is_scanning,
+                    finishing: !progress.is_scanning && p.is_post_scan_active(),
                     indexed_files: if progress.is_scanning {
                         progress.scanned_files_count
                     } else {
@@ -121,6 +128,7 @@ impl RootIndex {
             None => RootStatus {
                 path: self.path.clone(),
                 scanning: true,
+                finishing: false,
                 indexed_files: 0,
                 indexed_dirs: 0,
                 git_repo: false,
@@ -133,6 +141,10 @@ impl RootIndex {
 pub struct RootStatus {
     pub path: PathBuf,
     pub scanning: bool,
+    /// Scanned and searchable, while fff-search still reads each file once
+    /// to flag binaries, which takes minutes for a large folder.
+    #[serde(default)]
+    pub finishing: bool,
     /// Files scanned so far while scanning, or live files once ready.
     pub indexed_files: usize,
     #[serde(default)]
@@ -264,8 +276,21 @@ struct Indexes {
     adhoc: Vec<RootIndex>,
 }
 
+/// The folders apps are read from, and what was read.
+#[derive(Default)]
+struct Apps {
+    dirs: Vec<PathBuf>,
+    /// Read by the first search that wants it, and again once a folder in it
+    /// changes.
+    list: Option<Arc<AppList>>,
+}
+
 pub struct Engine {
     indexes: RwLock<Indexes>,
+    apps: RwLock<Apps>,
+    /// Sizes of app bundles outside the roots, by path, with the bundle's
+    /// modification time when it was added up.
+    bundle_sizes: RwLock<HashMap<PathBuf, (Option<SystemTime>, u64)>>,
     frecency: SharedFrecency,
     queries: SharedQueryTracker,
     watch: bool,
@@ -278,6 +303,11 @@ impl Engine {
         let (frecency, queries) = open_dbs(options.db_dir.as_deref());
         let engine = Arc::new(Engine {
             indexes: RwLock::new(Indexes::default()),
+            apps: RwLock::new(Apps {
+                dirs: options.app_dirs,
+                list: None,
+            }),
+            bundle_sizes: RwLock::default(),
             frecency,
             queries,
             watch: options.watch,
@@ -306,6 +336,28 @@ impl Engine {
         }
         indexes.roots = keep;
         self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read apps from `dirs` from now on; empty stops finding apps.
+    pub fn set_app_dirs(&self, dirs: &[PathBuf]) {
+        *self.apps.write().unwrap_or_else(|e| e.into_inner()) = Apps {
+            dirs: dirs.to_vec(),
+            list: None,
+        };
+    }
+
+    /// The app list, read again first if a folder in it changed.
+    fn app_list(&self) -> Arc<AppList> {
+        {
+            let apps = self.apps.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(list) = apps.list.as_ref().filter(|l| l.is_current()) {
+                return Arc::clone(list);
+            }
+        }
+        let mut apps = self.apps.write().unwrap_or_else(|e| e.into_inner());
+        let list = Arc::new(AppList::scan(&apps.dirs));
+        apps.list = Some(Arc::clone(&list));
+        list
     }
 
     pub fn search_settings(&self) -> SearchSettings {
@@ -487,6 +539,11 @@ impl Engine {
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
+        if wants_apps(req, &words) {
+            let apps = app_hits(self.app_list().entries(), &words);
+            total_matched += apps.len();
+            raw.extend(apps);
+        }
         // Typo-tolerant matches are a fallback: when some results contain every
         // word as an in-order subsequence (fzf-style), keep only those.
         let base = req.scope.as_deref();
@@ -1001,8 +1058,81 @@ impl Engine {
                 }
             }
         }
+        if dirs && items.len() < limit {
+            let words: Vec<String> = query
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_lowercase)
+                .collect();
+            let roots = self.roots();
+            let list = self.app_list();
+            let apps = list
+                .entries()
+                .iter()
+                .filter(|p| !roots.iter().any(|r| p.starts_with(r)))
+                .filter(|p| name_holds(p, &words))
+                .map(|p| IndexedItem {
+                    path: p.clone(),
+                    root: list.dir_of(p).unwrap_or(p).to_path_buf(),
+                    is_dir: true,
+                    size: 0,
+                    modified: 0,
+                });
+            items.extend(apps.take(limit - items.len()));
+        }
         items.truncate(limit);
         items
+    }
+
+    /// Sizes of the app bundles directly in `dir`, an app folder no root
+    /// covers, which the index can't add up, so the app folders show app
+    /// sizes as Finder does. The bundles come from the app list, so no other
+    /// folder is read. Each is walked once, bundles in parallel, and added up
+    /// again only when its modification time changes.
+    ///
+    /// # Returns
+    ///
+    /// Bytes in each bundle, by path; empty for any other folder
+    pub fn bundle_sizes(&self, dir: &Path) -> HashMap<PathBuf, u64> {
+        if self.roots().iter().any(|r| dir.starts_with(r)) {
+            return HashMap::new();
+        }
+        let list = self.app_list();
+        let bundles: Vec<(PathBuf, Option<SystemTime>)> = list
+            .apps()
+            .filter(|p| p.parent() == Some(dir))
+            .map(|p| {
+                let time = std::fs::metadata(p).and_then(|m| m.modified()).ok();
+                (p.clone(), time)
+            })
+            .collect();
+        let mut sizes = HashMap::with_capacity(bundles.len());
+        let mut todo = Vec::new();
+        {
+            let known = self.bundle_sizes.read().unwrap_or_else(|e| e.into_inner());
+            for (path, time) in bundles {
+                match known.get(&path) {
+                    Some((then, bytes)) if *then == time => {
+                        sizes.insert(path, *bytes);
+                    }
+                    _ => todo.push((path, time)),
+                }
+            }
+        }
+        let never = AtomicBool::new(false);
+        let added: Vec<(PathBuf, Option<SystemTime>, u64)> = todo
+            .into_par_iter()
+            .map(|(path, time)| {
+                let bytes = crate::info::folder_size(&path, &never).bytes;
+                (path, time, bytes)
+            })
+            .collect();
+        let mut known = self.bundle_sizes.write().unwrap_or_else(|e| e.into_inner());
+        for (path, time, bytes) in added {
+            sizes.insert(path.clone(), bytes);
+            known.insert(path, (time, bytes));
+        }
+        sizes
     }
 
     /// Folder sizes and git statuses for the items directly in `dir`, read
@@ -1278,10 +1408,71 @@ fn inside_package(path: &Path, scope: Option<&Path>) -> bool {
     })
 }
 
+/// The apps and app folders in `entries` (from an [`AppList`]) whose names
+/// hold every one of a query's fuzzy `words` in order. They're scored about
+/// as fff-search scores a folder by its name: 15 points a letter for a word
+/// found whole and 10 for one spread out, and none for a one-letter query,
+/// which fff-search doesn't score either. [`rerank`] adds the name bonuses.
+/// An app is one item wherever its folder is, as in Finder, so it's spared
+/// rerank's depth penalty; otherwise `/System/Applications/Utilities/
+/// Terminal.app` would lose to a file in home with the same name.
+fn app_hits(entries: &[PathBuf], words: &[String]) -> Vec<RawHit> {
+    let one_letter = matches!(words, [word] if word.chars().count() == 1);
+    entries
+        .iter()
+        .filter_map(|path| {
+            let name = display_name(path).to_lowercase();
+            if !words.iter().all(|w| is_subsequence(w, &name)) {
+                return None;
+            }
+            let matched: i32 = if one_letter {
+                0
+            } else {
+                words
+                    .iter()
+                    .map(|w| {
+                        let per_letter = if name.contains(w.as_str()) { 15 } else { 10 };
+                        w.chars().count() as i32 * per_letter
+                    })
+                    .sum()
+            };
+            let depth = path.components().count() as i32;
+            Some(RawHit::dir(path.clone(), matched + depth * DEPTH_PENALTY))
+        })
+        .collect()
+}
+
+/// Whether a search can find apps: one of every location, for folders,
+/// with `words` (its fuzzy words) and nothing else.
+fn wants_apps(req: &SearchRequest, words: &[String]) -> bool {
+    let kind = match req.kind {
+        KindFilter::Any => !req.files_only,
+        KindFilter::Folder => true,
+        KindFilter::Document
+        | KindFilter::Image
+        | KindFilter::Movie
+        | KindFilter::Audio
+        | KindFilter::Code
+        | KindFilter::Archive => false,
+    };
+    // Constraints such as `*.rs` or `!test` can't be checked on an app.
+    let constrained = req.query.split_whitespace().count() != words.len();
+    req.scope.is_none() && kind && !constrained && !words.is_empty()
+}
+
+/// Whether `path`'s name holds each of `words` (lowercase) in order.
+fn name_holds(path: &Path, words: &[String]) -> bool {
+    let name = display_name(path).to_lowercase();
+    words.iter().all(|w| is_subsequence(w, &name))
+}
+
 fn is_subsequence(needle: &str, haystack: &str) -> bool {
     let mut chars = haystack.chars();
     needle.chars().all(|c| chars.any(|h| h == c))
 }
+
+/// What [`rerank`] takes off for each folder in a hit's path.
+const DEPTH_PENALTY: i32 = 3;
 
 /// Finder-style ranking on top of fff's score: words found in the file
 /// name beat words found only in its folders, and shallower paths win ties.
@@ -1313,7 +1504,7 @@ fn rerank(hit: &RawHit, words: &[String]) -> i32 {
         bonus += 40;
     }
     let depth = hit.path.components().count() as i32;
-    hit.score + bonus - depth * 3
+    hit.score + bonus - depth * DEPTH_PENALTY
 }
 
 /// fff returns `/`-separated relative paths on every OS.
@@ -1486,6 +1677,7 @@ mod tests {
         std::fs::write(dir.join("Info.plist"), "<plist/>").unwrap();
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),
@@ -1541,6 +1733,7 @@ mod tests {
         std::fs::write(dir.join("top.txt"), "xx").unwrap();
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),
@@ -1574,6 +1767,7 @@ mod tests {
         std::fs::write(dir.join("inner/two.txt"), "123").unwrap();
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.clone(), dir.join("inner")],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),
@@ -1602,6 +1796,7 @@ mod tests {
         std::fs::write(dir.join("photo.png"), [0u8; 4]).unwrap();
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),
@@ -1658,6 +1853,110 @@ mod tests {
     }
 
     #[test]
+    fn finds_apps_without_indexing_them() {
+        let dir = std::env::temp_dir().join(format!("fff-apps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("Users/me");
+        let apps = dir.join("Applications");
+        for app in ["Safari.app/Contents", "Notes.app", "Utilities/Terminal.app"] {
+            std::fs::create_dir_all(apps.join(app)).unwrap();
+        }
+        std::fs::write(apps.join("Safari.app/Contents/Info.plist"), "plist").unwrap();
+        std::fs::create_dir_all(home.join("Documents")).unwrap();
+        for file in ["terminal-notes.txt", "Documents/safari-bookmarks.html"] {
+            std::fs::write(home.join(file), "x").unwrap();
+        }
+        let engine = Engine::new(EngineOptions {
+            roots: vec![home.clone()],
+            app_dirs: vec![apps.clone()],
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        let find = |query: &str, kind: KindFilter, files_only: bool| -> Vec<String> {
+            let req = SearchRequest {
+                query: query.into(),
+                kind,
+                files_only,
+                limit: 20,
+                ..Default::default()
+            };
+            engine
+                .search(&req)
+                .hits
+                .into_iter()
+                .map(|h| h.entry.name)
+                .collect()
+        };
+        let at = |names: &[String], name: &str| names.iter().position(|n| n == name);
+
+        let safari = find("safari", KindFilter::Any, false);
+        assert_eq!(safari[0], "Safari.app");
+        assert!(at(&safari, "safari-bookmarks.html").is_some());
+        assert!(at(&safari, "Info.plist").is_none());
+
+        let term = find("term", KindFilter::Any, false);
+        assert!(at(&term, "Terminal.app") < at(&term, "terminal-notes.txt"));
+        assert!(at(&term, "terminal-notes.txt").is_some());
+
+        assert_eq!(find("notes", KindFilter::Folder, false)[0], "Notes.app");
+        assert_eq!(find("utilities", KindFilter::Folder, false), ["Utilities"]);
+        assert!(at(&find("notes", KindFilter::Any, true), "Notes.app").is_none());
+        assert_eq!(
+            find("notes", KindFilter::Document, false),
+            ["terminal-notes.txt"]
+        );
+        assert!(at(&find("notes *.txt", KindFilter::Any, false), "Notes.app").is_none());
+        let scoped = engine.search(&SearchRequest {
+            query: "safari".into(),
+            scope: Some(home.clone()),
+            limit: 20,
+            ..Default::default()
+        });
+        assert!(scoped.hits.iter().all(|h| h.entry.name != "Safari.app"));
+
+        let sizes = engine.bundle_sizes(&apps);
+        assert_eq!(sizes.get(&apps.join("Safari.app")), Some(&5));
+        assert_eq!(sizes.get(&apps.join("Notes.app")), Some(&0));
+        assert!(!sizes.contains_key(&apps.join("Utilities")));
+        assert!(engine.bundle_sizes(&home).is_empty());
+
+        let listed = engine.list(true, Some("safari"), 0);
+        let app = listed.iter().find(|i| i.path == apps.join("Safari.app"));
+        assert_eq!(app.map(|i| i.root.as_path()), Some(apps.as_path()));
+
+        // A new app is found on the next search; folder times can be coarse.
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::create_dir_all(apps.join("Utilities/Console.app")).unwrap();
+        assert_eq!(find("console", KindFilter::Any, false), ["Console.app"]);
+
+        engine.set_app_dirs(&[]);
+        assert!(at(&find("safari", KindFilter::Any, false), "Safari.app").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn one_letter_app_hits_dont_flood() {
+        let entries: Vec<PathBuf> = ["/Applications/Safari.app", "/System/Applications/Notes.app"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        let words = vec!["s".to_string()];
+        // fff-search scores one-letter matches 0, as `search_root` asks it.
+        let mut hits = app_hits(&entries, &words);
+        for file in ["/Users/me/s.txt", "/Users/me/Documents/sketch.txt"] {
+            hits.push(RawHit::file(file.into(), 1, 0, None, 0));
+        }
+        for hit in &mut hits {
+            hit.score = rerank(hit, &words);
+        }
+        hits.sort_by_key(|h| std::cmp::Reverse(h.score));
+        let names: Vec<String> = hits.iter().map(|h| display_name(&h.path)).collect();
+        assert_eq!(names, ["s.txt", "Safari.app", "sketch.txt", "Notes.app"]);
+    }
+
+    #[test]
     fn search_settings_change_content_search() {
         let dir = std::env::temp_dir().join(format!("fff-settings-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1669,6 +1968,7 @@ mod tests {
         std::fs::write(dir.join("big.txt"), big).unwrap();
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),

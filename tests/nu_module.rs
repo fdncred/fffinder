@@ -71,6 +71,7 @@ fn fff_nu_commands_talk_to_the_window() {
     let data = fx.dir.join("data");
     let engine: Arc<Engine> = Engine::new(EngineOptions {
         roots: vec![tree.clone()],
+        app_dirs: Vec::new(),
         db_dir: None,
         watch: false,
         search: Default::default(),

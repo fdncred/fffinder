@@ -1,6 +1,6 @@
 //! Search scope bar, path bar, status bar, and the picker's choose bar.
 
-use super::{Finder, SearchScope, group_digits};
+use super::{Finder, IndexActivity, SearchScope, group_digits};
 use crate::actions::*;
 use crate::model::Location;
 use crate::theme::palette;
@@ -318,8 +318,12 @@ impl Finder {
             });
         // The sidebar footer shows indexing progress when it is visible.
         let indexing = self
-            .indexing_progress()
-            .filter(|_| !self.config.show_sidebar);
+            .index_activity()
+            .filter(|_| !self.config.show_sidebar)
+            .map(|activity| match activity {
+                IndexActivity::Scanning(n) => format!("Indexing {} files…", group_digits(n)),
+                IndexActivity::Finishing => "Finishing index…".to_string(),
+            });
         let icons = self.effective_view() == ViewMode::Icons;
         let fps = self.fps.as_ref().and_then(|meter| meter.fps());
         h_flex()
@@ -348,12 +352,12 @@ impl Finder {
             .when(self.searching || self.is_filtering(), |this| {
                 this.child(Spinner::new().xsmall().color(muted))
             })
-            .when_some(indexing, |this, n| {
+            .when_some(indexing, |this, label| {
                 this.child(
                     h_flex()
                         .gap(ui(6.))
                         .child(Spinner::new().xsmall().color(muted))
-                        .child(format!("Indexing {} files…", group_digits(n))),
+                        .child(label),
                 )
             })
             .child(div().flex_1())

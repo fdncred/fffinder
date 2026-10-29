@@ -6,6 +6,7 @@ use crate::model::Location;
 use crate::theme::ui;
 use fffinder_core::terminals::{self, CUSTOM, Platform, Terminal};
 use fffinder_core::{Appearance, FileEntry, SearchCase, config};
+use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -354,6 +355,7 @@ impl Finder {
             let muted = theme.muted_foreground;
             let border = theme.border;
             let roots = finder.config.search_roots.clone();
+            let search_apps = finder.config.search_apps;
             let status = finder.index_status.clone();
             let appearance = finder.config.appearance;
             let hidden = finder.config.show_hidden;
@@ -368,6 +370,8 @@ impl Finder {
                 let files = status.iter().find(|s| &s.path == root).map(|s| {
                     if s.scanning {
                         format!("indexing… {}", group_digits(s.indexed_files))
+                    } else if s.finishing {
+                        format!("{} files, finishing…", group_digits(s.indexed_files))
                     } else {
                         format!("{} files", group_digits(s.indexed_files))
                     }
@@ -397,12 +401,36 @@ impl Finder {
                 );
             }
             if roots.is_empty() {
+                let finds = if cfg!(target_os = "macos") && search_apps { "find only apps" } else { "return nothing" };
                 root_list = root_list.child(
                     div()
                         .p(ui(10.))
                         .text_size(ui(12.))
                         .text_color(muted)
-                        .child("No folders are indexed. “This Computer” searches return nothing."),
+                        .child(format!("No folders are indexed. “This Computer” searches {finds}.")),
+                );
+            }
+            // Apps are read from their folders, so they need no index.
+            if cfg!(target_os = "macos") {
+                root_list = root_list.child(
+                    h_flex()
+                        .px(ui(10.))
+                        .py(ui(6.))
+                        .gap(ui(8.))
+                        .border_t_1()
+                        .border_color(border)
+                        .child(Icon::new(Lucide::AppWindow).with_size(ui(15.)).text_color(theme.primary))
+                        .child(div().flex_1().truncate().text_size(ui(12.)).child("Applications"))
+                        .child(div().text_size(ui(11.)).text_color(muted).child("apps by name, not indexed"))
+                        .child(
+                            Switch::new("search-apps")
+                                .small()
+                                .checked(search_apps)
+                                .tooltip("Find apps in the app folders by name")
+                                .on_change(window.listener_for(&view, |this: &mut Finder, on: &bool, _, cx| {
+                                    this.set_search_apps(*on, cx)
+                                })),
+                        ),
                 );
             }
 
@@ -444,7 +472,8 @@ impl Finder {
                                 })
                                 .child(Button::new("reset-roots").small().ghost().label("Reset").on_click(
                                     window.listener_for(&view, |this: &mut Finder, _: &ClickEvent, _, cx| {
-                                        this.set_search_roots(config::default_search_roots(), cx)
+                                        this.set_search_roots(config::default_search_roots(), cx);
+                                        this.set_search_apps(fffinder_core::Config::default().search_apps, cx);
                                     }),
                                 ))
                                 .child(div().flex_1())

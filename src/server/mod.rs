@@ -347,11 +347,13 @@ fn status(engine: &Engine) -> Answer {
         "pid": std::process::id(),
         "watch": true,
         "scanning": roots.iter().any(|r| r.scanning),
+        "finishing": roots.iter().any(|r| r.finishing),
         "files": roots.iter().map(|r| r.indexed_files).sum::<usize>(),
         "dirs": roots.iter().map(|r| r.indexed_dirs).sum::<usize>(),
         "roots": roots.iter().map(|r| json!({
             "path": r.path,
             "scanning": r.scanning,
+            "finishing": r.finishing,
             "files": r.indexed_files,
             "dirs": r.indexed_dirs,
             "git_repo": r.git_repo,

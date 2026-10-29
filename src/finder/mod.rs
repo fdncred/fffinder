@@ -175,6 +175,32 @@ pub struct ColumnPane {
     pub scroll: UniformListScrollHandle,
 }
 
+/// What the index is doing, for the sidebar footer and the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexActivity {
+    /// Some location is scanning; the files found so far, across all of them.
+    Scanning(usize),
+    /// Every location is scanned and searchable, but fff-search still reads
+    /// files in some to flag binaries, which keeps the CPU busy.
+    Finishing,
+}
+
+impl IndexActivity {
+    /// `None` once every location is idle. A scan anywhere wins, since its
+    /// results aren't complete yet.
+    pub fn of(status: &[RootStatus]) -> Option<IndexActivity> {
+        if status.iter().any(|s| s.scanning) {
+            Some(IndexActivity::Scanning(
+                status.iter().map(|s| s.indexed_files).sum(),
+            ))
+        } else if status.iter().any(|s| s.finishing) {
+            Some(IndexActivity::Finishing)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SearchStats {
     pub elapsed: Duration,
@@ -1231,7 +1257,9 @@ impl Finder {
                             this.reload_folder_stats(cx);
                         }
                         cx.notify();
-                        scanning
+                        // Keep polling while fff-search finishes, so the
+                        // footer stops saying so when it's done.
+                        scanning || this.index_status.iter().any(|s| s.finishing)
                     })
                     .unwrap_or(false);
                 if !keep_going {
@@ -1241,11 +1269,17 @@ impl Finder {
         });
     }
 
+    /// What the index is doing now, as of the last status poll.
+    pub fn index_activity(&self) -> Option<IndexActivity> {
+        IndexActivity::of(&self.index_status)
+    }
+
+    /// Files found so far while some location is scanning.
     pub fn indexing_progress(&self) -> Option<usize> {
-        self.index_status
-            .iter()
-            .any(|s| s.scanning)
-            .then(|| self.index_status.iter().map(|s| s.indexed_files).sum())
+        match self.index_activity()? {
+            IndexActivity::Scanning(n) => Some(n),
+            IndexActivity::Finishing => None,
+        }
     }
 
     pub fn indexed_files(&self) -> usize {
@@ -1262,6 +1296,18 @@ impl Finder {
                 .await;
             this.update(cx, |this, cx| this.poll_index_status(cx)).ok();
         });
+        cx.notify();
+    }
+
+    /// Find apps by name from the app folders in "This Computer" searches,
+    /// or stop.
+    pub fn set_search_apps(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.config.search_apps = on;
+        self.schedule_save(cx);
+        self.engine.set_app_dirs(&self.config.app_dirs());
+        if self.is_searching() {
+            self.run_search(false, cx);
+        }
         cx.notify();
     }
 
@@ -2734,4 +2780,39 @@ pub fn group_digits(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: GPUI's `test` attribute would replace the standard one.
+    use super::IndexActivity;
+    use fffinder_core::RootStatus;
+    use std::path::PathBuf;
+
+    fn root(scanning: bool, finishing: bool, files: usize) -> RootStatus {
+        RootStatus {
+            path: PathBuf::from("/r"),
+            scanning,
+            finishing,
+            indexed_files: files,
+            indexed_dirs: 0,
+            git_repo: false,
+        }
+    }
+
+    #[test]
+    fn index_activity_prefers_scanning() {
+        let scanning = [root(true, false, 5), root(false, true, 7)];
+        assert_eq!(
+            IndexActivity::of(&scanning),
+            Some(IndexActivity::Scanning(12))
+        );
+        let finishing = [root(false, false, 5), root(false, true, 7)];
+        assert_eq!(
+            IndexActivity::of(&finishing),
+            Some(IndexActivity::Finishing)
+        );
+        assert_eq!(IndexActivity::of(&[root(false, false, 5)]), None);
+        assert_eq!(IndexActivity::of(&[]), None);
+    }
 }

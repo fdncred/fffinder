@@ -10,7 +10,7 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 
 ## What it does
 
-- Indexes your home folder (and `/Applications` on macOS) in the background and keeps the index live. On the development Mac that's about 670,000 files in 4 to 6 seconds, and a search over all of them returns in 30 to 110 ms.
+- Indexes your home folder in the background and keeps the index live, and on macOS finds apps by reading the app folders instead of indexing them. On the development Mac that's about 310,000 files in 3 seconds, and a search over all of them returns in 25 to 35 ms.
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
 - Browses folders as icons, a list, columns, or a gallery, with a sidebar, tabs, a split view with F5 to copy and F6 to move between panes, back and forward history, and a clickable path bar. The list and icon views can show items in collapsible groups by kind, date, size, or name. The list opens folders in place and has a column chooser (dates created and last opened, permissions, git status), resizable and movable columns, Keep Folders on Top, and folder sizes added up from the index.
 - Previews files in the gallery, the column view, and Quick Look (Space): syntax-highlighted code, rendered Markdown, fonts, archive contents, media durations, PDFs you can scroll through and zoom, and the system's thumbnails of PDFs, videos, and documents (QuickLook, Explorer's, or the desktop's thumbnailers), which also show in the icon view. CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
@@ -85,7 +85,7 @@ To build from source, you need Rust 1.92 or newer and Nushell 0.116, plus:
 [Building](docs/manual.md#building) in the manual has the Fedora and Arch packages, and covers WSL2 and virtual machines without a GPU.
 
 ```nu
-nu scripts/install.nu            # release build into ~/.cargo/bin, or --dest ~/bin
+nu scripts/install.nu            # release build into ~/.cargo/bin, or --dest ~/bin; on Linux also the desktop entry
 nu scripts/install.nu --term     # also `fffinder --term`, the window inside a terminal
 nu scripts/bundle.nu             # or package it: dist/fffinder.app on macOS, a .desktop folder on Linux
 nu scripts/bundle.nu --install   # Linux: also install the desktop entry

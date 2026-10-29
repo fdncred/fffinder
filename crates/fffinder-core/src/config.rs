@@ -22,6 +22,9 @@ pub const FONT_SIZE_RANGE: (f32, f32) = (8.0, 32.0);
 pub const UI_SCALE_RANGE: (f32, f32) = (0.8, 2.0);
 /// The app's earlier name. Its folders are moved on first start.
 const LEGACY_NAME: &str = "fff-Finder";
+/// What [`Config::settings_version`] is once [`Config::load_from`] has
+/// brought older settings up to date.
+pub const SETTINGS_VERSION: u32 = 1;
 
 /// The environment variable `name` (`FFFINDER_…`), or the same variable under
 /// the earlier name (`FFF_FINDER_…`). Empty counts as unset.
@@ -158,6 +161,9 @@ pub enum Appearance {
 pub struct Config {
     /// Folders indexed for "This Computer" searches.
     pub search_roots: Vec<PathBuf>,
+    /// Find apps by name in "This Computer" searches by reading the app
+    /// folders, without indexing them (macOS).
+    pub search_apps: bool,
     /// Sidebar favorites, in display order.
     pub favorites: Vec<PathBuf>,
     pub show_hidden: bool,
@@ -204,12 +210,17 @@ pub struct Config {
     /// Path to `nu`; `None` searches `PATH`.
     pub nu_path: Option<PathBuf>,
     pub last_folder: Option<PathBuf>,
+    /// The one-time changes made to these settings so far; a file without
+    /// it predates them, so it reads as 0 rather than the current version.
+    #[serde(default)]
+    pub settings_version: u32,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             search_roots: default_search_roots(),
+            search_apps: cfg!(target_os = "macos"),
             favorites: crate::places::default_favorites()
                 .into_iter()
                 .map(|p| p.path)
@@ -238,6 +249,7 @@ impl Default for Config {
             terminal: None,
             nu_path: None,
             last_folder: None,
+            settings_version: SETTINGS_VERSION,
         }
     }
 }
@@ -335,15 +347,9 @@ pub fn in_range(value: f32, (min, max): (f32, f32), default: f32) -> f32 {
     }
 }
 
-/// Home, plus the system application folder on macOS.
+/// Home. Apps come from [`Config::search_apps`] instead of an index.
 pub fn default_search_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home);
-    }
-    #[cfg(target_os = "macos")]
-    roots.push(PathBuf::from("/Applications"));
-    roots
+    dirs::home_dir().into_iter().collect()
 }
 
 /// Settings directory; `FFFINDER_CONFIG_DIR` overrides it (used by tests).
@@ -416,7 +422,39 @@ impl Config {
                     command: Some(command),
                 });
         }
+        if config.upgrade()
+            && let Err(err) = config.save_to(path)
+        {
+            log::warn!("saving upgraded settings to {}: {err}", path.display());
+        }
         config
+    }
+
+    /// Make the one-time changes older settings are missing. Returns whether
+    /// there were any, so they can be saved and never made again.
+    fn upgrade(&mut self) -> bool {
+        if self.settings_version >= SETTINGS_VERSION {
+            return false;
+        }
+        // Version 1: apps are read from the app folders, so the index of
+        // `/Applications`, mostly files inside bundles, goes. Someone who
+        // adds it back later keeps it.
+        if cfg!(target_os = "macos") {
+            self.search_roots
+                .retain(|root| root != Path::new("/Applications"));
+        }
+        self.settings_version = SETTINGS_VERSION;
+        true
+    }
+
+    /// The folders apps are read from: [`crate::app_list::app_dirs`] when
+    /// [`Self::search_apps`] is on, else none.
+    pub fn app_dirs(&self) -> Vec<PathBuf> {
+        if self.search_apps {
+            crate::app_list::app_dirs()
+        } else {
+            Vec::new()
+        }
     }
 
     /// The preview text size, kept readable even if the file was edited by hand.
@@ -501,6 +539,37 @@ mod tests {
         );
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn upgrades_old_settings_once() {
+        let path = std::env::temp_dir().join(format!("fffinder-cfg4-{}.json", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{"search_roots": ["/Users/me", "/Applications"], "show_hidden": true}"#,
+        )
+        .unwrap();
+
+        let cfg = Config::load_from(&path);
+        let mut roots = vec![PathBuf::from("/Users/me")];
+        if !cfg!(target_os = "macos") {
+            roots.push(PathBuf::from("/Applications"));
+        }
+        assert_eq!(cfg.search_roots, roots);
+        assert_eq!(cfg.search_apps, cfg!(target_os = "macos"));
+        assert_eq!(cfg.settings_version, SETTINGS_VERSION);
+        assert!(cfg.show_hidden);
+        // Saved, so the next load reads the same.
+        assert_eq!(Config::load_from(&path), cfg);
+
+        // `/Applications` added back after the upgrade stays.
+        let added = Config {
+            search_roots: vec!["/Applications".into()],
+            ..Config::default()
+        };
+        added.save_to(&path).unwrap();
+        assert_eq!(Config::load_from(&path), added);
         std::fs::remove_file(path).unwrap();
     }
 

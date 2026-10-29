@@ -99,6 +99,7 @@ fn main() {
     let config = Config::load();
     let engine = Engine::new(EngineOptions {
         roots: config.search_roots.clone(),
+        app_dirs: config.app_dirs(),
         db_dir: None,
         watch: false,
         search: Default::default(),

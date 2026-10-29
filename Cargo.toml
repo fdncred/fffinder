@@ -86,6 +86,9 @@ ttf-parser = "0.25"
 lscolors = { version = "0.21", default-features = false }
 # PDF previews: the pixel buffer GPUI takes drawn pages in.
 image = { version = "0.25", default-features = false }
+# The app icon drawn at run time for the macOS Dock and X11 windows; GPUI
+# already builds it to draw SVGs.
+resvg = { version = "0.46", default-features = false }
 # `term` feature: terminal input and raw mode, frames as kitty graphics escape
 # codes, putting the terminal back at exit, and the types GPUI's platform
 # traits are written in.

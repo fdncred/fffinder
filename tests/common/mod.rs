@@ -161,6 +161,7 @@ impl<'a> Ui<'a> {
         let _guard = StepGuard::new(format!("open {}", dir.display()));
         let engine = Engine::new(EngineOptions {
             roots: vec![dir.to_path_buf()],
+            app_dirs: Vec::new(),
             db_dir: None,
             watch: false,
             search: Default::default(),
