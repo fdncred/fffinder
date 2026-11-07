@@ -51,6 +51,8 @@ impl Finder {
     /// Move items to the Trash now; Undo puts them back. An item inside
     /// another one being trashed goes with it.
     pub fn trash_now(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        // These may have been dropped on the Trash, which ends a drag.
+        self.spring_folder = None;
         if self.wait_for_undo(window, cx) {
             return;
         }

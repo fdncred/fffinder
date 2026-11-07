@@ -284,6 +284,77 @@ fn favorites_drag_into_another_order(cx: &mut TestAppContext) {
     assert_eq!(ui.folder(), Some(projects));
 }
 
+// ----- holding a drag over a folder ------------------------------------------------------
+
+#[gpui_kit::test]
+fn holding_a_drag_over_a_folder_opens_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("spring");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let file = ui
+        .snapshot(item_id("name-cell", &fx.path("notes.txt")))
+        .bounds();
+    let folder = ui.snapshot(item_id("row", &fx.path("Projects"))).bounds();
+
+    ui.drag_and_hold(file.center(), folder.center());
+    ui.settle();
+    assert_eq!(ui.folder(), Some(fx.path("Projects")), "the folder opened");
+
+    // The drag is still going, and it can go on into the next one down.
+    let atlas = ui
+        .snapshot(item_id("row", &fx.path("Projects/atlas")))
+        .bounds();
+    let moved = atlas.center();
+    ui.window(|window, cx| {
+        use gpui_kit::InputEvent as _;
+        window.dispatch_event(
+            gpui_kit::MouseMoveEvent {
+                position: moved,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    ui.settle();
+    ui.settle();
+    assert_eq!(ui.folder(), Some(fx.path("Projects/atlas")));
+
+    // Letting go puts the item in the folder that opened.
+    let content = ui.snapshot("content").bounds();
+    ui.release(content.center());
+    assert!(fx.path("Projects/atlas/notes.txt").exists());
+    assert!(!fx.path("notes.txt").exists());
+}
+
+#[gpui_kit::test]
+fn a_quick_drag_past_a_folder_leaves_it_closed(cx: &mut TestAppContext) {
+    let fx = Fixture::new("spring-past");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let file = ui
+        .snapshot(item_id("name-cell", &fx.path("notes.txt")))
+        .bounds();
+    let folder = ui.snapshot(item_id("row", &fx.path("Projects"))).bounds();
+
+    // Letting go before the delay drops it on the folder, without opening it.
+    ui.drag_points(file.center(), folder.center(), Modifiers::none());
+
+    assert_eq!(ui.folder(), Some(fx.dir.clone()));
+    assert!(fx.path("Projects/notes.txt").exists());
+
+    // And it stays closed, even if another drag starts before the delay ends.
+    let budget = ui
+        .snapshot(item_id("name-cell", &fx.path("Budget.csv")))
+        .bounds();
+    let empty = point(budget.center().x, budget.bottom() + px(200.));
+    ui.drag_and_hold(budget.center(), empty);
+    ui.settle();
+    assert_eq!(ui.folder(), Some(fx.dir.clone()));
+    ui.release(empty);
+}
+
 // ----- the path bar --------------------------------------------------------------------
 
 #[gpui_kit::test]

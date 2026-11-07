@@ -198,7 +198,7 @@ The footer shows "N files indexed", or "Indexing… N" with a spinner while scan
 
 ## Views
 
-Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. A folder opens in the view and sort last chosen in it, and a folder with none takes what was chosen last anywhere. To have one view for every folder, turn off Settings › Remember each folder's view; the view then stays as it is when you move between folders. Search results, Recents, and the Trash keep the view of the folder you came from. fffinder remembers the last 2000 folders.
+Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. A folder opens in the view and sort last chosen in it, and a folder with none keeps the view you're in. To have the view stay as it is wherever you go, turn off Settings › Remember each folder's view. Search results, Recents, and the Trash keep the view of the folder you came from. fffinder remembers the last 2000 folders.
 
 - **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
 - **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. Columns can be dragged wider or narrower, and the list scrolls sideways when they don't all fit. See [The list view](#the-list-view).
@@ -542,6 +542,7 @@ On macOS, fffinder moves items to the Trash itself, as most Mac apps do, so macO
 
 - Drag items onto a folder in any view, a column, a place in the sidebar (Favorites and Locations), or a crumb in the path bar to move them there. In the list view, drag them by the Name column; the other columns select with a box. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder, even when only some of the items are on another volume.
 - Drag items onto empty space in a folder to move them into the folder shown.
+- Hold dragged items over a folder, a sidebar place, or a path bar crumb for a moment and it opens, with the drag still going, so you can go on down and let go where you want them.
 - Drop files from other apps on a folder, a column, a sidebar place, or the file area to copy them in.
 - Name clashes ask first, and long transfers show progress. See [Copying and moving](#copying-and-moving).
 - Drag items from any view to another app to hand it the files. This works on macOS and Wayland; GPUI doesn't support dragging out on Windows or X11.

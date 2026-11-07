@@ -283,6 +283,7 @@ impl Finder {
         let view = cx.entity();
         let el = if row.entry.is_navigable() {
             let folder = Location::Folder(row.entry.path.clone());
+            let el = super::transfer::spring_loaded(el, row.entry.path.clone(), cx);
             super::transfer::folder_drop_target(el, row.entry.path.clone(), cx).on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -1119,6 +1120,7 @@ impl Finder {
             )
             .when(entry.is_navigable(), |row| {
                 let folder = Location::Folder(entry.path.clone());
+                let row = super::transfer::spring_loaded(row, entry.path.clone(), cx);
                 super::transfer::folder_drop_target(row, entry.path.clone(), cx).on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {

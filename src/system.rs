@@ -323,7 +323,17 @@ pub fn clipboard_is_cut(cx: &App) -> bool {
         return false;
     };
     let files = clipboard_files(cx);
-    !files.is_empty() && files.iter().all(|path| cut.contains(path))
+    if files.is_empty() {
+        return false;
+    }
+    if files.iter().all(|path| cut.contains(path)) {
+        return true;
+    }
+    // The system may hand a path back in another form, such as through a
+    // link in one of its folders, so compare where they really lead.
+    let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+    let cut: HashSet<PathBuf> = cut.iter().map(real).collect();
+    files.iter().all(|path| cut.contains(&real(path)))
 }
 
 /// Whether the item at `path` was cut and hasn't been pasted yet.

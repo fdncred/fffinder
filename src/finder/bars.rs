@@ -268,6 +268,7 @@ impl Finder {
                     continue;
                 }
                 let folder = Location::Folder(menu_path.clone());
+                let crumb = super::transfer::spring_loaded(crumb, menu_path.clone(), cx);
                 let crumb = super::transfer::folder_drop_target(crumb, menu_path.clone(), cx)
                     .on_mouse_down(MouseButton::Middle, {
                         let folder = folder.clone();

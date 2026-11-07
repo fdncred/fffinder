@@ -4,6 +4,8 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+fffinder now does what people reach for without thinking: columns you can resize, a box to drag around items, renaming in place, cut and paste, and windows that remember where they were. Unless a line says otherwise, each feature works on macOS, Linux, and Windows. Shortcuts are written as on macOS; on Linux and Windows, Cmd is Ctrl.
+
 ### Changed
 
 - Tabs and windows now share settings as they change: hidden files, Keep Folders on Top, columns and widths, the sidebar, favorites, Smart Folders, appearance, and text sizes. Each tab or pane keeps its own view, sort, groups, icon size, and search kind, and a new tab or window starts with the latest of those.
@@ -15,32 +17,47 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ### Added
 
-- The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
+#### Columns and text that doesn't fit
+
 - Every list column can be resized now, including Name and the Folder column in search results, and each header shows a line to grab. Double-click the line to fit the column to its longest text. When columns are wider than the window, the list scrolls sideways.
 - Text that's cut off shows in full in a tooltip when you rest the mouse on it: list cells and headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. File names and folder paths are cut in the middle, so the extension stays visible.
-- Rename edits the name in place in the list, icon, and column views, with the part before the extension selected. Return or clicking elsewhere keeps it, and Escape cancels. New Folder names the folder the same way. The gallery still asks in a dialog.
-- Cmd+X cuts the selected items, on Linux and Windows Ctrl+X, and Cmd+V then moves them. They look faint until they're pasted, and Escape cancels. Edit › Cut and the item menu have it too.
-- Drag a Favorites row onto another to reorder them.
-- A preview pane beside the list and icon views (Cmd+Shift+P, or View › Toggle Preview Pane). It follows the selection and resizes from its left edge.
-- The status bar adds up the selected items: "2 of 12 selected (1.4 MB)".
-- Go to Folder lists the items that match as you type. Tab finishes the path, and clicking a match fills it in.
-- A folder opens in the view and sort last chosen in it, and a folder with none takes what was chosen last anywhere. Settings › Remember each folder's view turns this off.
-- Search results and Recents can sort by folder: click the Folder header.
 - The column view's panes and the sidebar can be resized by dragging their edges, and their widths are saved.
-- Windows reopen at the place and size they last had.
+- Search results and Recents can sort by folder: click the Folder header.
+
+#### Selecting and moving around
+
 - Drag in empty space to select with a box in the icon and list views. In the list, drag from any column but Name. The view scrolls when the mouse goes past its edge, and Cmd or Shift adds to the selection.
-- Open in New Tab and Open in New Window, in the menus of folders, sidebar rows, and path bar crumbs. Middle-click, Cmd+double-click on a folder, and Cmd+click on a sidebar row open a new tab too.
-- The back and forward buttons on a mouse go back and forward.
 - Page Up and Page Down move through the list, icon, and column views. Shift extends the selection with them and with Home and End.
-- Drop items on a path bar crumb to move them there, and right-click a crumb for its menu.
-- The empty-space menu has Select All, View, and Sort By.
+- The next item is selected after Move to Trash and Delete Immediately.
+- The status bar adds up the selected items: "2 of 12 selected (1.4 MB)".
+- The back and forward buttons on a mouse go back and forward.
+- Go to Folder lists the items that match as you type. Tab finishes the path, and clicking a match fills it in.
 - F5 refreshes outside split view, and Alt+Up goes to the enclosing folder. On Linux and Windows, Ctrl+L is Go to Folder, Alt+Enter is Get Info, and Shift+Delete is Delete Immediately.
+
+#### Working with files
+
+- Rename edits the name in place in the list, icon, and column views, with the part before the extension selected. Return or clicking elsewhere keeps it, and Escape cancels. New Folder names the folder the same way. The gallery still asks in a dialog.
+- Cmd+X cuts the selected items, and Cmd+V then moves them. They look faint until they're pasted, and Escape cancels. Edit › Cut and the item menu have it too.
+- Hold dragged items over a folder, a sidebar place, or a path bar crumb for a moment and it opens, with the drag still going.
+- Drop items on a path bar crumb to move them there, and right-click a crumb for its menu.
+
+#### Windows, tabs, and the sidebar
+
+- Windows reopen at the place and size they last had.
+- A preview pane beside the list and icon views (Cmd+Shift+P, or View › Toggle Preview Pane). It follows the selection and resizes from its left edge.
+- A folder opens in the view and sort last chosen in it, and a folder with none keeps the view you're in. Settings › Remember each folder's view turns this off.
+- Open in New Tab and Open in New Window, in the menus of folders, sidebar rows, and path bar crumbs. Middle-click, Cmd+double-click on a folder, and Cmd+click on a sidebar row open a new tab too.
+- Drag a Favorites row onto another to reorder them.
+- The empty-space menu has Select All, View, and Sort By.
+
+#### Indexing
+
+- The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
 
 ### Fixed
 
 - The search field ran off the right side of the window at larger text sizes and in narrow windows. The toolbar now measures its room and folds controls as it runs out: the folder search button goes first, then the view buttons become one menu, then the Nushell and Sort menus move into the Actions menu.
 - The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name gives way instead, down to its smallest size.
-- The next item is selected after Move to Trash and Delete Immediately, instead of nothing.
 - Icon view names cut off at two lines now end in an ellipsis.
 - Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too.
 - The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.

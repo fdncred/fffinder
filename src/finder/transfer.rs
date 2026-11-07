@@ -5,6 +5,7 @@
 use super::Finder;
 use super::views::DraggedFiles;
 use crate::actions::MoveItemsHere;
+use crate::model::Location;
 use crate::theme::ui;
 use crate::undo::{self, Change};
 use fffinder_core::entry::display_name;
@@ -19,6 +20,9 @@ use gpui_kit::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// How long dragged items wait over a folder before it opens.
+const SPRING_DELAY: Duration = Duration::from_millis(700);
 
 /// A transfer only gets a progress row once it has run this long.
 const SHOW_AFTER: Duration = Duration::from_millis(300);
@@ -177,11 +181,49 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The drag is over, so no folder it was held over should open now.
+        self.spring_folder = None;
         let copy = !from_here
             || copy_modifier(window.modifiers())
             || paths.iter().any(|p| !ops::same_volume(p, &dest));
         let mode = if copy { Mode::Copy } else { Mode::Move };
         self.start_transfer(paths, dest, mode, window, cx);
+    }
+
+    /// Dragged items are over the folder at `folder`, or have left it. If
+    /// they stay long enough, the folder opens with the drag still going.
+    fn drag_over_folder(
+        &mut self,
+        folder: &Path,
+        over: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting = self
+            .spring_folder
+            .as_ref()
+            .is_some_and(|(path, _)| path == folder);
+        if !over {
+            if waiting {
+                self.spring_folder = None;
+            }
+            return;
+        }
+        if waiting || self.current_folder() == Some(folder) {
+            return;
+        }
+        let target = folder.to_path_buf();
+        let opens = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SPRING_DELAY).await;
+            this.update_in(cx, |this, window, cx| {
+                this.spring_folder = None;
+                if cx.has_active_drag() {
+                    this.navigate(Location::Folder(target), window, cx);
+                }
+            })
+            .ok();
+        });
+        self.spring_folder = Some((folder.to_path_buf(), opens));
     }
 
     /// Check a transfer, ask about name clashes, then start it.
@@ -533,6 +575,30 @@ pub(super) fn copy_modifier(modifiers: Modifiers) -> bool {
 
 /// Make a folder's row or tile take dropped files: dragged items move into
 /// it, and files from other apps are copied in.
+/// Holding dragged items over `el`, which shows the folder at `folder`, opens
+/// that folder after a moment, so they can go on down into it.
+pub(super) fn spring_loaded<E: InteractiveElement>(
+    el: E,
+    folder: PathBuf,
+    cx: &mut Context<Finder>,
+) -> E {
+    let external = folder.clone();
+    el.on_drag_move(cx.listener(
+        move |this, event: &DragMoveEvent<DraggedFiles>, window, cx| {
+            // A folder can't be dragged into itself.
+            let over =
+                event.bounds.contains(&event.event.position) && !event.drag(cx).0.contains(&folder);
+            this.drag_over_folder(&folder, over, window, cx);
+        },
+    ))
+    .on_drag_move(cx.listener(
+        move |this, event: &DragMoveEvent<ExternalPaths>, window, cx| {
+            let over = event.bounds.contains(&event.event.position);
+            this.drag_over_folder(&external, over, window, cx);
+        },
+    ))
+}
+
 pub(super) fn folder_drop_target<E: InteractiveElement>(
     el: E,
     dest: PathBuf,

@@ -182,9 +182,26 @@ fn a_folder_opens_in_the_view_chosen_in_it(cx: &mut TestAppContext) {
     ui.press(&cmd("["));
     assert_eq!(view(&ui), ViewMode::Icons, "Back too");
 
-    // A folder with no choice of its own takes the last one made.
+    // A folder with no choice of its own keeps the view it was opened from.
+    ui.go_to(&fx.path("Projects"));
     ui.go_to(&fx.path("Projects/atlas"));
-    assert_eq!(view(&ui), ViewMode::Icons);
+    assert_eq!(view(&ui), ViewMode::List);
+}
+
+#[gpui_kit::test]
+fn another_tabs_choice_leaves_a_new_folder_alone(cx: &mut TestAppContext) {
+    let fx = Fixture::new("folder-view-tabs");
+    let mut ui = with_tabs(cx, &fx.dir);
+    ui.click("view-list");
+    ui.press(&cmd("t"));
+
+    // The second tab picks icons, and the first goes somewhere new.
+    show_tab(&mut ui, 1);
+    ui.click("view-icons");
+    show_tab(&mut ui, 0);
+    ui.go_to(&fx.path("Projects"));
+
+    assert_eq!(ui.read(|f| f.config().view_mode), ViewMode::List);
 }
 
 #[gpui_kit::test]

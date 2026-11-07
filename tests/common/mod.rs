@@ -512,6 +512,23 @@ impl<'a> Ui<'a> {
         });
     }
 
+    /// Let go of the left button at `position`.
+    pub fn release(&mut self, position: Point<Pixels>) {
+        self.step(format!("let go at {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
     /// Right-click at `position`.
     pub fn right_click_point(&mut self, position: Point<Pixels>) {
         self.step(format!("right-click {position:?}"), |window, cx| {

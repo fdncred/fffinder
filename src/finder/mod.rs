@@ -351,6 +351,8 @@ pub struct Finder {
     children: HashMap<PathBuf, Vec<FileEntry>>,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
+    /// The folder dragged items are waiting over, and what opens it.
+    spring_folder: Option<(PathBuf, Task<()>)>,
     /// The name being edited in place.
     renaming: Option<inline_rename::InlineRename>,
     /// How wide the toolbar was last drawn, which decides what fits in it.
@@ -554,6 +556,7 @@ impl Finder {
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
+            spring_folder: None,
             renaming: None,
             // Wide until it's measured, so a first frame doesn't fold anything.
             toolbar_width: px(f32::MAX),
@@ -812,6 +815,7 @@ impl Finder {
         self.selection.clear();
         self.marquee = None;
         self.renaming = None;
+        self.spring_folder = None;
         self.show_folder_view(cx);
         self.columns.clear();
         self.active_column = 0;
@@ -1822,8 +1826,7 @@ impl Finder {
     // ----- view state -----------------------------------------------------------
 
     /// Show the view and sort last chosen in the folder being opened. A folder
-    /// with none takes what was chosen last anywhere, except in split view's
-    /// second pane, which keeps what it has.
+    /// with none keeps the view this browser is showing.
     fn show_folder_view(&mut self, cx: &App) {
         if !self.config.remember_folder_views {
             return;
@@ -1831,11 +1834,8 @@ impl Finder {
         let Location::Folder(dir) = self.history.current() else {
             return;
         };
-        let settings = self.settings.read(cx);
-        let (view, sort) = match settings.folder_view(dir) {
-            Some(chosen) => chosen,
-            None if self.split_pane => return,
-            None => (settings.config().view_mode, settings.config().sort),
+        let Some((view, sort)) = self.settings.read(cx).folder_view(dir) else {
+            return;
         };
         if view != ViewMode::Gallery {
             self.forget_pdf_surface(pdf::Surface::Gallery);
