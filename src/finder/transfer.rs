@@ -21,6 +21,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The place a drag is waiting over: a folder, and where it's drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SpringTarget {
+    folder: PathBuf,
+    bounds: Bounds<Pixels>,
+}
+
 /// How long dragged items wait over a folder before it opens.
 const SPRING_DELAY: Duration = Duration::from_millis(700);
 
@@ -190,11 +197,13 @@ impl Finder {
         self.start_transfer(paths, dest, mode, window, cx);
     }
 
-    /// Dragged items are over the folder at `folder`, or have left it. If
-    /// they stay long enough, the folder opens with the drag still going.
+    /// A drag moved over `target`, or off it. If it stays long enough, the
+    /// folder opens with the drag still going. The same folder can show in
+    /// several places, such as a row and the sidebar, and each hears about
+    /// every move, so what's being waited on is one place, not one path.
     fn drag_over_folder(
         &mut self,
-        folder: &Path,
+        target: SpringTarget,
         over: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -202,28 +211,28 @@ impl Finder {
         let waiting = self
             .spring_folder
             .as_ref()
-            .is_some_and(|(path, _)| path == folder);
+            .is_some_and(|(place, _)| *place == target);
         if !over {
             if waiting {
                 self.spring_folder = None;
             }
             return;
         }
-        if waiting || self.current_folder() == Some(folder) {
+        if waiting || self.current_folder() == Some(target.folder.as_path()) {
             return;
         }
-        let target = folder.to_path_buf();
+        let folder = target.folder.clone();
         let opens = cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SPRING_DELAY).await;
             this.update_in(cx, |this, window, cx| {
                 this.spring_folder = None;
                 if cx.has_active_drag() {
-                    this.navigate(Location::Folder(target), window, cx);
+                    this.navigate(Location::Folder(folder), window, cx);
                 }
             })
             .ok();
         });
-        self.spring_folder = Some((folder.to_path_buf(), opens));
+        self.spring_folder = Some((target, opens));
     }
 
     /// Check a transfer, ask about name clashes, then start it.
@@ -588,13 +597,21 @@ pub(super) fn spring_loaded<E: InteractiveElement>(
             // A folder can't be dragged into itself.
             let over =
                 event.bounds.contains(&event.event.position) && !event.drag(cx).0.contains(&folder);
-            this.drag_over_folder(&folder, over, window, cx);
+            let target = SpringTarget {
+                folder: folder.clone(),
+                bounds: event.bounds,
+            };
+            this.drag_over_folder(target, over, window, cx);
         },
     ))
     .on_drag_move(cx.listener(
         move |this, event: &DragMoveEvent<ExternalPaths>, window, cx| {
             let over = event.bounds.contains(&event.event.position);
-            this.drag_over_folder(&external, over, window, cx);
+            let target = SpringTarget {
+                folder: external.clone(),
+                bounds: event.bounds,
+            };
+            this.drag_over_folder(target, over, window, cx);
         },
     ))
 }

@@ -54,17 +54,7 @@ pub(super) struct DragLabel(pub SharedString);
 
 impl Render for DragLabel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::ActiveTheme as _;
-        let theme = cx.theme();
-        div()
-            .px(ui(8.))
-            .py(ui(3.))
-            .rounded(ui(5.))
-            .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
-            .text_size(ui(12.))
-            .child(self.0.clone())
+        super::views::drag_frame(cx).child(self.0.clone())
     }
 }
 

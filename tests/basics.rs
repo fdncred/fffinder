@@ -329,6 +329,41 @@ fn holding_a_drag_over_a_folder_opens_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn holding_a_drag_over_a_folder_that_is_also_a_favorite_opens_it(cx: &mut TestAppContext) {
+    // Its sidebar row hears about every move too, and says the drag isn't
+    // over it. That can't cancel the wait the list row started.
+    let fx = Fixture::new("spring-favorite");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let projects = fx.path("Projects");
+    ui.update(|f, _, cx| f.add_favorite(projects.clone(), cx));
+    let file = ui
+        .snapshot(item_id("name-cell", &fx.path("notes.txt")))
+        .bounds();
+    let folder = ui.snapshot(item_id("row", &projects)).bounds();
+
+    ui.drag_and_hold(file.center(), folder.center());
+    // A person's hand keeps moving a little, and each move reaches both.
+    let nudged = folder.center() + point(px(3.), px(0.));
+    ui.window(|window, cx| {
+        use gpui_kit::InputEvent as _;
+        window.dispatch_event(
+            gpui_kit::MouseMoveEvent {
+                position: nudged,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    ui.settle();
+
+    assert_eq!(ui.folder(), Some(projects));
+    ui.release(nudged);
+}
+
+#[gpui_kit::test]
 fn a_quick_drag_past_a_folder_leaves_it_closed(cx: &mut TestAppContext) {
     let fx = Fixture::new("spring-past");
     let mut ui = Ui::open(cx, &fx.dir);

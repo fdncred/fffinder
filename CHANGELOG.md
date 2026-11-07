@@ -2,7 +2,7 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-07
 
 fffinder now does what people reach for without thinking: columns you can resize, a box to drag around items, renaming in place, cut and paste, and windows that remember where they were. Unless a line says otherwise, each feature works on macOS, Linux, and Windows. Shortcuts are written as on macOS; on Linux and Windows, Cmd is Ctrl.
 
@@ -58,7 +58,9 @@ fffinder now does what people reach for without thinking: columns you can resize
 
 - The search field ran off the right side of the window at larger text sizes and in narrow windows. The toolbar now measures its room and folds controls as it runs out: the folder search button goes first, then the view buttons become one menu, then the Nushell and Sort menus move into the Actions menu.
 - The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name gives way instead, down to its smallest size.
+- Dragging items showed their names in black, which was hard to read on the dark theme's gray. Drag previews now use the theme's text color and font.
 - Icon view names cut off at two lines now end in an ellipsis.
+- After a window changed size in one step, such as being zoomed, the icon view kept its old column count until the mouse next moved, which could leave items off the right edge.
 - Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too.
 - The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
 
@@ -133,4 +135,5 @@ fffinder can now manage files as well as find them. Unless a line says otherwise
 - On Windows, `fffinder --term` clicks land on whole cells and emoji are one color. In Windows Terminal, which gets sixel images, frames are drawn at 10 by 20 pixels a character cell, so text looks softer than with kitty graphics, and images have at most 256 colors.
 - Connect to Server can't mount SFTP on macOS. On Linux it can't ask for a password, so put the user name in the address and keep the password in your keyring.
 
+[0.3.0]: https://github.com/fdncred/fffinder/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fdncred/fffinder/releases/tag/v0.2.0

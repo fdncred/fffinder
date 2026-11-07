@@ -352,7 +352,7 @@ pub struct Finder {
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
     /// The folder dragged items are waiting over, and what opens it.
-    spring_folder: Option<(PathBuf, Task<()>)>,
+    spring_folder: Option<(transfer::SpringTarget, Task<()>)>,
     /// The name being edited in place.
     renaming: Option<inline_rename::InlineRename>,
     /// How wide the toolbar was last drawn, which decides what fits in it.

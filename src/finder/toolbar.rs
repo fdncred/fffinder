@@ -442,13 +442,16 @@ impl Finder {
                 .flex_shrink_0()
                 .overflow_hidden()
                 .on_prepaint(move |bounds, window, cx| {
-                    measured.update(cx, |this, cx| {
+                    let refit = measured.update(cx, |this, _| {
                         this.toolbar_width = bounds.size.width;
-                        // Only a change in what fits needs another frame.
-                        if this.toolbar_room(traffic, window) != this.toolbar_fit {
-                            cx.notify();
-                        }
+                        this.toolbar_room(traffic, window) != this.toolbar_fit
                     });
+                    // Only a change in what fits needs another frame. Asking for
+                    // one takes this: a notify while drawing waits for the next
+                    // event, which may not come after a window is zoomed.
+                    if refit {
+                        window.request_animation_frame();
+                    }
                 })
                 // macOS draws the window buttons at a fixed size.
                 .pl(if traffic { px(TRAFFIC_LIGHTS) } else { ui(12.) })
@@ -773,6 +776,9 @@ fn actions_menu(
             .action(Box::new(ShowSettings)),
     )
     .min_w(ui(220.))
+    // It's longer than a short window, or a narrow toolbar's extras make it so.
+    .scrollable(true)
+    .max_h(window.viewport_size().height - ui(16.))
 }
 
 #[cfg(test)]

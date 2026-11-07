@@ -94,7 +94,6 @@ impl Render for PathCompletions {
                 let text = item.text.clone();
                 h_flex()
                     .id(("goto-match", ix))
-                    .gap(ui(6.))
                     .px(ui(6.))
                     .py(ui(2.))
                     .rounded(ui(4.))

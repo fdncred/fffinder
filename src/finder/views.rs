@@ -53,20 +53,28 @@ pub struct DragPreview {
 
 impl Render for DragPreview {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        h_flex()
-            .gap(ui(6.))
-            .px(ui(8.))
-            .py(ui(4.))
-            .rounded(ui(6.))
-            .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_md()
-            .text_size(ui(12.))
+        drag_frame(cx)
             .child(img(self.icon).size(ui(18.)))
             .child(self.label.clone())
     }
+}
+
+/// The frame of what follows the mouse in a drag. GPUI draws it apart from the
+/// window, so it inherits no text color or font and has to set its own.
+pub(super) fn drag_frame(cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .gap(ui(6.))
+        .px(ui(8.))
+        .py(ui(4.))
+        .rounded(ui(6.))
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .font_family(theme.font_family.clone())
+        .border_1()
+        .border_color(theme.border)
+        .shadow_md()
+        .text_size(ui(12.))
 }
 
 /// How wide and tall each item in the icon view is, in points, for icons
@@ -347,17 +355,21 @@ impl Finder {
         div()
             .size_full()
             .relative()
-            .on_prepaint(move |bounds, _, cx| {
+            .on_prepaint(move |bounds, window, cx| {
                 // Tiles are drawn at the UI scale; the bounds are real pixels.
                 let scale = crate::theme::ui_scale();
                 let width = f32::from(bounds.size.width) - GRID_PADDING * 2. * scale;
                 let n = ((width / (tile_w * scale)).floor() as usize).max(1);
-                view.update(cx, |this, cx| {
-                    if this.grid_cols != n {
-                        this.grid_cols = n;
-                        cx.notify();
-                    }
+                let changed = view.update(cx, |this, _| {
+                    let changed = this.grid_cols != n;
+                    this.grid_cols = n;
+                    changed
                 });
+                // A notify while drawing waits for the next event, which may
+                // not come after a window is zoomed.
+                if changed {
+                    window.request_animation_frame();
+                }
             })
             .child(
                 // Lines differ in height when group headers are among them.
@@ -1295,5 +1307,32 @@ impl Finder {
                 }))
                 .into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drag_frame;
+    use fffinder_core::Appearance;
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{Styled as _, TestAppContext};
+
+    #[gpui_kit::test]
+    fn drag_frames_set_a_readable_text_color_in_both_themes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::install(cx);
+            for appearance in [Appearance::Light, Appearance::Dark] {
+                crate::theme::apply(appearance, None, cx);
+
+                let mut frame = drag_frame(cx);
+
+                let theme = cx.theme();
+                let text = frame.style().text.color;
+                assert_eq!(text, Some(theme.popover_foreground), "{appearance:?}");
+                let contrast = (theme.popover_foreground.l - theme.popover.l).abs();
+                assert!(contrast > 0.5, "{appearance:?}: lightness apart {contrast}");
+            }
+        });
     }
 }
