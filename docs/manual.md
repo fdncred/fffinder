@@ -450,7 +450,7 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
 | Copy Path (Cmd+Alt+C) | Copies the selected paths, one per line. |
 | Copy as Nushell List (Cmd+Shift+C) | Copies the selection as NUON: a quoted string for one path, a list for several. |
-| Go to Folder… (Cmd+Shift+G; also Ctrl+L on Linux and Windows) | Type a path. `~` is your home folder, and relative paths start from the current folder. A folder opens; a file opens its folder with the file selected. |
+| Go to Folder… (Cmd+Shift+G; also Ctrl+L on Linux and Windows) | Type a path. `~` is your home folder, and relative paths start from the current folder. As you type, the items that match are listed below the field, folders first. Tab finishes the path as far as they all agree, and clicking one fills it in. A folder opens; a file opens its folder with the file selected. |
 | Add to Sidebar | Adds a selected folder to Favorites. |
 | Add Folder to Sidebar | Adds the current folder to Favorites. |
 | Refresh (Cmd+R; F5 outside split view) | Reloads the folder, columns, and previews, and re-runs the search. |

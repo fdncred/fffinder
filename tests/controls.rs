@@ -915,6 +915,34 @@ fn go_to_folder_dialog(cx: &mut TestAppContext) {
     assert!(!ui.dialog_open());
     assert_eq!(ui.folder(), Some(fx.path("Projects")));
 
+    // Tab finishes the path as far as it can, one folder at a time.
+    ui.go_to(&fx.dir);
+    ui.press(&cmd("shift-g"));
+    ui.type_text("proj");
+    ui.settle();
+    assert!(ui.exists(("goto-match", 0usize)), "the match is listed");
+    ui.press("tab");
+    assert!(ui.dialog_open(), "Tab stays in the field");
+    ui.settle();
+    ui.type_text("at");
+    ui.settle();
+    ui.press("tab");
+    ui.settle();
+    ui.press("enter");
+    assert!(!ui.dialog_open());
+    assert_eq!(ui.folder(), Some(fx.path("Projects/atlas")));
+
+    // Clicking a match fills it in.
+    ui.go_to(&fx.dir);
+    ui.press(&cmd("shift-g"));
+    ui.type_text("proj");
+    ui.settle();
+    ui.click(("goto-match", 0usize));
+    ui.settle();
+    ui.press("enter");
+    assert_eq!(ui.folder(), Some(fx.path("Projects")));
+
+    ui.go_to(&fx.dir);
     ui.press(&cmd("shift-g"));
     ui.type_text("does-not-exist");
     ui.click("goto-go");

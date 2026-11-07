@@ -1,15 +1,16 @@
 //! Dialogs: settings, Go to Folder, rename, Move to Trash, and search syntax.
 
+use super::go_to::PathCompletions;
 use super::{AppState, Finder, group_digits};
 use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
 use fffinder_core::terminals::{self, CUSTOM, Platform, Terminal};
-use fffinder_core::{Appearance, FileEntry, SearchCase, config};
+use fffinder_core::{Appearance, FileEntry, SearchCase, config, listing};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{IndentInline, Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{
@@ -19,23 +20,6 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::path::{Path, PathBuf};
-
-/// Expand `~` and make relative paths relative to `base`.
-fn resolve_path(text: &str, base: Option<&Path>) -> PathBuf {
-    let text = text.trim();
-    let expanded = if text == "~" {
-        dirs::home_dir().unwrap_or_default()
-    } else if let Some(rest) = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\")) {
-        dirs::home_dir().unwrap_or_default().join(rest)
-    } else {
-        PathBuf::from(text)
-    };
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        base.map(|b| b.join(&expanded)).unwrap_or(expanded)
-    }
-}
 
 impl Finder {
     /// A dialog returns focus to whatever had it when it opened. From a menu
@@ -620,6 +604,8 @@ impl Finder {
                         .unwrap_or_default(),
                 )
         });
+        let base = self.current_folder().map(Path::to_path_buf);
+        let completions = PathCompletions::new(input.clone(), base, window, cx);
         let view = cx.entity();
         let first = std::cell::Cell::new(true);
         window.open_dialog(cx, move |dialog, window, cx| {
@@ -631,10 +617,21 @@ impl Finder {
             }
             let (ok_input, go_input) = (input.clone(), input.clone());
             let ok_view = view.clone();
+            let tab_completions = completions.clone();
             dialog
                 .title("Go to Folder")
                 .w(ui(480.))
-                .child(Input::new(&input).id("goto-input").cleanable(true))
+                .child(
+                    // Tab finishes the path here, instead of moving on.
+                    div()
+                        .capture_action(move |_: &IndentInline, window, cx| {
+                            cx.stop_propagation();
+                            tab_completions
+                                .update(cx, |completions, cx| completions.finish(window, cx));
+                        })
+                        .child(Input::new(&input).id("goto-input").cleanable(true)),
+                )
+                .child(completions.clone())
                 // Return confirms the dialog; it closes only when the path exists.
                 .on_ok(move |_, window, cx| {
                     ok_view.update(cx, |this, cx| this.submit_go_to(&ok_input, window, cx))
@@ -666,7 +663,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) -> bool {
         let text = input.read(cx).value().to_string();
-        let path = resolve_path(&text, self.current_folder());
+        let path = listing::resolve_typed_path(&text, self.current_folder());
         if path.is_dir() {
             self.navigate(Location::Folder(path), window, cx);
         } else if path.exists() {
@@ -1095,25 +1092,4 @@ fn terminal_controls(
                     )),
             )
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_path;
-    use std::path::{Path, PathBuf};
-
-    #[test]
-    fn resolves_paths() {
-        let home = dirs::home_dir().unwrap();
-        assert_eq!(resolve_path("~", None), home);
-        assert_eq!(resolve_path("~/x", None), home.join("x"));
-        assert_eq!(
-            resolve_path("sub", Some(Path::new("/base"))),
-            PathBuf::from("/base/sub")
-        );
-        assert_eq!(
-            resolve_path(" /abs ", Some(Path::new("/base"))),
-            PathBuf::from("/abs")
-        );
-    }
 }

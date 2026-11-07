@@ -8,6 +8,7 @@ mod editor;
 mod filter;
 mod fit;
 mod fps;
+mod go_to;
 mod groups;
 mod info;
 mod inline_rename;
