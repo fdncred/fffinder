@@ -572,6 +572,7 @@ impl Finder {
             _subscriptions: subscriptions,
             config,
         };
+        this.show_folder_view(cx);
         this.load_listing(Vec::new(), false, cx);
         this.reload_locations(cx);
         this.poll_index_status(cx);
@@ -811,6 +812,7 @@ impl Finder {
         self.selection.clear();
         self.marquee = None;
         self.renaming = None;
+        self.show_folder_view(cx);
         self.columns.clear();
         self.active_column = 0;
         self.expanded.clear();
@@ -1819,6 +1821,53 @@ impl Finder {
 
     // ----- view state -----------------------------------------------------------
 
+    /// Show the view and sort last chosen in the folder being opened. A folder
+    /// with none takes what was chosen last anywhere, except in split view's
+    /// second pane, which keeps what it has.
+    fn show_folder_view(&mut self, cx: &App) {
+        if !self.config.remember_folder_views {
+            return;
+        }
+        let Location::Folder(dir) = self.history.current() else {
+            return;
+        };
+        let settings = self.settings.read(cx);
+        let (view, sort) = match settings.folder_view(dir) {
+            Some(chosen) => chosen,
+            None if self.split_pane => return,
+            None => (settings.config().view_mode, settings.config().sort),
+        };
+        if view != ViewMode::Gallery {
+            self.forget_pdf_surface(pdf::Surface::Gallery);
+        }
+        self.config.view_mode = view;
+        self.config.sort = sort;
+        // Opening a folder isn't choosing anything, so there's nothing to publish.
+        self.published.view_mode = view;
+        self.published.sort = sort;
+    }
+
+    /// A view or sort was chosen: this folder opens with it from now on.
+    fn remember_folder_view(&mut self, cx: &mut Context<Self>) {
+        if !self.config.remember_folder_views || self.split_pane || self.is_searching() {
+            return;
+        }
+        let Location::Folder(dir) = self.history.current() else {
+            return;
+        };
+        let (dir, view, sort) = (dir.clone(), self.config.view_mode, self.config.sort);
+        self.settings.update(cx, |settings, cx| {
+            settings.remember_folder_view(dir, view, sort, cx)
+        });
+    }
+
+    /// Settings: remember what's chosen in each folder, or stop.
+    pub fn set_remember_folder_views(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.config.remember_folder_views = on;
+        self.settings_changed(cx);
+        cx.notify();
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.config.view_mode == mode {
             return;
@@ -1839,6 +1888,7 @@ impl Finder {
         self.select_first_for_gallery(cx);
         self.selection_changed(cx);
         self.settings_changed(cx);
+        self.remember_folder_view(cx);
         cx.notify();
     }
 
@@ -1860,6 +1910,7 @@ impl Finder {
         } else {
             self.config.sort = order;
             self.settings_changed(cx);
+            self.remember_folder_view(cx);
             if key == SortKey::LastOpened {
                 // Last-opened dates are only read when something needs them.
                 self.load_listing(Vec::new(), true, cx);
@@ -1874,6 +1925,7 @@ impl Finder {
         } else {
             self.config.sort.ascending = ascending;
             self.settings_changed(cx);
+            self.remember_folder_view(cx);
         }
         self.rebuild_rows(cx);
     }

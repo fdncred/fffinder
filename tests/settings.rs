@@ -157,3 +157,85 @@ fn a_new_window_starts_from_the_latest_settings(cx: &mut TestAppContext) {
     let last = tabs(&ui).pop().unwrap();
     assert!(last.read_with(ui.cx, |f, _| f.config().show_hidden));
 }
+
+#[gpui_kit::test]
+fn a_folder_opens_in_the_view_chosen_in_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("folder-view");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let view = |ui: &Ui| ui.read(|f| f.config().view_mode);
+    let sort = |ui: &Ui| ui.read(|f| f.current_sort().key);
+
+    // Projects gets the list, sorted by size.
+    ui.go_to(&fx.path("Projects"));
+    ui.click("view-list");
+    ui.click("Size");
+    assert_eq!(sort(&ui), SortKey::Size);
+
+    // The folder above gets icons of its own.
+    ui.go_to(&fx.dir);
+    ui.click("view-icons");
+
+    // Each opens with what was chosen in it.
+    ui.go_to(&fx.path("Projects"));
+    assert_eq!(view(&ui), ViewMode::List);
+    assert_eq!(sort(&ui), SortKey::Size);
+    ui.press(&cmd("["));
+    assert_eq!(view(&ui), ViewMode::Icons, "Back too");
+
+    // A folder with no choice of its own takes the last one made.
+    ui.go_to(&fx.path("Projects/atlas"));
+    assert_eq!(view(&ui), ViewMode::Icons);
+}
+
+#[gpui_kit::test]
+fn a_new_tab_opens_a_folder_in_its_own_view(cx: &mut TestAppContext) {
+    let fx = Fixture::new("folder-view-tab");
+    let mut ui = with_tabs(cx, &fx.dir);
+    ui.go_to(&fx.path("Projects"));
+    ui.click("view-gallery");
+    ui.go_to(&fx.dir);
+    ui.click("view-list");
+
+    ui.right_click(common::item_id("row", &fx.path("Projects")));
+    ui.click_menu_item("Open in New Tab");
+
+    let opened = tabs(&ui)[1].read_with(ui.cx, |f, _| f.config().view_mode);
+    assert_eq!(opened, ViewMode::Gallery);
+}
+
+#[gpui_kit::test]
+fn folders_can_share_one_view(cx: &mut TestAppContext) {
+    let fx = Fixture::new("folder-view-off");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.update(|f, _, cx| f.set_remember_folder_views(false, cx));
+    let view = |ui: &Ui| ui.read(|f| f.config().view_mode);
+
+    ui.go_to(&fx.path("Projects"));
+    ui.click("view-list");
+    ui.go_to(&fx.dir);
+    assert_eq!(view(&ui), ViewMode::List, "the view stays as it is");
+    ui.click("view-icons");
+    ui.go_to(&fx.path("Projects"));
+    assert_eq!(view(&ui), ViewMode::Icons, "nothing was remembered");
+}
+
+#[gpui_kit::test]
+fn the_split_pane_chooses_nothing_for_a_folder(cx: &mut TestAppContext) {
+    let fx = Fixture::new("folder-view-split");
+    let mut ui = with_tabs(cx, &fx.dir);
+    ui.click("view-icons");
+    ui.press(&cmd("\\"));
+    let pane = ui
+        .workspace
+        .clone()
+        .unwrap()
+        .read_with(ui.cx, |w, _| w.split_pane().cloned())
+        .expect("split view is on");
+
+    pane.update(ui.cx, |f, cx| f.set_view_mode(ViewMode::List, cx));
+    ui.settle();
+
+    ui.go_to(&fx.path("Projects"));
+    ui.go_to(&fx.dir);
+    assert_eq!(ui.read(|f| f.config().view_mode), ViewMode::Icons);
+}

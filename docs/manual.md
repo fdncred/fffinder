@@ -198,7 +198,7 @@ The footer shows "N files indexed", or "Indexing… N" with a spinner while scan
 
 ## Views
 
-Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is saved.
+Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. A folder opens in the view and sort last chosen in it, and a folder with none takes what was chosen last anywhere. To have one view for every folder, turn off Settings › Remember each folder's view; the view then stays as it is when you move between folders. Search results, Recents, and the Trash keep the view of the folder you came from. fffinder remembers the last 2000 folders.
 
 - **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
 - **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. Columns can be dragged wider or narrower, and the list scrolls sideways when they don't all fit. See [The list view](#the-list-view).
@@ -942,7 +942,7 @@ The Nushell text size setting has a small "A" button and a large "A" button that
 
 Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and a file that can't be read falls back to defaults.
 
-Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, `kind_filter`, and `show_preview_pane`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved.
+Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, `kind_filter`, and `show_preview_pane`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved, and neither is it remembered for a folder.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -960,6 +960,7 @@ Every tab and window shows a change to a setting at once, with these exceptions,
 | `parent_column_width` | `220` | The list's Folder, Match, or Original Folder column in points, at least 50. |
 | `column_view_width` | `235` | How wide a new pane of the column view opens, 120 to 800 points. |
 | `sidebar_width` | `212` | The sidebar's width, 140 to 420 points. |
+| `remember_folder_views` | `true` | A folder opens in the view and sort last chosen in it. |
 | `show_preview_pane` | `false` | Show the preview pane beside the list and icon views. |
 | `preview_pane_width` | `280` | The preview pane's width, 180 to 640 points. |
 | `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
@@ -1067,6 +1068,7 @@ The settings folder holds `settings.json`, `actions.nu`, and `window.json`, whic
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
 - `icons/v2/`: Finder icons cached as PNGs on macOS, one per extension and one per app or special folder.
 - `trash.json`: on macOS, where each item fffinder moved to the Trash came from, for Put Back.
+- `folder_views.json`: the view and sort last chosen in each folder, up to 2000 folders. Deleting it forgets them and nothing else.
 - `thumbnails/`: thumbnails of PDFs, videos, and documents, as PNGs, up to 256 MB; the least recently used go first.
 - `hang-<time>.txt`: hang reports, when the watchdog is on.
 - `term.log`: stderr from the last `fffinder --term`.

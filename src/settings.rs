@@ -6,9 +6,12 @@
 //! the fields that changed, shows the shared ones to every other browser, and
 //! saves. So a browser can never write an old value over a newer one.
 
-use fffinder_core::Config;
 use fffinder_core::config::config_path;
+use fffinder_core::folder_views::FolderViews;
+use fffinder_core::listing::SortOrder;
+use fffinder_core::{Config, ViewMode};
 use gpui_kit::*;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long after the last change the settings are written.
@@ -23,6 +26,10 @@ pub struct Settings {
     /// this off so they never touch the user's settings.
     persist: bool,
     save_task: Task<()>,
+    /// The view and sort chosen in each folder.
+    folder_views: FolderViews,
+    views_unsaved: bool,
+    views_task: Task<()>,
     _quit: Subscription,
 }
 
@@ -44,6 +51,9 @@ pub fn entity(cx: &mut App) -> Entity<Settings> {
             config,
             persist: true,
             save_task: Task::ready(()),
+            folder_views: FolderViews::load(),
+            views_unsaved: false,
+            views_task: Task::ready(()),
             // A change made just before quitting hasn't been written yet.
             _quit: cx.on_app_quit(|this: &mut Settings, _| {
                 this.save_now();
@@ -109,10 +119,47 @@ impl Settings {
         });
     }
 
+    /// The view and sort last chosen in `folder`, if any.
+    pub(crate) fn folder_view(&self, folder: &Path) -> Option<(ViewMode, SortOrder)> {
+        self.folder_views.get(folder)
+    }
+
+    /// Remember the view and sort chosen in `folder`.
+    pub(crate) fn remember_folder_view(
+        &mut self,
+        folder: PathBuf,
+        view: ViewMode,
+        sort: SortOrder,
+        cx: &mut Context<Self>,
+    ) {
+        self.folder_views.set(&folder, view, sort);
+        self.views_unsaved = true;
+        if !self.persist {
+            return;
+        }
+        self.views_task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVE_DELAY).await;
+            let Ok(views) = this.update(cx, |this, _| {
+                this.views_unsaved = false;
+                this.folder_views.clone()
+            }) else {
+                return;
+            };
+            cx.background_spawn(async move { save_views(&views) }).await;
+        });
+    }
+
     fn save_now(&mut self) {
-        if self.persist && self.config != self.saved {
+        if !self.persist {
+            return;
+        }
+        if self.config != self.saved {
             save(&self.saved, &self.config);
             self.saved.clone_from(&self.config);
+        }
+        if self.views_unsaved {
+            save_views(&self.folder_views);
+            self.views_unsaved = false;
         }
     }
 }
@@ -121,5 +168,11 @@ impl Settings {
 fn save(saved: &Config, config: &Config) {
     if let Err(err) = Config::save_changes(saved, config, &config_path()) {
         log::warn!("saving settings: {err}");
+    }
+}
+
+fn save_views(views: &FolderViews) {
+    if let Err(err) = views.save() {
+        log::warn!("saving folder views: {err}");
     }
 }

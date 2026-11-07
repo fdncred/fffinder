@@ -24,6 +24,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 - A preview pane beside the list and icon views (Cmd+Shift+P, or View › Toggle Preview Pane). It follows the selection and resizes from its left edge.
 - The status bar adds up the selected items: "2 of 12 selected (1.4 MB)".
 - Go to Folder lists the items that match as you type. Tab finishes the path, and clicking a match fills it in.
+- A folder opens in the view and sort last chosen in it, and a folder with none takes what was chosen last anywhere. Settings › Remember each folder's view turns this off.
 - Search results and Recents can sort by folder: click the Folder header.
 - The column view's panes and the sidebar can be resized by dragging their edges, and their widths are saved.
 - Windows reopen at the place and size they last had.

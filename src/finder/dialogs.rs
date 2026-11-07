@@ -343,6 +343,7 @@ impl Finder {
             let status = finder.index_status.clone();
             let appearance = finder.config.appearance;
             let hidden = finder.config.show_hidden;
+            let remember_views = finder.config.remember_folder_views;
             let nu = cx.global::<AppState>().nu.clone();
 
             let mut root_list = v_flex()
@@ -508,6 +509,15 @@ impl Finder {
                                         // dispatched from here never reach it; call it directly.
                                         .on_change(window.listener_for(&view, |this: &mut Finder, show: &bool, _, cx| {
                                             this.set_show_hidden(*show, cx)
+                                        })),
+                                )
+                                .child(
+                                    Switch::new("remember-folder-views")
+                                        .small()
+                                        .label("Remember each folder's view")
+                                        .checked(remember_views)
+                                        .on_change(window.listener_for(&view, |this: &mut Finder, on: &bool, _, cx| {
+                                            this.set_remember_folder_views(*on, cx)
                                         })),
                                 ),
                         )

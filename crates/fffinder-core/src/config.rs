@@ -201,6 +201,8 @@ pub struct Config {
     pub column_view_width: f32,
     /// The sidebar's width in points.
     pub sidebar_width: f32,
+    /// A folder opens in the view and sort last chosen in it.
+    pub remember_folder_views: bool,
     /// Show the preview pane beside the list and icon views.
     pub show_preview_pane: bool,
     /// The preview pane's width in points.
@@ -265,6 +267,7 @@ impl Default for Config {
             parent_column_width: DEFAULT_PARENT_COLUMN_WIDTH,
             column_view_width: DEFAULT_COLUMN_VIEW_WIDTH,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            remember_folder_views: true,
             show_preview_pane: false,
             preview_pane_width: DEFAULT_PREVIEW_PANE_WIDTH,
             folder_sizes: true,
@@ -439,7 +442,7 @@ pub fn config_path() -> PathBuf {
 
 /// Write `text` to `path` and then rename it into place, so a crash never
 /// leaves a truncated file.
-fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -532,7 +535,7 @@ macro_rules! settings_by_scope {
 settings_by_scope! {
     shared: search_roots, search_apps, favorites, show_hidden, folders_first, list_columns,
         name_column_width, parent_column_width, column_view_width, sidebar_width,
-        preview_pane_width, folder_sizes,
+        preview_pane_width, remember_folder_views, folder_sizes,
         recent_servers, show_sidebar, appearance, result_limit, terminals, smart_folders,
         use_nu_environment, preview_font_size, nu_font_size, ui_scale, search, terminal, nu_path,
         settings_version;
