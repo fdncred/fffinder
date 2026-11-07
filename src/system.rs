@@ -275,6 +275,9 @@ pub fn reveal(path: &Path, cx: &mut App) {
 struct FileClipboard {
     paths: Vec<PathBuf>,
     text: String,
+    /// The same items, when they were cut: pasting them moves them, and the
+    /// views dim them until then.
+    cut: HashSet<PathBuf>,
 }
 
 impl Global for FileClipboard {}
@@ -291,6 +294,7 @@ pub fn copy_files(paths: &[PathBuf], cx: &mut App) {
     cx.set_global(FileClipboard {
         paths: paths.to_vec(),
         text: text.clone(),
+        cut: HashSet::new(),
     });
     #[cfg(target_os = "macos")]
     if cx.try_global::<Recorder>().is_none() && crate::macos::write_file_clipboard(paths, &text) {
@@ -301,6 +305,43 @@ pub fn copy_files(paths: &[PathBuf], cx: &mut App) {
         return;
     }
     cx.write_to_clipboard(ClipboardItem::new_string(text));
+}
+
+/// Put files on the clipboard to be moved by the next paste.
+pub fn cut_files(paths: &[PathBuf], cx: &mut App) {
+    copy_files(paths, cx);
+    cx.global_mut::<FileClipboard>().cut = paths.iter().cloned().collect();
+}
+
+/// Whether what's on the clipboard now is what was cut.
+pub fn clipboard_is_cut(cx: &App) -> bool {
+    let Some(cut) = cx
+        .try_global::<FileClipboard>()
+        .map(|copied| &copied.cut)
+        .filter(|cut| !cut.is_empty())
+    else {
+        return false;
+    };
+    let files = clipboard_files(cx);
+    !files.is_empty() && files.iter().all(|path| cut.contains(path))
+}
+
+/// Whether the item at `path` was cut and hasn't been pasted yet.
+pub fn is_cut(path: &Path, cx: &App) -> bool {
+    cx.try_global::<FileClipboard>()
+        .is_some_and(|copied| copied.cut.contains(path))
+}
+
+/// Stop treating anything as cut. Returns whether something was.
+pub fn forget_cut(cx: &mut App) -> bool {
+    if cx
+        .try_global::<FileClipboard>()
+        .is_none_or(|copied| copied.cut.is_empty())
+    {
+        return false;
+    }
+    cx.global_mut::<FileClipboard>().cut.clear();
+    true
 }
 
 /// The files named by clipboard text: GNOME Files' and Dolphin's copies

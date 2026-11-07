@@ -101,14 +101,40 @@ impl Finder {
         window.push_notification(format!("Copied {}", items_label(&paths)), cx);
     }
 
-    /// Cmd+V in the files: copy what's on the clipboard into this folder.
+    /// Cmd+X in the files: mark the selected items to be moved by the next
+    /// paste. They stay where they are until then.
+    pub(super) fn cut_files(
+        &mut self,
+        _: &input::Cut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths: Vec<PathBuf> = self
+            .selected_entries()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        crate::system::cut_files(&paths, cx);
+        window.push_notification(format!("Cut {}. Paste to move.", items_label(&paths)), cx);
+        cx.notify();
+    }
+
+    /// Cmd+V in the files: put what's on the clipboard into this folder,
+    /// moving what was cut and copying the rest.
     pub(super) fn paste_files(
         &mut self,
         _: &input::Paste,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.paste(Mode::Copy, window, cx);
+        let mode = match crate::system::clipboard_is_cut(cx) {
+            true => Mode::Move,
+            false => Mode::Copy,
+        };
+        self.paste(mode, window, cx);
     }
 
     /// Cmd+Alt+V: move what's on the clipboard into this folder.
@@ -264,6 +290,16 @@ impl Finder {
             Mode::Copy => COPY,
             Mode::Move => MOVE,
         };
+        // What was cut is on its way, so a second paste has nothing to move.
+        if mode == Mode::Move
+            && transfer
+                .sources
+                .iter()
+                .all(|source| crate::system::is_cut(source, cx))
+        {
+            crate::system::forget_cut(cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+        }
         let progress = self.start_job(kind, transfer.sources.len(), cx);
         cx.spawn_in(window, async move |this, cx| {
             let report = cx

@@ -28,6 +28,8 @@ pub const COLUMN_ROW: f32 = 22.;
 pub(super) const GRID_PADDING: f32 = 18.;
 /// The room around an icon in the icon view, for its selection highlight.
 pub(super) const ICON_PADDING: f32 = 8.;
+/// How faint an item that was cut looks until it's pasted.
+const CUT_OPACITY: f32 = 0.5;
 /// The list's header, above its rows.
 const LIST_HEADER: f32 = 28.;
 /// The narrowest Name goes while it fills the room other columns leave. The
@@ -442,6 +444,9 @@ impl Finder {
         let tooltip = cut_off_tooltip(&name, row.name.clone());
         let el = v_flex()
             .id(("tile", super::views::path_id(&row.entry.path)))
+            .when(crate::system::is_cut(&row.entry.path, cx), |this| {
+                this.opacity(CUT_OPACITY)
+            })
             .w(ui(tile_w))
             .h(ui(tile_h))
             .items_center()
@@ -715,7 +720,7 @@ impl Finder {
         let cell = match edge {
             ResizeEdge::Column(ix) => cell
                 .on_drag(super::list::ColumnMove(ix), move |_, _, _, cx| {
-                    cx.new(|_| super::list::ColumnPreview(title.into()))
+                    cx.new(|_| super::list::DragLabel(title.into()))
                 })
                 .drag_over::<super::list::ColumnMove>(move |style, _, _, _| style.bg(highlight))
                 .on_drop(
@@ -854,6 +859,9 @@ impl Finder {
             });
         let el = base
             .id(("row", super::views::path_id(&row.entry.path)))
+            .when(crate::system::is_cut(&row.entry.path, cx), |this| {
+                this.opacity(CUT_OPACITY)
+            })
             .text_color(fg)
             .when(selected, |this| {
                 this.bg(if active {
@@ -1042,6 +1050,9 @@ impl Finder {
         let tooltip = cut_off_tooltip(&name, full_name);
         let row = h_flex()
             .id(("crow", path_id(&entry.path)))
+            .when(crate::system::is_cut(&entry.path, cx), |this| {
+                this.opacity(CUT_OPACITY)
+            })
             .h(ui(COLUMN_ROW))
             .w_full()
             .px(ui(6.))

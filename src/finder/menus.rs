@@ -215,6 +215,15 @@ pub fn item_menu(
         .separator()
         .item(
             PopupMenuItem::new(if single {
+                format!("Cut “{}”", first.name)
+            } else {
+                format!("Cut {} Items", entries.len())
+            })
+            .icon(Lucide::Scissors)
+            .action(Box::new(input::Cut)),
+        )
+        .item(
+            PopupMenuItem::new(if single {
                 format!("Copy “{}”", first.name)
             } else {
                 format!("Copy {} Items", entries.len())

@@ -46,10 +46,10 @@ pub(super) struct ResizeDrag(pub ResizeEdge);
 #[derive(Clone)]
 pub(super) struct ColumnMove(pub usize);
 
-/// What a dragged column header looks like.
-pub(super) struct ColumnPreview(pub SharedString);
+/// What a dragged column header or sidebar row looks like: its name.
+pub(super) struct DragLabel(pub SharedString);
 
-impl Render for ColumnPreview {
+impl Render for DragLabel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::ActiveTheme as _;
         let theme = cx.theme();

@@ -447,6 +447,10 @@ impl Finder {
                 if window.is_window_active() {
                     this.reload_locations(cx);
                     this.check_for_changes(cx);
+                    // Something else may have been copied in another app.
+                    if !crate::system::clipboard_is_cut(cx) && crate::system::forget_cut(cx) {
+                        cx.notify();
+                    }
                 }
             }),
         ];
@@ -1705,7 +1709,9 @@ impl Finder {
     }
 
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
+        if crate::system::forget_cut(cx) {
+            cx.notify();
+        } else if !self.selection.is_empty() {
             self.clear_selection(cx);
         } else if self.is_searching() {
             self.end_search(window, cx);
@@ -2061,6 +2067,23 @@ impl Finder {
             self.settings_changed(cx);
             cx.notify();
         }
+    }
+
+    /// Put the favorite at `from` where the one at `to` is.
+    pub(super) fn move_favorite(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
+        let favorites = &mut self.config.favorites;
+        let (Some(from), Some(to)) = (
+            favorites.iter().position(|path| path == from),
+            favorites.iter().position(|path| path == to),
+        ) else {
+            return;
+        };
+        let moved = favorites.remove(from);
+        favorites.insert(to, moved);
+        let moved = self.favorites.remove(from);
+        self.favorites.insert(to, moved);
+        self.settings_changed(cx);
+        cx.notify();
     }
 
     pub fn remove_favorite(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -2705,6 +2728,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::cut_files))
             .on_action(cx.listener(Self::copy_files))
             .on_action(cx.listener(Self::paste_files))
             .on_action(cx.listener(Self::move_items_here))

@@ -107,6 +107,74 @@ fn copy_and_paste_from_the_context_menus(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn cut_and_paste_moves_files(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+
+    ui.press(&cmd("x"));
+    assert!(
+        fx.path("notes.txt").exists(),
+        "nothing moves until the paste"
+    );
+    assert_eq!(
+        ui.clipboard(),
+        fx.path("notes.txt").display().to_string(),
+        "the path goes on the clipboard as text too"
+    );
+
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(!fx.path("notes.txt").exists(), "a paste after a cut moves");
+    assert_eq!(ui.selected(), ["notes.txt"], "the moved item is selected");
+
+    // Undo puts it back, as for any move.
+    ui.press(&cmd("z"));
+    assert!(fx.path("notes.txt").exists());
+    assert!(!fx.path("Projects/notes.txt").exists());
+}
+
+#[gpui_kit::test]
+fn escape_cancels_a_cut_and_a_copy_replaces_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-cancel");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+
+    // Escape means the paste copies after all.
+    ui.press(&cmd("x"));
+    ui.press("escape");
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(fx.path("notes.txt").exists());
+
+    // So does copying something else afterward.
+    ui.go_to(&fx.dir);
+    ui.select("Budget.csv");
+    ui.press(&cmd("x"));
+    ui.press(&cmd("c"));
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/Budget.csv").exists());
+    assert!(fx.path("Budget.csv").exists());
+}
+
+#[gpui_kit::test]
+fn pasting_what_was_cut_into_its_own_folder_does_nothing(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-same");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let before = ui.names().len();
+    ui.select("notes.txt");
+
+    ui.press(&cmd("x"));
+    ui.press(&cmd("v"));
+
+    assert!(fx.path("notes.txt").exists());
+    assert_eq!(ui.names().len(), before, "no copy appeared beside it");
+}
+
+#[gpui_kit::test]
 fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
     let fx = Fixture::new("drag");
     let mut ui = Ui::open(cx, &fx.dir);

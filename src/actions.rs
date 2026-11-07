@@ -193,7 +193,8 @@ pub fn bind_keys(cx: &mut App) {
         key("pageup", PreviousPdfPage, &files, cx),
         key("escape", Escape, &files, cx),
         key("secondary-a", SelectAll, &files, cx),
-        // Edit › Copy and Paste act on files when the files have focus.
+        // Edit › Cut, Copy, and Paste act on files when the files have focus.
+        key("secondary-x", input::Cut, &files, cx),
         key("secondary-c", input::Copy, &files, cx),
         key("secondary-v", input::Paste, &files, cx),
         key("secondary-alt-v", MoveItemsHere, &files, cx),

@@ -244,6 +244,46 @@ fn files_have_no_open_in_new_tab(cx: &mut TestAppContext) {
     assert!(!ui.menu_labels().contains(&"Open in New Tab".to_string()));
 }
 
+// ----- the sidebar ---------------------------------------------------------------------
+
+#[gpui_kit::test]
+fn favorites_drag_into_another_order(cx: &mut TestAppContext) {
+    let fx = Fixture::new("fav-order");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let (projects, atlas) = (fx.path("Projects"), fx.path("Projects/atlas"));
+    ui.update(|f, _, cx| {
+        f.add_favorite(projects.clone(), cx);
+        f.add_favorite(atlas.clone(), cx);
+    });
+    let places = |ui: &Ui| {
+        ui.read(|f| {
+            f.favorites()
+                .iter()
+                .map(|place| place.path.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    let order = places(&ui);
+    let last = order.len() - 1;
+    assert_eq!(order[last], atlas);
+
+    // The last one goes where the one before it is.
+    ui.drag(("fav", last), ("fav", last - 1), Modifiers::none());
+
+    let order = places(&ui);
+    assert_eq!(order[last - 1], atlas);
+    assert_eq!(order[last], projects);
+    assert_eq!(
+        ui.read(|f| f.config().favorites.clone()),
+        order,
+        "and it's saved"
+    );
+
+    // A click still opens it.
+    ui.click(("fav", last));
+    assert_eq!(ui.folder(), Some(projects));
+}
+
 // ----- the path bar --------------------------------------------------------------------
 
 #[gpui_kit::test]

@@ -22,6 +22,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::path::PathBuf;
 
+/// A Favorites row being dragged to a new place in the list.
+#[derive(Clone)]
+struct DraggedFavorite(PathBuf);
+
 /// Finder's own sidebar icon for a place, in CoreTypes.bundle.
 fn finder_sidebar_icon(icon: PlaceIcon) -> &'static str {
     match icon {
@@ -280,6 +284,11 @@ impl Finder {
                 }))
                 .test_support()
         });
+        // Favorites can be dragged into another order.
+        let reorder = place
+            .as_ref()
+            .filter(|(_, is_favorite)| *is_favorite)
+            .map(|(place, _)| (place.path.clone(), label.clone()));
         let row = h_flex()
             .id(id)
             .h(ui(28.))
@@ -293,6 +302,19 @@ impl Finder {
             .child(icon)
             .child(row_label(label))
             .children(eject_button)
+            .when_some(reorder, |row, (path, name)| {
+                let highlight = theme.drop_target;
+                let onto = path.clone();
+                row.on_drag(DraggedFavorite(path), move |_, _, _, cx| {
+                    cx.new(|_| super::list::DragLabel(name.clone()))
+                })
+                .drag_over::<DraggedFavorite>(move |style, _, _, _| style.bg(highlight))
+                .on_drop(cx.listener(
+                    move |this, moved: &DraggedFavorite, _, cx| {
+                        this.move_favorite(&moved.0, &onto, cx)
+                    },
+                ))
+            })
             .on_mouse_down(MouseButton::Middle, {
                 let target = target.clone();
                 cx.listener(move |this, _: &MouseDownEvent, window, cx| {

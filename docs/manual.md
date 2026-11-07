@@ -174,7 +174,7 @@ From left to right, with everything showing:
 The sidebar has four sections:
 
 - **Recents** lists files you used recently. See [Recents](#recents).
-- **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar.
+- **Favorites** starts with the standard folders that exist on the computer (Applications, Desktop, Documents, Downloads, and so on). Add folders with "Add to Sidebar" or "Add Folder to Sidebar", or by dragging folders onto the sidebar. Drag a row onto another to put it there.
 - **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
 - **Locations** lists your home folder, iCloud Drive or other cloud drives, mounted volumes and servers, and ends with the **Trash**. Removable disks and servers have an eject button. See [Volumes and servers](#volumes-and-servers) and [The Trash](#the-trash).
 
@@ -248,7 +248,7 @@ Drag a header onto another header to move it there. Name stays first, and in sea
 | Page Up, Page Down | Move the selection a screenful. In the gallery, go to the previous or next page of a PDF. |
 | Shift+Page Up, Shift+Page Down | Extend the selection a screenful. |
 | Cmd+A | Select all. |
-| Escape | Clear the selection. With nothing selected, end the search. In `--pick` mode, cancel. |
+| Escape | Cancel a cut. Otherwise clear the selection. With nothing selected, end the search. In `--pick` mode, cancel. |
 
 ### Type to select
 
@@ -455,6 +455,8 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 ## Copying and moving
 
 Cmd+C (Edit › Copy, or Copy "name" in the item menu) puts the selected items on the clipboard. Cmd+V (Edit › Paste, or Paste Item in the empty-space menu) copies them into the folder the window shows, and Cmd+Alt+V (Edit › Move Items Here) moves them there instead. Pasting needs a folder, so it does nothing while searching or in Recents.
+
+Cmd+X (Edit › Cut, or Cut "name" in the item menu) marks the selected items to move. They stay where they are, drawn faint, until you paste with Cmd+V, which moves them. Escape cancels a cut, and so does copying something else. Other apps see cut items as copied ones, since they have no way to know about the cut.
 
 The clipboard holds the items' paths as text too, one per line, so pasting into a terminal or a text field gives the paths. On macOS and Windows it also holds them as files, so Finder or Explorer and other apps can paste them, and files copied there paste into fffinder. On Linux, files copied in GNOME Files, Dolphin, and other file managers paste into fffinder; GPUI can only put text on the Linux clipboard, so items copied in fffinder paste as files only into fffinder. Anywhere, text that is nothing but paths of existing items (or `file://` addresses), one per line, pastes those items.
 
@@ -715,7 +717,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
-| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut (for text fields), Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
+| Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut, Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
@@ -736,6 +738,7 @@ Right-click one or more items:
 - Open in Editor (when a file is selected)
 - Show in Enclosing Folder (one search result)
 - Show in Finder (Show in Explorer, Show in File Manager)
+- Cut "name", or Cut N Items
 - Copy "name", or Copy N Items
 - Copy Path, or Copy Paths
 - Copy as Nushell List
@@ -842,8 +845,9 @@ Cmd on macOS, Ctrl elsewhere.
 | Right, Left | In the list view, open or close the selected folder in place |
 | Escape | Clear the selection, end the search, or cancel `--pick` |
 | Cmd+A | Select all |
+| Cmd+X | Cut the selected items, to move them with the next paste |
 | Cmd+C | Copy the selected items |
-| Cmd+V | Paste items into the folder |
+| Cmd+V | Paste items into the folder: moves what was cut, copies the rest |
 | Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
 | Cmd+D | Duplicate |
