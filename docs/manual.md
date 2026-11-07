@@ -944,6 +944,9 @@ The Nushell text size setting has a small "A" button and a large "A" button that
 Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and if the file can't be read when fffinder starts, fffinder uses the defaults for everything.
 
 fffinder reads the file again when it opens a new window or tab, so a hand edit shows there and in the windows already open. If the file can't be read while fffinder is running, fffinder keeps the settings it has, and its next write replaces the file with them.
+
+A file that can't be read is never lost. Just before a write would replace it, fffinder moves it to `settings.bad.json` beside it, or to `settings.bad-2.json` and so on if that name is taken. You can fix it there or copy back what you need. Until that first write, fixing the file and opening a new window or tab is enough.
+
 Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, `kind_filter`, and `show_preview_pane`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved, and neither is it remembered for a folder.
 
 | Field | Default | Meaning |
@@ -1064,7 +1067,7 @@ http get --unix-socket $sock 'http://localhost/v1/find?query=readme&limit=5'
 | Settings | `~/Library/Application Support/fffinder` | `~/.config/fffinder` | `%APPDATA%\fffinder` |
 | Data | `~/Library/Application Support/fffinder` | `$XDG_DATA_HOME/fffinder`, else `~/.local/share/fffinder` | `%LOCALAPPDATA%\fffinder` |
 
-The settings folder holds `settings.json`, `actions.nu`, and `window.json`, which records where the last window was. The data folder holds:
+The settings folder holds `settings.json`, `actions.nu`, and `window.json`, which records where the last window was. It also holds `settings.bad.json` if a settings file ever couldn't be read; see [settings.json](#settingsjson). The data folder holds:
 
 - `run/`: the socket and `server.json`, removed on a normal quit.
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.

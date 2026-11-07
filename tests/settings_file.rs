@@ -50,6 +50,31 @@ fn settings_file() -> Config {
     Config::read_from(&config_path()).expect("a settings file")
 }
 
+/// What was moved aside from a settings file that couldn't be read, taking it
+/// away so these tests' shared folder starts clean for the next.
+fn take_backup() -> String {
+    let backup = fffinder_core::config::config_dir().join("settings.bad.json");
+    let text = std::fs::read_to_string(&backup).expect("the bad file was kept");
+    std::fs::remove_file(backup).unwrap();
+    text
+}
+
+#[gpui_kit::test]
+fn a_bad_file_at_launch_is_kept_when_the_first_change_replaces_it(cx: &mut TestAppContext) {
+    let _turn = take_turn();
+    let fx = Fixture::new("bad-at-launch");
+    std::fs::write(config_path(), "{ a typo at launch").unwrap();
+
+    // Its first change writes the settings file.
+    let ui = open_writing(cx, &fx.dir);
+
+    assert_eq!(
+        settings_file().show_hidden,
+        ui.read(|f| f.config().show_hidden)
+    );
+    assert_eq!(take_backup(), "{ a typo at launch");
+}
+
 #[gpui_kit::test]
 fn a_new_tab_picks_up_a_hand_edit(cx: &mut TestAppContext) {
     let _turn = take_turn();
@@ -90,6 +115,7 @@ fn a_new_tab_ignores_a_file_it_cant_read(cx: &mut TestAppContext) {
     toggle_hidden(&mut ui);
     assert!(settings_file().favorites.contains(&favorite));
     assert_eq!(settings_file().show_hidden, !before.show_hidden);
+    assert_eq!(take_backup(), "{ a typo");
 }
 
 #[cfg(unix)]

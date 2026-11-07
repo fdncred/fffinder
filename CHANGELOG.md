@@ -62,7 +62,7 @@ This release adds file manager basics that were missing: resizable columns, box 
 - Dragging items showed their names in black, which was hard to read on the dark theme's gray. Drag previews now use the theme's text color and font.
 - Icon view names cut off at two lines now end in an ellipsis.
 - After a window changed size in one step, such as being zoomed, the icon view kept its old column count until the mouse next moved, which could leave items off the right edge.
-- Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too.
+- Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too. If the settings file can't be read, for example because a hand edit left a typo, fffinder moves it to `settings.bad.json` instead of writing over it.
 - On macOS, the Dock and the window switcher showed a generic executable icon when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`. fffinder now sets its icon itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
 
 ## [0.2.0] - 2026-10-28

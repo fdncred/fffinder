@@ -768,7 +768,8 @@ impl Config {
     /// keeping everything else in it. Another fffinder process, such as a
     /// `--pick` or `--term` one, may have changed the file since it was read.
     /// When the file is missing or can't be read or parsed there are no fields
-    /// to keep, so all of `after` is written.
+    /// to keep, so all of `after` is written, and a file that's there is moved
+    /// aside first so whoever wrote it can still get at what's in it.
     ///
     /// # Arguments
     ///
@@ -778,7 +779,8 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns the I/O error if the file can't be written.
+    /// Returns the I/O error if the file can't be written, or if a file that
+    /// can't be read can't be moved aside, which leaves it where it is.
     pub fn save_changes(before: &Config, after: &Config, path: &Path) -> std::io::Result<()> {
         match Config::read_from(path) {
             Some(mut file) => {
@@ -786,9 +788,36 @@ impl Config {
                 file.save_to(path)
             }
             // Merging into defaults here would wipe every setting on disk.
-            None => after.save_to(path),
+            None => {
+                set_aside_bad_file(path)?;
+                after.save_to(path)
+            }
         }
     }
+}
+
+/// Move a settings file that can't be read out of the way of the write that's
+/// about to replace it, to `settings.bad.json` beside it. A later bad file gets
+/// `settings.bad-2.json` and so on, so it can't replace an earlier one. Moving
+/// works even on a file that can't be read, and can't leave half a copy.
+fn set_aside_bad_file(path: &Path) -> std::io::Result<()> {
+    // No file means nothing to keep.
+    if path.symlink_metadata().is_err() {
+        return Ok(());
+    }
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let folder = path.parent().unwrap_or_else(|| Path::new(""));
+    let backup = crate::ops::free_name(folder, |n| match n {
+        1 => format!("{stem}.bad.json"),
+        n => format!("{stem}.bad-{n}.json"),
+    });
+    std::fs::rename(path, &backup)?;
+    log::warn!(
+        "{} couldn't be read, so it was kept as {}",
+        path.display(),
+        backup.display()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -894,6 +923,17 @@ mod tests {
         dir
     }
 
+    /// The names in `dir`, in order.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|item| item.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
     #[test]
     fn saving_over_a_file_that_cant_be_parsed_keeps_every_setting() {
         let dir = empty_settings_folder("bad-saved");
@@ -912,6 +952,65 @@ mod tests {
         Config::save_changes(&before, &after, &path).unwrap();
 
         assert_eq!(Config::load_from(&path), after);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("settings.bad.json")).unwrap(),
+            "{ a typo",
+            "and what was in the file is still there to fix"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn each_bad_file_is_kept() {
+        let dir = empty_settings_folder("bad-each");
+        let path = dir.join("settings.json");
+        let config = Config::default();
+
+        for typo in ["first typo", "second typo"] {
+            std::fs::write(&path, typo).unwrap();
+            Config::save_changes(&config, &config, &path).unwrap();
+        }
+
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+        assert_eq!(read("settings.bad.json"), "first typo");
+        assert_eq!(read("settings.bad-2.json"), "second typo");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_bad_file_is_moved_aside() {
+        let dir = empty_settings_folder("bad-only");
+        let path = dir.join("settings.json");
+        let config = Config::default();
+
+        Config::save_changes(&config, &config, &path).unwrap();
+        assert_eq!(names_in(&dir), ["settings.json"], "there was no file");
+
+        Config::save_changes(&config, &config, &path).unwrap();
+        assert_eq!(names_in(&dir), ["settings.json"], "a good file stays");
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bad_file_that_cant_be_moved_aside_is_not_replaced() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = empty_settings_folder("bad-stuck");
+        let path = dir.join("settings.json");
+        let config = Config::default();
+        std::fs::write(&path, "{ a typo").unwrap();
+        let set_mode = |mode: u32| {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        set_mode(0o500);
+        let saved = Config::save_changes(&config, &config, &path);
+        set_mode(0o700);
+
+        assert!(saved.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ a typo");
+        assert_eq!(names_in(&dir), ["settings.json"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
