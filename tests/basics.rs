@@ -358,6 +358,115 @@ fn the_scope_bar_wraps_rather_than_losing_its_controls(cx: &mut TestAppContext) 
     assert!(kind.right() <= px(640.), "{:?}", kind.right());
 }
 
+// ----- renaming in place ----------------------------------------------------------------
+
+#[gpui_kit::test]
+fn f2_renames_in_place(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-inline");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    // Only the part before the extension is selected, so typing replaces it.
+    ui.select("Roadmap.md");
+    ui.press("f2");
+    assert!(ui.exists("rename-input"));
+    assert!(!ui.dialog_open());
+    ui.type_text("Plan B");
+    ui.press("enter");
+    assert!(!ui.exists("rename-input"));
+    assert!(
+        fx.path("Plan B.md").exists(),
+        "a space is text, not Quick Look"
+    );
+    assert!(!ui.read(|f| f.quick_look_is_open()));
+    assert_eq!(ui.selected(), ["Plan B.md"]);
+    assert!(ui.files_focused(), "the keys go back to the files");
+
+    // Letters are text too; they don't select other items.
+    ui.select("Plan B.md");
+    ui.press("f2");
+    ui.type_text("n");
+    assert_eq!(ui.selected(), ["Plan B.md"]);
+
+    // Escape leaves the name alone.
+    ui.press("escape");
+    assert!(!ui.exists("rename-input"));
+    assert!(fx.path("Plan B.md").exists());
+    assert!(ui.files_focused());
+
+    // Clicking somewhere else keeps what was typed.
+    ui.press("f2");
+    ui.type_text("Plan C");
+    ui.click(item_id("row", &fx.path("notes.txt")));
+    assert!(fx.path("Plan C.md").exists());
+    assert!(!ui.exists("rename-input"));
+
+    // Undo puts the old name back, as it does for any rename.
+    ui.press(&cmd("z"));
+    assert!(fx.path("Plan B.md").exists());
+}
+
+#[gpui_kit::test]
+fn a_taken_name_keeps_editing(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-taken");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    ui.select("Roadmap.md");
+    ui.press("f2");
+    ui.press(&cmd("a"));
+    ui.type_text("notes.txt");
+    ui.press("enter");
+
+    assert!(ui.exists("rename-input"), "still editing, to fix the name");
+    assert!(fx.path("Roadmap.md").exists());
+    ui.press("escape");
+    assert!(fx.path("Roadmap.md").exists());
+}
+
+#[gpui_kit::test]
+fn renaming_in_place_works_in_every_view_but_the_gallery(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-views");
+    let mut ui = Ui::open(cx, &fx.dir);
+
+    ui.click("view-icons");
+    ui.select("notes.txt");
+    ui.press("f2");
+    ui.type_text("icons");
+    ui.press("enter");
+    assert!(fx.path("icons.txt").exists());
+
+    ui.click("view-columns");
+    ui.settle();
+    ui.click(item_id("crow", &fx.path("icons.txt")));
+    ui.press("f2");
+    ui.type_text("columns");
+    ui.press("enter");
+    assert!(fx.path("columns.txt").exists());
+
+    ui.click("view-gallery");
+    ui.press("f2");
+    assert!(ui.dialog_open());
+    assert!(!ui.exists("rename-field"));
+    ui.press("escape");
+}
+
+#[gpui_kit::test]
+fn a_new_folder_is_named_in_place(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-new");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    ui.press(&cmd("shift-n"));
+
+    assert!(!ui.dialog_open());
+    assert_eq!(ui.selected(), ["untitled folder"]);
+    ui.type_text("Archive");
+    ui.press("enter");
+    assert!(fx.path("Archive").is_dir());
+    assert_eq!(ui.selected(), ["Archive"]);
+}
+
 // ----- keys ----------------------------------------------------------------------------
 
 #[gpui_kit::test]

@@ -184,7 +184,6 @@ fn actions_menu_items(cx: &mut TestAppContext) {
     assert!(ui.files_focused(), "focus stays with the files");
 
     for (item, close) in [
-        ("Rename…", "rename-cancel"),
         ("Go to Folder…", "goto-cancel"),
         ("Search Syntax…", "help-done"),
         ("Settings…", "settings-done"),
@@ -209,9 +208,15 @@ fn actions_menu_items(cx: &mut TestAppContext) {
     ui.click("actions");
     ui.click_menu_item("New Folder");
     assert!(fx.path("untitled folder").is_dir());
-    assert!(ui.dialog_open(), "a new folder opens Rename");
-    ui.click("rename-cancel");
+    assert!(ui.exists("rename-input"), "a new folder starts naming it");
+    ui.press("escape");
     assert!(ui.names().contains(&"untitled folder".to_string()));
+
+    ui.select("notes.txt");
+    ui.click("actions");
+    ui.click_menu_item("Rename…");
+    assert!(ui.exists("rename-input"));
+    ui.press("escape");
 }
 
 #[gpui_kit::test]
@@ -606,7 +611,7 @@ fn context_menus_on_items_and_empty_space(cx: &mut TestAppContext) {
     ui.right_click_at("content", below);
     ui.click_menu_item("New Folder");
     assert!(fx.path("untitled folder").is_dir());
-    ui.click("rename-cancel");
+    ui.press("escape");
 }
 
 // ----- dialogs ---------------------------------------------------------------------
@@ -929,9 +934,11 @@ fn go_to_folder_dialog(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn rename_dialog(cx: &mut TestAppContext) {
+fn rename_dialog_in_the_gallery(cx: &mut TestAppContext) {
+    // The gallery has no room to edit a name in place, so it asks.
     let fx = Fixture::new("rename");
     let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-gallery");
     ui.select("Roadmap.md");
     ui.press("f2");
     assert!(ui.dialog_open());

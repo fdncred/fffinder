@@ -18,6 +18,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 - The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
 - Every list column can be resized now, including Name and the Folder column in search results, and each header shows a line to grab. Double-click the line to fit the column to its longest text. When columns are wider than the window, the list scrolls sideways.
 - Text that's cut off shows in full in a tooltip when you rest the mouse on it: list cells and headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. File names and folder paths are cut in the middle, so the extension stays visible.
+- Rename edits the name in place in the list, icon, and column views, with the part before the extension selected. Return or clicking elsewhere keeps it, and Escape cancels. New Folder names the folder the same way. The gallery still asks in a dialog.
 - Search results and Recents can sort by folder: click the Folder header.
 - The column view's panes and the sidebar can be resized by dragging their edges, and their widths are saved.
 - Windows reopen at the place and size they last had.

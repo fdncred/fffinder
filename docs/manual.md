@@ -428,14 +428,14 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 
 | Command | What it does |
 | --- | --- |
-| New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and opens the Rename dialog for it. |
+| New Folder (Cmd+Shift+N) | Creates "untitled folder" (or "untitled folder 2", …) in the current folder and starts naming it in place. |
 | New File… (Cmd+Alt+N) | Asks for a name ("untitled.txt", with the part before the extension selected) and makes an empty file with it in the current folder. A taken or invalid name is refused. |
 | Duplicate (Cmd+D) | Copies each selected item beside itself as "name copy.ext", then "name copy 2.ext", and so on. |
 | Make Alias (macOS), Create Shortcut (Windows) | Makes a Finder alias to each selected item beside it, named "name alias", which Finder and other apps follow to the original even after the original moves. On Windows it makes an Explorer shortcut, "name - Shortcut.lnk". Linux has no aliases; use Make Symbolic Link. |
 | Make Symbolic Link | Makes a symbolic link to each selected item beside it, named "name link". The link points at the name, so it keeps working when the folder moves. On Windows, making links needs Developer Mode or an administrator. |
 | Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
 | Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
-| Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
+| Rename… (F2) | Edits the item's name in place, with the part before the extension selected. Return or clicking elsewhere keeps the new name, and Escape keeps the old one. A name that's taken says so and goes on editing. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). The gallery has no room to edit in place, so it asks in a dialog. With several items selected, F2 opens [batch rename](#renaming-several-items). |
 | Move to Trash (Cmd+Backspace, Delete) | Moves the selected items to the Trash at once, and selects the next item. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace; Shift+Delete on Linux and Windows) | Asks, then deletes the selected items for good, without the Trash, and selects the next item. |
 | Get Info (Cmd+I; also Alt+Enter on Linux and Windows) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |

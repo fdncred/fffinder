@@ -739,8 +739,9 @@ impl Finder {
         });
     }
 
-    /// Rename `path` to the typed name. Returns whether the dialog should close.
-    fn submit_rename(
+    /// Rename `path` to the typed name. Returns whether that's done, so the
+    /// dialog or field can close.
+    pub(super) fn submit_rename(
         &mut self,
         path: &Path,
         input: &Entity<InputState>,

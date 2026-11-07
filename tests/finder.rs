@@ -223,17 +223,18 @@ fn file_shortcuts(cx: &mut TestAppContext) {
     let mut ui = Ui::open(cx, &fx.dir);
     ui.press(&cmd("shift-n"));
     assert!(fx.path("untitled folder").is_dir());
-    assert!(ui.dialog_open(), "a new folder opens Rename");
+    assert!(ui.exists("rename-input"), "a new folder starts naming it");
     ui.type_text("Archive");
     ui.press("enter");
-    assert!(!ui.dialog_open());
+    assert!(!ui.exists("rename-input"));
     assert!(fx.path("Archive").is_dir());
     assert_eq!(ui.selected(), ["Archive"]);
 
     ui.select("notes.txt");
     ui.press("f2");
-    assert!(ui.dialog_open());
+    assert!(ui.exists("rename-input"));
     ui.press("escape");
+    assert!(!ui.exists("rename-input"));
     ui.press("space");
     assert!(ui.read(|f| f.quick_look_is_open()));
     ui.press(&cmd("y"));

@@ -426,6 +426,7 @@ impl Finder {
         tile_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let renaming = self.rename_field(&self.rows[ix].entry.path, cx);
         let pal = palette(cx);
         let theme = cx.theme();
         let row = &self.rows[ix];
@@ -453,8 +454,9 @@ impl Finder {
                     .when(selected, |this| this.bg(pal.tile_selected))
                     .child(file_icon(&row.entry, icon, true, &pal)),
             )
-            .child(
-                div()
+            .child(match renaming {
+                Some(field) => div().w(ui(tile_w - 8.)).child(field).into_any_element(),
+                None => div()
                     .max_w(ui(tile_w - 8.))
                     .px(ui(5.))
                     .py(ui(1.))
@@ -469,8 +471,9 @@ impl Finder {
                     .when(!selected && row.entry.hidden, |this| {
                         this.text_color(theme.muted_foreground)
                     })
-                    .child(name),
-            )
+                    .child(name)
+                    .into_any_element(),
+            })
             .tooltip(tooltip)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         self.item_interactions(self.item_drag(el, ix), ix, div(), cx)
@@ -790,6 +793,7 @@ impl Finder {
         active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let renaming = self.rename_field(&self.rows[ix].entry.path, cx);
         let pal = palette(cx);
         let theme = cx.theme();
         let base = Self::list_row_base(stripe, cx);
@@ -872,7 +876,7 @@ impl Finder {
                 .overflow_hidden()
                 .children(disclosure)
                 .child(file_icon(&row.entry, ui(16.), false, &pal))
-                .child(name_text(row, selected, &pal))
+                .child(renaming.unwrap_or_else(|| name_text(row, selected, &pal)))
                 .test_support(),
             )
             .child(
@@ -1002,6 +1006,11 @@ impl Finder {
         active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let renaming = self
+            .columns
+            .get(col)
+            .and_then(|pane| pane.entries.get(ix))
+            .and_then(|entry| self.rename_field(&entry.path, cx));
         let pal = palette(cx);
         let theme = cx.theme();
         let Some(pane) = self.columns.get(col) else {
@@ -1048,11 +1057,12 @@ impl Finder {
                 })
             })
             .child(file_icon(entry, ui(16.), false, &pal))
-            .child(
+            .child(renaming.unwrap_or_else(|| {
                 one_line_name(div().id("name").flex_1())
                     .child(name)
-                    .tooltip(tooltip),
-            )
+                    .tooltip(tooltip)
+                    .into_any_element()
+            }))
             .when(entry.is_navigable(), |this| {
                 this.child(
                     Icon::new(IconName::ChevronRight)

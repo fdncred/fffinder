@@ -10,6 +10,7 @@ mod fit;
 mod fps;
 mod groups;
 mod info;
+mod inline_rename;
 mod list;
 mod make;
 mod marquee;
@@ -348,6 +349,8 @@ pub struct Finder {
     children: HashMap<PathBuf, Vec<FileEntry>>,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
+    /// The name being edited in place.
+    renaming: Option<inline_rename::InlineRename>,
     /// How wide the toolbar was last drawn, which decides what fits in it.
     toolbar_width: Pixels,
     /// What the toolbar last showed.
@@ -545,6 +548,7 @@ impl Finder {
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
+            renaming: None,
             // Wide until it's measured, so a first frame doesn't fold anything.
             toolbar_width: px(f32::MAX),
             toolbar_fit: toolbar::ToolbarFit::Everything,
@@ -800,6 +804,7 @@ impl Finder {
     ) {
         self.selection.clear();
         self.marquee = None;
+        self.renaming = None;
         self.columns.clear();
         self.active_column = 0;
         self.expanded.clear();
@@ -2437,8 +2442,7 @@ impl Finder {
                     cx,
                 );
                 self.end_search(window, cx);
-                self.load_listing(vec![path.clone()], true, cx);
-                self.open_rename_dialog(path, window, cx);
+                self.add_and_rename(path, window, cx);
             }
             Err(err) => window.push_notification(
                 (
@@ -2455,7 +2459,7 @@ impl Finder {
         if selected.len() > 1 {
             self.open_batch_rename(selected, window, cx);
         } else if let Some(entry) = self.primary_entry() {
-            self.open_rename_dialog(entry.path, window, cx);
+            self.begin_rename(entry.path, window, cx);
         }
     }
 
@@ -2871,7 +2875,10 @@ impl Finder {
         div()
             .id("content")
             .test_support()
-            .key_context(if self.has_split_view(cx) {
+            // While a name is being edited, the file views' keys are its text.
+            .key_context(if self.renaming.is_some() {
+                FILES_RENAMING
+            } else if self.has_split_view(cx) {
                 FILES
             } else {
                 FILES_ONE_PANE
@@ -2927,7 +2934,7 @@ impl Finder {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let keys = &event.keystroke;
                 let m = keys.modifiers;
-                if m.control || m.platform || m.alt || m.function {
+                if m.control || m.platform || m.alt || m.function || this.renaming.is_some() {
                     return;
                 }
                 if let Some(text) = keys.key_char.as_deref()

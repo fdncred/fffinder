@@ -149,7 +149,7 @@ fn undo_reverses_file_operations(cx: &mut TestAppContext) {
     assert_eq!(ui.selected(), ["Roadmap.md"], "the item is selected again");
 
     ui.press(&cmd("shift-n"));
-    ui.click("rename-cancel");
+    ui.press("escape");
     assert!(fx.path("untitled folder").is_dir());
     ui.press(&cmd("z"));
     assert!(

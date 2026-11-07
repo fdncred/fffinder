@@ -97,6 +97,8 @@ pub const FILES: &str = "FinderFiles";
 /// [`FILES`], in a window with no second pane, where F5 refreshes as it does
 /// in other file managers instead of copying across.
 pub const FILES_ONE_PANE: &str = "FinderFiles OnePane";
+/// The file views while a name is being edited in them.
+pub const FILES_RENAMING: &str = "FinderFilesRenaming";
 /// Key context of the Quick Look preview, so Space closes it and the arrows
 /// move through the items.
 pub const QUICK_LOOK: &str = "QuickLook";
