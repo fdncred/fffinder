@@ -1,4 +1,4 @@
-//! Dialogs: settings, Go to Folder, rename, Move to Trash, and search syntax.
+//! Dialogs: settings, Go to Folder, rename, and search syntax.
 
 use super::go_to::PathCompletions;
 use super::{AppState, Finder, group_digits};
@@ -24,8 +24,10 @@ use std::path::{Path, PathBuf};
 impl Finder {
     /// A dialog returns focus to whatever had it when it opened. From a menu
     /// that is the menu's button, which leaves the keyboard dead in the file
-    /// views, so focus the files first.
+    /// views, so focus the files first. A name being edited ends here too,
+    /// since its field would be gone by the time the dialog closes.
     pub(super) fn focus_before_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_rename(window, cx);
         if !window.has_focused_input(cx) {
             self.focus_files(window, cx);
         }
@@ -614,8 +616,7 @@ impl Finder {
                         .unwrap_or_default(),
                 )
         });
-        let base = self.current_folder().map(Path::to_path_buf);
-        let completions = PathCompletions::new(input.clone(), base, window, cx);
+        let completions = PathCompletions::new(input.clone(), self.go_to_base(), window, cx);
         let view = cx.entity();
         let first = std::cell::Cell::new(true);
         window.open_dialog(cx, move |dialog, window, cx| {
@@ -664,6 +665,14 @@ impl Finder {
         });
     }
 
+    /// Where a relative path typed in Go to Folder starts: the folder shown,
+    /// or the home folder from places that aren't a folder, like Recents.
+    fn go_to_base(&self) -> Option<PathBuf> {
+        self.current_folder()
+            .map(Path::to_path_buf)
+            .or_else(dirs::home_dir)
+    }
+
     /// Open the folder (or reveal the file) typed in Go to Folder. Returns
     /// whether the dialog should close.
     fn submit_go_to(
@@ -673,7 +682,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) -> bool {
         let text = input.read(cx).value().to_string();
-        let path = listing::resolve_typed_path(&text, self.current_folder());
+        let path = listing::resolve_typed_path(&text, self.go_to_base().as_deref());
         if path.is_dir() {
             self.navigate(Location::Folder(path), window, cx);
         } else if path.exists() {
@@ -699,11 +708,7 @@ impl Finder {
     ) {
         self.focus_before_dialog(window, cx);
         let name = fffinder_core::entry::display_name(&path);
-        let stem_len = if path.is_dir() {
-            name.len()
-        } else {
-            name.rfind('.').filter(|&i| i > 0).unwrap_or(name.len())
-        };
+        let stem_len = super::inline_rename::name_stem_len(&name, path.is_dir());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
         let view = cx.entity();
         let first = std::cell::Cell::new(true);
@@ -774,7 +779,7 @@ impl Finder {
         if target == path {
             return true;
         }
-        if target.exists() {
+        if target.exists() && !crate::rename::only_case_differs(path, &target) {
             notify(Warning, format!("“{new_name}” already exists"));
             return false;
         }

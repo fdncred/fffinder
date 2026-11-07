@@ -507,9 +507,65 @@ impl<'a> Ui<'a> {
 
     /// Press the left button at `start` and drag to `end` without letting go.
     pub fn drag_and_hold(&mut self, start: Point<Pixels>, end: Point<Pixels>) {
+        self.drag_and_hold_with(start, end, Default::default());
+    }
+
+    /// The same, with `modifiers` held.
+    pub fn drag_and_hold_with(
+        &mut self,
+        start: Point<Pixels>,
+        end: Point<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
         self.step(format!("hold from {start:?} to {end:?}"), |window, cx| {
-            press_and_move(window, cx, start, end, Default::default());
+            press_and_move(window, cx, start, end, modifiers);
         });
+    }
+
+    /// Move the mouse to `position` with the left button still down.
+    pub fn move_while_held(&mut self, position: Point<Pixels>, modifiers: gpui_kit::Modifiers) {
+        self.step(format!("hold at {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Make the window `width` by `height` points, with a new layout.
+    pub fn resize(&mut self, width: f32, height: f32) {
+        gpui_kit::VisualTestContext::from_window(self.handle, self.cx)
+            .simulate_resize(gpui_kit::size(px(width), px(height)));
+        self.settle();
+    }
+
+    /// Make the window the active one, as clicking it does. Focus events only
+    /// fire in an active window, and a test's window doesn't start out active.
+    pub fn activate(&mut self) {
+        self.window(|window, _| window.activate_window());
+        self.settle();
+    }
+
+    /// Make the window inactive, as going to another app does.
+    pub fn deactivate(&mut self) {
+        gpui_kit::VisualTestContext::from_window(self.handle, self.cx).deactivate_window();
+        self.settle();
+    }
+
+    /// How many notifications are showing.
+    pub fn notification_count(&mut self) -> usize {
+        self.window(|window, cx| window.notifications(cx).len())
+    }
+
+    /// Put `text` on the clipboard, as copying in another app or a text field does.
+    pub fn copy_text(&mut self, text: impl Into<String>) {
+        self.cx
+            .write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.into()));
     }
 
     /// Let go of the left button at `position`.

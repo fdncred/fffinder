@@ -110,6 +110,56 @@ fn each_tab_keeps_its_own_view(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn leaving_a_tab_during_a_rename_gives_the_new_tab_the_keyboard(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-tabs");
+    let mut ui = with_tabs(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    ui.select("Roadmap.md");
+    ui.press("f2");
+    ui.press(&cmd("a"));
+    ui.type_text("Plan.md");
+
+    ui.press(&cmd("t"));
+
+    assert!(fx.path("Plan.md").exists(), "the name was kept");
+    let new_tab = tabs(&ui)[1].clone();
+    let focused = ui.window(|window, cx| new_tab.read(cx).files_focused(window));
+    assert!(focused, "the keys are the new tab's");
+
+    // The same going back to a tab, from one where a name that can't be used
+    // was left: the old name stays, and the keys don't go back to its field.
+    show_tab(&mut ui, 1);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    ui.press("f2");
+    ui.press(&cmd("a"));
+    ui.type_text("a/b");
+    ui.press("enter");
+    show_tab(&mut ui, 0);
+
+    assert!(fx.path("notes.txt").exists());
+    assert!(ui.files_focused());
+}
+
+#[gpui_kit::test]
+fn choosing_the_view_a_folder_inherited_keeps_it_there(cx: &mut TestAppContext) {
+    let fx = Fixture::new("view-pinned");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    // It inherits the list from the last folder; clicking List pins it.
+    ui.go_to(&fx.path("Projects"));
+    ui.click("view-list");
+
+    ui.go_to(&fx.path("Projects/atlas"));
+    ui.click("view-gallery");
+    ui.go_to(&fx.path("Projects"));
+
+    assert_eq!(ui.read(|f| f.config().view_mode), ViewMode::List);
+}
+
+#[gpui_kit::test]
 fn the_split_pane_keeps_its_view_to_itself(cx: &mut TestAppContext) {
     let fx = Fixture::new("split-own");
     let mut ui = with_tabs(cx, &fx.dir);

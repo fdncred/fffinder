@@ -205,6 +205,22 @@ fn a_cut_off_name_shows_in_a_tooltip_in_the_icon_view(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn resting_on_a_tile_being_renamed_shows_no_tooltip(cx: &mut TestAppContext) {
+    let fx = Fixture::new("tooltip-rename");
+    std::fs::write(fx.path(LONG_FILE), "long").unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-icons");
+    ui.select(LONG_FILE);
+    ui.press("f2");
+
+    // With no name drawn, its tooltip would have nothing to ask, and panic.
+    ui.hover(item_id("tile", &fx.path(LONG_FILE)));
+
+    assert!(!ui.exists("cut-off-text"));
+    assert!(ui.exists("rename-input"));
+}
+
+#[gpui_kit::test]
 fn a_long_tooltip_wraps(cx: &mut TestAppContext) {
     let fx = Fixture::new("tooltip-wrap");
     let name = "a name that goes on and on ".repeat(8) + ".txt";
@@ -348,6 +364,101 @@ fn the_sidebar_resizes(cx: &mut TestAppContext) {
     assert_eq!(width(&ui), SIDEBAR_WIDTH_RANGE.1);
     ui.double_click("resize-sidebar");
     assert_eq!(width(&ui), DEFAULT_SIDEBAR_WIDTH);
+}
+
+#[gpui_kit::test]
+fn a_narrowed_sidebar_follows_the_mouse_at_once(cx: &mut TestAppContext) {
+    let fx = Fixture::new("sidebar-narrowed");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.drag_by("resize-sidebar", 2000.);
+    assert_eq!(ui.read(|f| f.config().sidebar_width), SIDEBAR_WIDTH_RANGE.1);
+
+    // Too small a window for that, so it's drawn narrower than chosen.
+    ui.resize(600., 600.);
+    let shown = f32::from(ui.snapshot("resize-sidebar").bounds().center().x);
+    assert!(shown < SIDEBAR_WIDTH_RANGE.1, "{shown}");
+
+    ui.drag_by("resize-sidebar", -20.);
+
+    assert_eq!(ui.read(|f| f.config().sidebar_width), shown - 20.);
+}
+
+#[gpui_kit::test]
+fn a_drag_tells_the_others_about_its_width_when_it_ends(cx: &mut TestAppContext) {
+    let fx = Fixture::new("resize-publish");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let start = ui.snapshot("resize-Kind").bounds().center();
+    let end = start + point(px(40.), px(0.));
+    let kind = |columns: &[fffinder_core::ColumnSetting]| {
+        columns
+            .iter()
+            .find(|setting| setting.column == ListColumn::Kind)
+            .map(|setting| setting.width)
+            .unwrap()
+    };
+    let published = |ui: &mut Ui| {
+        let config = ui.cx.update(fffinder::settings::current);
+        kind(&config.list_columns)
+    };
+    let before = published(&mut ui);
+
+    ui.drag_and_hold(start, end);
+    assert_eq!(ui.read(|f| kind(&f.config().list_columns)), before + 40.);
+    assert_eq!(published(&mut ui), before, "not on every move");
+
+    ui.release(end);
+    assert_eq!(published(&mut ui), before + 40.);
+}
+
+#[gpui_kit::test]
+fn split_panes_take_turns_with_a_columns_width(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let fx = Fixture::new("resize-split");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            workspace: true,
+            ..Default::default()
+        },
+    );
+    // Wide enough for each pane to show the whole list.
+    ui.resize(2600., 800.);
+    ui.click("view-list");
+    ui.press(&cmd("\\"));
+    ui.settle();
+    let width = |ui: &Ui| {
+        ui.read(|f| {
+            f.config()
+                .list_columns
+                .iter()
+                .find(|setting| setting.column == ListColumn::Kind)
+                .map(|setting| setting.width)
+                .unwrap()
+        })
+    };
+    let start_width = width(&ui);
+    // The same edge in each pane; the right pane's is the further right.
+    let edges = |ui: &mut Ui| {
+        let mut edges: Vec<_> = ui.window(|window, _| {
+            window
+                .find_all("resize-Kind")
+                .iter()
+                .map(|edge| edge.bounds().center())
+                .collect()
+        });
+        edges.sort_by(|a, b| f32::from(a.x).total_cmp(&f32::from(b.x)));
+        edges
+    };
+
+    let right = edges(&mut ui)[1];
+    ui.drag_points(right, right + point(px(30.), px(0.)), Default::default());
+    assert_eq!(width(&ui), start_width + 30.);
+
+    let left = edges(&mut ui)[0];
+    ui.drag_points(left, left + point(px(-20.), px(0.)), Default::default());
+    assert_eq!(width(&ui), start_width + 10., "only the pane dragged");
 }
 
 #[gpui_kit::test]

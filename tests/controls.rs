@@ -904,6 +904,87 @@ fn settings_terminal_choice(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn go_to_folder_lists_matches_for_the_path_it_opens_with(cx: &mut TestAppContext) {
+    let fx = Fixture::new("goto-opens");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.go_to(&fx.path("Projects"));
+
+    ui.press(&cmd("shift-g"));
+    ui.settle();
+
+    assert!(ui.exists(("goto-match", 0usize)), "before any typing");
+    // Tab goes on from there, into the folder it opened with.
+    ui.press("tab");
+    ui.settle();
+    ui.type_text("atlas");
+    ui.settle();
+    ui.press("enter");
+    assert_eq!(ui.folder(), Some(fx.path("Projects/atlas")));
+}
+
+#[gpui_kit::test]
+fn clicking_a_go_to_folder_match_keeps_the_keyboard_in_the_field(cx: &mut TestAppContext) {
+    let fx = Fixture::new("goto-click");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.press(&cmd("shift-g"));
+    ui.type_text("proj");
+    ui.settle();
+
+    ui.click(("goto-match", 0usize));
+    ui.settle();
+    ui.type_text("atlas");
+    ui.press("enter");
+
+    assert_eq!(ui.folder(), Some(fx.path("Projects/atlas")));
+}
+
+#[gpui_kit::test]
+fn tab_waits_for_the_matches_of_what_is_typed_now(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    let fx = Fixture::new("goto-stale");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.press(&cmd("shift-g"));
+    ui.type_text("proj");
+    ui.settle();
+
+    // The matches for "proj" are in, and the read for "projx" hasn't finished.
+    ui.window(|window, cx| {
+        window.input("x", cx);
+        window.press("tab", cx);
+    });
+    ui.settle();
+    ui.press("enter");
+
+    assert!(ui.dialog_open(), "projx doesn't exist");
+    assert_eq!(ui.folder().as_deref(), Some(fx.dir.as_path()));
+}
+
+#[gpui_kit::test]
+fn go_to_folder_starts_from_home_where_there_is_no_folder(cx: &mut TestAppContext) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let in_cwd = |name: &std::ffi::OsStr| std::path::Path::new(name).exists();
+    let Some(name) = std::fs::read_dir(&home).ok().and_then(|items| {
+        items
+            .flatten()
+            .map(|item| item.file_name())
+            .find(|name| !in_cwd(name) && !name.to_string_lossy().starts_with('.'))
+    }) else {
+        return;
+    };
+    let fx = Fixture::new("goto-home");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.update(|f, window, cx| f.navigate(Location::Recents, window, cx));
+    ui.press(&cmd("shift-g"));
+
+    ui.type_text(&name.to_string_lossy());
+    ui.settle();
+
+    assert!(ui.exists(("goto-match", 0usize)), "{name:?} is in {home:?}");
+}
+
+#[gpui_kit::test]
 fn go_to_folder_dialog(cx: &mut TestAppContext) {
     let fx = Fixture::new("goto");
     let mut ui = Ui::open(cx, &fx.dir);
@@ -1295,6 +1376,38 @@ fn picker_bar_enables_choose_with_a_selection(cx: &mut TestAppContext) {
     assert_eq!(ui.snapshot("picker-choose").label(), Some("Choose"));
     ui.select_also("notes.txt");
     assert_eq!(ui.snapshot("picker-choose").label(), Some("Choose 2 Items"));
+}
+
+#[gpui_kit::test]
+fn cmd_double_click_opens_a_folder_in_a_file_chooser(cx: &mut TestAppContext) {
+    let fx = Fixture::new("picker-cmd");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            picker: Some(PickerOptions { multiple: false }),
+            ..Default::default()
+        },
+    );
+    let cmd_held = if cfg!(target_os = "macos") {
+        gpui_kit::Modifiers::command()
+    } else {
+        gpui_kit::Modifiers::control()
+    };
+    ui.click("view-list");
+
+    ui.double_click_with(item_id("row", &fx.path("Projects")), cmd_held);
+    assert_eq!(ui.folder(), Some(fx.path("Projects")), "there are no tabs");
+
+    ui.go_to(&fx.dir);
+    ui.click("view-columns");
+    ui.settle();
+    ui.double_click_with(item_id("crow", &fx.path("Projects")), cmd_held);
+    assert_eq!(
+        ui.folder(),
+        Some(fx.path("Projects")),
+        "from the columns too"
+    );
 }
 
 #[gpui_kit::test]

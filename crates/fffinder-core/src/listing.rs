@@ -213,6 +213,7 @@ pub fn resolve_typed_path(text: &str, base: Option<&Path>) -> PathBuf {
 /// The items a typed path could go on to name: everything in the folder it
 /// has reached whose name starts with what's after the last separator,
 /// ignoring case, folders first. Hidden items only show once a `.` is typed.
+/// A bare `~` is the home folder, so Tab finishes it to `~/`.
 ///
 /// # Arguments
 ///
@@ -223,7 +224,10 @@ pub fn resolve_typed_path(text: &str, base: Option<&Path>) -> PathBuf {
 ///
 /// Every match, or none if the folder can't be read
 pub fn complete_path(typed: &str, base: Option<&Path>) -> Vec<PathCompletion> {
-    let typed = typed.trim_start();
+    let typed = match typed.trim_start() {
+        "~" => "~/",
+        typed => typed,
+    };
     // `/` works everywhere, and on Windows `\\` does too.
     let is_separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
     let split = typed.rfind(is_separator).map_or(0, |at| at + 1);
@@ -359,6 +363,18 @@ mod tests {
         assert_eq!(shared("do"), Some("Do".to_string()), "both start with Do");
         assert_eq!(shared("d").as_deref(), Some("D"));
         assert_eq!(shared("nope"), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_bare_tilde_completes_from_the_home_folder() {
+        let dir = typed_path_fixture("tilde");
+        let base = Some(dir.as_path());
+
+        let from_tilde = complete_path("~", base);
+
+        assert_eq!(from_tilde, complete_path("~/", base));
+        assert!(from_tilde.iter().all(|found| found.text.starts_with("~/")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

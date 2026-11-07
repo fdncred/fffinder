@@ -12,21 +12,40 @@ const TOOLTIP_MAX_WIDTH: f32 = 560.;
 /// How many of a column's longest texts to measure when fitting it. Width
 /// follows length closely enough that the widest is among them, and shaping
 /// every row of a large list would hold up the click.
-const FIT_SAMPLE: usize = 256;
+pub(super) const FIT_SAMPLE: usize = 256;
 
-/// A tooltip builder for `shown`, which draws `full` and may cut it short,
-/// that shows all of `full` only when it was. Text layout decides what fits,
-/// so this asks it at hover time instead of measuring anything while drawing.
+/// Add text that may be cut short to `el`, and give `el` a tooltip with all of
+/// the text for when it is. They go on together because the tooltip asks the
+/// text what was drawn, and panics if it never was.
 ///
 /// # Arguments
 ///
-/// * `shown` - The text element, before it's added to its parent
+/// * `el` - What the mouse rests on to see the tooltip
+/// * `shown` - The text element, which draws `full` and may cut it short
 /// * `full` - The whole text
+/// * `wrap` - Whatever goes around `shown` inside `el`; `|shown| shown` for nothing
 ///
 /// # Returns
 ///
-/// A closure for [`StatefulInteractiveElement::tooltip`]
-pub(super) fn cut_off_tooltip(
+/// `el` with the text and the tooltip
+pub(super) fn with_cut_off_text<E, C>(
+    el: E,
+    shown: StyledText,
+    full: SharedString,
+    wrap: impl FnOnce(StyledText) -> C,
+) -> E
+where
+    E: ParentElement + StatefulInteractiveElement,
+    C: IntoElement,
+{
+    let tooltip = cut_off_tooltip(&shown, full);
+    el.child(wrap(shown)).tooltip(tooltip)
+}
+
+/// A tooltip builder that shows all of `full` only when `shown` cut it short.
+/// Text layout decides what fits, so this asks it at hover time instead of
+/// measuring anything while drawing.
+fn cut_off_tooltip(
     shown: &StyledText,
     full: SharedString,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {

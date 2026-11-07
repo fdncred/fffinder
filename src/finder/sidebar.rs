@@ -1,6 +1,6 @@
 //! The floating sidebar: Recents, Favorites, Locations, and index status.
 
-use super::fit::cut_off_tooltip;
+use super::fit::with_cut_off_text;
 use super::list::ResizeEdge;
 use super::toolbar::{TOOLBAR_HEIGHT, pill, pill_button, window_drag_area};
 use super::views::DraggedFiles;
@@ -86,7 +86,7 @@ pub fn place_icon(icon: PlaceIcon) -> Icon {
 impl Finder {
     /// The sidebar's width in points: what was chosen, unless the toolbar
     /// beside it would run out of the window.
-    fn sidebar_width_shown(&self, window: &Window) -> f32 {
+    pub(super) fn sidebar_width_shown(&self, window: &Window) -> f32 {
         let room = f32::from(window.viewport_size().width) / crate::theme::ui_scale();
         let (min, _) = SIDEBAR_WIDTH_RANGE;
         self.config
@@ -322,7 +322,7 @@ impl Finder {
                 })
             })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                if event.modifiers().secondary(cx) {
+                if event.modifiers().secondary(cx) && this.picker.is_none() {
                     this.open_in_new_tabs(vec![target.clone()], window, cx);
                 } else {
                     this.navigate(target.clone(), window, cx);
@@ -490,14 +490,12 @@ impl Finder {
 /// A sidebar row's name, with all of it in a tooltip when the sidebar is too
 /// narrow for it.
 fn row_label(label: SharedString) -> impl IntoElement {
-    let shown = StyledText::new(label.clone());
-    let tooltip = cut_off_tooltip(&shown, label);
-    div()
-        .id("label")
-        .flex_1()
-        .truncate()
-        .child(shown)
-        .tooltip(tooltip)
+    with_cut_off_text(
+        div().id("label").flex_1().truncate(),
+        StyledText::new(label.clone()),
+        label,
+        |shown| shown,
+    )
 }
 
 fn section_heading(label: &'static str, color: Hsla) -> impl IntoElement {

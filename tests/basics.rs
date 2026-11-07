@@ -60,6 +60,53 @@ fn ui_secondary() -> Modifiers {
 // ----- dragging a box ------------------------------------------------------------
 
 #[gpui_kit::test]
+fn a_reload_during_a_box_keeps_what_cmd_kept_selected(cx: &mut TestAppContext) {
+    let fx = Fixture::new("box-reload");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    let empty = empty_list_space(&mut ui, &fx);
+    let roadmap = ui.snapshot(item_id("row", &fx.path("Roadmap.md"))).bounds();
+    ui.drag_and_hold_with(empty, roadmap.center(), ui_secondary());
+
+    // A new first item moves every row down one.
+    std::fs::write(fx.path("Aardvark.txt"), "x").unwrap();
+    ui.update(|f, _, cx| f.reload_quietly(cx));
+    ui.move_while_held(roadmap.center() + point(px(1.), px(0.)), ui_secondary());
+
+    let selected = ui.selected();
+    assert!(selected.contains(&"notes.txt".to_string()), "{selected:?}");
+    assert!(
+        !selected.contains(&"Budget.csv".to_string()),
+        "{selected:?}"
+    );
+    ui.release(roadmap.center());
+}
+
+#[gpui_kit::test]
+fn a_box_loads_previews_for_what_it_ends_on_not_what_it_crosses(cx: &mut TestAppContext) {
+    let fx = Fixture::new("box-previews");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.press(&cmd("shift-p"));
+    let empty = empty_list_space(&mut ui, &fx);
+    let notes = ui.snapshot(item_id("row", &fx.path("notes.txt"))).bounds();
+
+    ui.drag_and_hold(empty, notes.center());
+    let selected = ui.selected();
+    assert!(selected.len() > 1, "{selected:?}");
+    let loaded = |ui: &Ui, name: &str| ui.read(|f| f.has_preview_for_test(&ui.dir.join(name)));
+    assert!(!loaded(&ui, "notes.txt"), "the box is still moving");
+    assert!(!loaded(&ui, "Roadmap.md"));
+
+    ui.release(notes.center());
+    let last = ui
+        .read(|f| f.primary_entry().map(|entry| entry.name))
+        .unwrap();
+    assert!(loaded(&ui, &last), "{last} is selected now");
+}
+
+#[gpui_kit::test]
 fn dragging_in_empty_space_selects_the_rows_it_covers(cx: &mut TestAppContext) {
     let fx = Fixture::new("box-list");
     let mut ui = Ui::open(cx, &fx.dir);
@@ -390,6 +437,42 @@ fn a_quick_drag_past_a_folder_leaves_it_closed(cx: &mut TestAppContext) {
     ui.release(empty);
 }
 
+#[gpui_kit::test]
+fn holding_a_drag_over_what_covers_a_folder_leaves_it_closed(cx: &mut TestAppContext) {
+    let fx = Fixture::new("spring-covered");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.press(&cmd("shift-p"));
+    // Wide enough for every row to run on underneath the preview pane.
+    ui.drag_by("resize-Name", 2000.);
+    let file = ui
+        .snapshot(item_id("name-cell", &fx.path("notes.txt")))
+        .bounds();
+    let folder = ui.snapshot(item_id("row", &fx.path("Projects"))).bounds();
+    let pane = ui.snapshot("preview-pane").bounds();
+    let over_the_pane = point(pane.center().x, folder.center().y);
+    assert!(
+        folder.contains(&over_the_pane),
+        "the row goes under the pane"
+    );
+    // The name's own start, since the wide cell's middle is under the pane too.
+    let grab = point(file.left() + px(40.), file.center().y);
+    assert!(grab.x < pane.left());
+
+    ui.drag_and_hold(grab, over_the_pane);
+    ui.settle();
+    ui.settle();
+    assert_eq!(ui.folder(), Some(fx.dir.clone()));
+
+    // Over the part of the row that shows, the same wait opens it.
+    let shows = point(folder.left() + px(40.), folder.center().y);
+    ui.move_while_held(shows, Modifiers::none());
+    ui.settle();
+    ui.settle();
+    assert_eq!(ui.folder(), Some(fx.path("Projects")));
+    ui.release(shows);
+}
+
 // ----- the path bar --------------------------------------------------------------------
 
 #[gpui_kit::test]
@@ -488,6 +571,49 @@ fn the_toolbar_folds_what_does_not_fit(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_toolbar_folds_just_when_the_drawn_controls_run_out_of_room(cx: &mut TestAppContext) {
+    let fx = Fixture::new("toolbar-measured");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let folds =
+        |ui: &mut Ui| ["search-scope", "view-list", "nushell", "sort"].map(|id| ui.exists(id));
+    let search_min = px(120.);
+    let close_enough = px(1.5);
+    let mut before = None;
+    let mut seen = 0;
+
+    // Down a point at a time. It takes two frames for a new width to be
+    // measured and then used.
+    for width in (640..=1000).rev() {
+        let width = px(width as f32);
+        gpui_kit::VisualTestContext::from_window(ui.handle, ui.cx)
+            .simulate_resize(gpui_kit::size(width, px(600.)));
+        ui.frame();
+        ui.frame();
+        let search = ui.snapshot("search").bounds();
+        assert!(
+            search.right() <= width,
+            "at {width:?} the search field runs out of the window: {search:?}"
+        );
+
+        let now = folds(&mut ui);
+        if let Some((folded_at, last_search)) = before
+            && folded_at != now
+        {
+            seen += 1;
+            // Measured against the sums in `toolbar.rs`: the last width with
+            // this control showing left the search field at its narrowest.
+            let spare: Pixels = last_search - search_min;
+            assert!(
+                spare.abs() <= close_enough,
+                "{folded_at:?} became {now:?} at {width:?}, with {spare:?} to spare"
+            );
+        }
+        before = Some((now, search.size.width));
+    }
+    assert_eq!(seen, 4, "each of the four folds happened");
+}
+
+#[gpui_kit::test]
 fn the_scope_bar_wraps_rather_than_losing_its_controls(cx: &mut TestAppContext) {
     let fx = Fixture::new("scope-wrap");
     let mut ui = Ui::open(cx, &fx.dir);
@@ -568,6 +694,183 @@ fn a_taken_name_keeps_editing(cx: &mut TestAppContext) {
     assert!(fx.path("Roadmap.md").exists());
     ui.press("escape");
     assert!(fx.path("Roadmap.md").exists());
+}
+
+/// The names in `dir`, exactly as the disk has them.
+fn names_on_disk(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|item| item.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Start renaming `name`, replacing all of it with `typed`.
+fn retype_name(ui: &mut Ui, name: &str, typed: &str) {
+    ui.select(name);
+    ui.press("f2");
+    ui.press(&cmd("a"));
+    ui.type_text(typed);
+}
+
+#[gpui_kit::test]
+fn a_rename_that_only_changes_case_goes_ahead(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-case");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    retype_name(&mut ui, "Roadmap.md", "ROADMAP.md");
+    ui.press("enter");
+
+    assert!(!ui.exists("rename-input"), "it wasn't refused as taken");
+    let names = names_on_disk(&fx.dir);
+    assert!(names.contains(&"ROADMAP.md".to_string()), "{names:?}");
+    assert!(!names.contains(&"Roadmap.md".to_string()), "{names:?}");
+
+    ui.press(&cmd("z"));
+    assert!(names_on_disk(&fx.dir).contains(&"Roadmap.md".to_string()));
+}
+
+#[gpui_kit::test]
+fn the_file_keys_come_back_when_the_item_being_renamed_goes(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-gone");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "a/b");
+    ui.press("enter");
+    assert!(ui.exists("rename-input"), "refused, and still editing");
+
+    std::fs::remove_file(fx.path("Roadmap.md")).unwrap();
+    ui.update(|f, _, cx| f.reload_quietly(cx));
+
+    assert!(!ui.exists("rename-input"));
+    assert!(ui.files_focused());
+    ui.select("Budget.csv");
+    ui.press("down");
+    assert_ne!(ui.selected(), ["Budget.csv"], "the arrow keys work again");
+}
+
+#[gpui_kit::test]
+fn the_file_keys_come_back_when_a_refused_name_scrolls_away(cx: &mut TestAppContext) {
+    let fx = long_folder("rename-scrolled");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "item 000.txt", "a/b");
+    ui.press("enter");
+    assert!(ui.exists("rename-input"));
+
+    ui.scroll("list-columns", point(px(0.), px(-3000.)));
+
+    assert!(!ui.exists("rename-input"));
+    assert!(ui.files_focused());
+    assert!(fx.path("item 000.txt").exists());
+    ui.select("item 100.txt");
+    ui.press("down");
+    assert_eq!(ui.selected(), ["item 101.txt"]);
+}
+
+#[gpui_kit::test]
+fn leaving_a_refused_name_says_why_once_and_keeps_the_selection(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-refused");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "a/b");
+    let before = ui.notification_count();
+
+    ui.click(item_id("row", &fx.path("notes.txt")));
+
+    assert_eq!(ui.notification_count(), before + 1, "said once");
+    assert!(ui.exists("rename-input"), "still editing, to fix the name");
+    assert_eq!(ui.selected(), ["Roadmap.md"], "the press only said why");
+
+    // Pressing Return is asking again, and a different name is news.
+    ui.press("enter");
+    assert_eq!(ui.notification_count(), before + 2);
+    ui.press(&cmd("a"));
+    ui.type_text("c/d");
+    ui.click(item_id("row", &fx.path("notes.txt")));
+    assert_eq!(ui.notification_count(), before + 3);
+
+    // A name that can be used finishes the same way as ever.
+    ui.press(&cmd("a"));
+    ui.type_text("Plan.md");
+    ui.click(item_id("row", &fx.path("notes.txt")));
+    assert!(!ui.exists("rename-input"));
+    assert!(fx.path("Plan.md").exists());
+}
+
+#[gpui_kit::test]
+fn a_dialog_opened_during_a_rename_gets_the_keyboard(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-dialog");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "Plan.md");
+
+    ui.press(&cmd("shift-g"));
+    assert!(ui.dialog_open());
+    assert!(fx.path("Plan.md").exists(), "the name was kept");
+    ui.type_text("Projects");
+    ui.press("enter");
+
+    assert_eq!(ui.folder(), Some(fx.path("Projects")));
+    assert!(ui.files_focused(), "and the files get it back afterward");
+}
+
+#[gpui_kit::test]
+fn moving_to_the_search_field_during_a_rename_leaves_the_keyboard_there(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-search");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "Plan.md");
+
+    ui.press(&cmd("f"));
+    ui.type_text("notes");
+    ui.settle();
+
+    assert!(fx.path("Plan.md").exists(), "the name was kept");
+    assert_eq!(ui.read(|f| f.query().to_string()), "notes");
+}
+
+#[gpui_kit::test]
+fn switching_to_another_app_leaves_a_rename_as_it_is(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-switch");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "Half typed");
+
+    ui.deactivate();
+
+    assert!(ui.exists("rename-input"));
+    assert!(fx.path("Roadmap.md").exists(), "nothing was renamed");
+
+    ui.activate();
+    ui.type_text(" name");
+    ui.press("enter");
+    assert!(fx.path("Half typed name").exists());
+}
+
+#[gpui_kit::test]
+fn the_file_keys_come_back_when_an_item_goes_while_in_another_app(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-away");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.activate();
+    ui.click("view-list");
+    retype_name(&mut ui, "Roadmap.md", "a/b");
+    ui.press("enter");
+
+    ui.deactivate();
+    std::fs::remove_file(fx.path("Roadmap.md")).unwrap();
+    ui.update(|f, _, cx| f.reload_quietly(cx));
+    ui.activate();
+
+    assert!(!ui.exists("rename-input"));
+    assert!(ui.files_focused());
 }
 
 #[gpui_kit::test]
@@ -680,7 +983,60 @@ fn the_status_bar_adds_up_the_selection(cx: &mut TestAppContext) {
     assert!(text.contains("(5.0 KB)"), "{text}");
 }
 
+#[gpui_kit::test]
+fn the_status_bar_keeps_up_with_the_selection_and_the_files(cx: &mut TestAppContext) {
+    let fx = Fixture::new("status-fresh");
+    std::fs::write(fx.path("one.txt"), vec![b'x'; 2000]).unwrap();
+    std::fs::write(fx.path("two.txt"), vec![b'x'; 3000]).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let status = |ui: &mut Ui| ui.snapshot("status-text").label().unwrap().to_string();
+
+    ui.select("one.txt");
+    assert!(status(&mut ui).contains("(2.0 KB)"));
+    ui.select("two.txt");
+    assert!(status(&mut ui).contains("(3.0 KB)"), "another item");
+    ui.select_also("one.txt");
+    assert!(status(&mut ui).contains("(5.0 KB)"), "one more");
+
+    std::fs::write(fx.path("one.txt"), vec![b'x'; 4000]).unwrap();
+    ui.update(|f, _, cx| f.reload_quietly(cx));
+    assert!(
+        status(&mut ui).contains("(7.0 KB)"),
+        "the same items, bigger"
+    );
+}
+
 // ----- keys ----------------------------------------------------------------------------
+
+#[gpui_kit::test]
+fn home_and_end_reach_the_ends_of_a_column_with_nothing_selected(cx: &mut TestAppContext) {
+    let fx = Fixture::new("column-ends");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-columns");
+    ui.settle();
+    let names = ui.names();
+    assert!(ui.selected().is_empty());
+
+    ui.press("end");
+    assert_eq!(ui.selected(), [names[names.len() - 1].as_str()]);
+
+    ui.press("home");
+    assert_eq!(ui.selected(), [names[0].as_str()]);
+}
+
+#[gpui_kit::test]
+fn up_with_nothing_selected_starts_from_the_end_of_a_column(cx: &mut TestAppContext) {
+    let fx = Fixture::new("column-up");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-columns");
+    ui.settle();
+    let names = ui.names();
+
+    ui.press("up");
+
+    assert_eq!(ui.selected(), [names[names.len() - 1].as_str()]);
+}
 
 #[gpui_kit::test]
 fn page_up_and_down_move_through_a_long_list(cx: &mut TestAppContext) {
@@ -744,6 +1100,24 @@ fn the_menu_still_warns_without_a_second_pane(cx: &mut TestAppContext) {
 }
 
 // ----- the selection after a removal ---------------------------------------------------
+
+#[gpui_kit::test]
+fn what_could_not_go_to_the_trash_stays_selected(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-failed");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    // A Trash that's a file can't take anything.
+    let trash = common::trash_dir(&fx.dir);
+    std::fs::remove_dir_all(&trash).unwrap();
+    std::fs::write(&trash, "").unwrap();
+
+    ui.select("notes.txt");
+    ui.press(&cmd("backspace"));
+
+    assert!(fx.path("notes.txt").exists());
+    assert_eq!(ui.selected(), ["notes.txt"], "to try again");
+    std::fs::remove_file(trash).unwrap();
+}
 
 #[gpui_kit::test]
 fn the_next_item_is_selected_after_moving_one_to_the_trash(cx: &mut TestAppContext) {

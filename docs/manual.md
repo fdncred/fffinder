@@ -101,7 +101,7 @@ From top to bottom, the window has:
 
 The sidebar runs down the left side. Drag its right edge to make it wider or narrower, from 140 to 420 points. Double-click the edge to go back to the usual width. The width is saved. In a very narrow window the sidebar gives up width so the toolbar still fits.
 
-A new window opens where the last one was, at the same size, on the same display, and maximized if it was. If windows are already open, it opens a little down and to the right of that place. If the place is no longer on a display, the window opens at the usual size in the middle of the screen.
+A new window opens where the last one was, at the same size, on the same display, and maximized if it was. If windows are already open, it opens a little down and to the right of that place. If the place is no longer on a display, or the window's top would be above the display, the window opens at the usual size in the middle of the screen. A `--pick` window always opens there.
 
 Text that doesn't fit is cut short with an ellipsis. Rest the mouse on it to see all of it in a tooltip. This works for names and every other cell in the list, list headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. File names and folder paths lose their middle, so the start and the extension both stay visible.
 
@@ -439,7 +439,7 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Make Symbolic Link | Makes a symbolic link to each selected item beside it, named "name link". The link points at the name, so it keeps working when the folder moves. On Windows, making links needs Developer Mode or an administrator. |
 | Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
 | Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
-| Rename… (F2) | Edits the item's name in place, with the part before the extension selected. Return or clicking elsewhere keeps the new name, and Escape keeps the old one. A name that's taken says so and goes on editing. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). The gallery has no room to edit in place, so it asks in a dialog. With several items selected, F2 opens [batch rename](#renaming-several-items). |
+| Rename… (F2) | Edits the item's name in place, with the part before the extension selected. Return or clicking elsewhere keeps the new name, and Escape keeps the old one. A name that's taken says so and goes on editing. Going to another app leaves the edit as it is. The edit also ends when the row scrolls out of view, the item goes away, a dialog opens, or you go to another tab, and it keeps the new name if it can be used. Names can't be empty or contain `/`, and on Windows they can't contain `\` or the other characters Windows forbids. The gallery has no room to edit in place, so it asks in a dialog. With several items selected, F2 opens [batch rename](#renaming-several-items). |
 | Move to Trash (Cmd+Backspace, Delete) | Moves the selected items to the Trash at once, and selects the next item. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace; Shift+Delete on Linux and Windows) | Asks, then deletes the selected items for good, without the Trash, and selects the next item. |
 | Get Info (Cmd+I; also Alt+Enter on Linux and Windows) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
@@ -450,7 +450,7 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
 | Copy Path (Cmd+Alt+C) | Copies the selected paths, one per line. |
 | Copy as Nushell List (Cmd+Shift+C) | Copies the selection as NUON: a quoted string for one path, a list for several. |
-| Go to Folder… (Cmd+Shift+G; also Ctrl+L on Linux and Windows) | Type a path. `~` is your home folder, and relative paths start from the current folder. As you type, the items that match are listed below the field, folders first. Tab finishes the path as far as they all agree, and clicking one fills it in. A folder opens; a file opens its folder with the file selected. |
+| Go to Folder… (Cmd+Shift+G; also Ctrl+L on Linux and Windows) | Type a path. `~` is your home folder, and relative paths start from the current folder, or from your home folder in places like Recents and the Trash. The items that match are listed below the field, folders first, from the moment it opens and as you type. Tab finishes the path as far as they all agree, and clicking one fills it in. A folder opens; a file opens its folder with the file selected. |
 | Add to Sidebar | Adds a selected folder to Favorites. |
 | Add Folder to Sidebar | Adds the current folder to Favorites. |
 | Refresh (Cmd+R; F5 outside split view) | Reloads the folder, columns, and previews, and re-runs the search. |
@@ -460,7 +460,7 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 
 Cmd+C (Edit › Copy, or Copy "name" in the item menu) puts the selected items on the clipboard. Cmd+V (Edit › Paste, or Paste Item in the empty-space menu) copies them into the folder the window shows, and Cmd+Alt+V (Edit › Move Items Here) moves them there instead. Pasting needs a folder, so it does nothing while searching or in Recents.
 
-Cmd+X (Edit › Cut, or Cut "name" in the item menu) marks the selected items to move. They stay where they are, drawn faint, until you paste with Cmd+V, which moves them. Escape cancels a cut, and so does copying something else. Other apps see cut items as copied ones, since they have no way to know about the cut.
+Cmd+X (Edit › Cut, or Cut "name" in the item menu) marks the selected items to move. They stay where they are, drawn faint, until you paste with Cmd+V, which moves them. Escape cancels a cut, and so does copying anything else, here or in another app, even just one of the cut items. Other apps see cut items as copied ones, since they have no way to know about the cut.
 
 The clipboard holds the items' paths as text too, one per line, so pasting into a terminal or a text field gives the paths. On macOS and Windows it also holds them as files, so Finder or Explorer and other apps can paste them, and files copied there paste into fffinder. On Linux, files copied in GNOME Files, Dolphin, and other file managers paste into fffinder; GPUI can only put text on the Linux clipboard, so items copied in fffinder paste as files only into fffinder. Anywhere, text that is nothing but paths of existing items (or `file://` addresses), one per line, pastes those items.
 
@@ -941,8 +941,9 @@ The Nushell text size setting has a small "A" button and a large "A" button that
 
 ## settings.json
 
-Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and a file that can't be read falls back to defaults.
+Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and if the file can't be read when fffinder starts, fffinder uses the defaults for everything.
 
+fffinder reads the file again when it opens a new window or tab, so a hand edit shows there and in the windows already open. If the file can't be read while fffinder is running, fffinder keeps the settings it has, and its next write replaces the file with them.
 Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, `kind_filter`, and `show_preview_pane`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved, and neither is it remembered for a folder.
 
 | Field | Default | Meaning |

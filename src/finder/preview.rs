@@ -675,7 +675,6 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
     let row = |label: &'static str, value: String| {
         let value = SharedString::from(value);
         let shown = StyledText::new(value.clone());
-        let tooltip = super::fit::cut_off_tooltip(&shown, value);
         h_flex()
             .gap(ui(8.))
             .text_size(ui(11.))
@@ -686,14 +685,12 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
                     .text_color(muted)
                     .child(label),
             )
-            .child(
-                div()
-                    .id(label)
-                    .flex_1()
-                    .truncate()
-                    .child(shown)
-                    .tooltip(tooltip),
-            )
+            .child(super::fit::with_cut_off_text(
+                div().id(label).flex_1().truncate(),
+                shown,
+                value,
+                |shown| shown,
+            ))
     };
     v_flex()
         .size_full()

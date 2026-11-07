@@ -17,7 +17,9 @@ use gpui_kit::component::notification::NotificationType;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex};
 use gpui_kit::*;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,7 +132,6 @@ impl Finder {
         }
         crate::system::cut_files(&paths, cx);
         window.push_notification(format!("Cut {}. Paste to move.", items_label(&paths)), cx);
-        cx.notify();
     }
 
     /// Cmd+V in the files: put what's on the clipboard into this folder,
@@ -188,7 +189,8 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The drag is over, so no folder it was held over should open now.
+        // The drag is over, so no folder it was held over should open now,
+        // even if another drag has started by the time the wait ends.
         self.spring_folder = None;
         let copy = !from_here
             || copy_modifier(window.modifiers())
@@ -342,12 +344,7 @@ impl Finder {
             Mode::Move => MOVE,
         };
         // What was cut is on its way, so a second paste has nothing to move.
-        if mode == Mode::Move
-            && transfer
-                .sources
-                .iter()
-                .all(|source| crate::system::is_cut(source, cx))
-        {
+        if mode == Mode::Move && crate::system::moving_uses_up_cut(&transfer.sources, cx) {
             crate::system::forget_cut(cx);
             cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
         }
@@ -582,21 +579,38 @@ pub(super) fn copy_modifier(modifiers: Modifiers) -> bool {
     }
 }
 
-/// Make a folder's row or tile take dropped files: dragged items move into
-/// it, and files from other apps are copied in.
 /// Holding dragged items over `el`, which shows the folder at `folder`, opens
 /// that folder after a moment, so they can go on down into it.
-pub(super) fn spring_loaded<E: InteractiveElement>(
+pub(super) fn spring_loaded<E: InteractiveElement + ParentElement>(
     el: E,
     folder: PathBuf,
     cx: &mut Context<Finder>,
 ) -> E {
     let external = folder.clone();
-    el.on_drag_move(cx.listener(
+    // A drag move only says where `el` is laid out, and a row in a list wider
+    // than its view can be laid out under the preview pane or the header. A
+    // hitbox knows what clips it and what's drawn over it.
+    let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
+    let drawn = hitbox.clone();
+    let external_hitbox = hitbox.clone();
+    let shows_mouse = |hitbox: &RefCell<Option<Hitbox>>, window: &Window| {
+        hitbox
+            .borrow()
+            .as_ref()
+            .is_some_and(|hitbox| hitbox.is_hovered(window))
+    };
+    el.child(
+        canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, _, _| *drawn.borrow_mut() = Some(hitbox),
+        )
+        .absolute()
+        .size_full(),
+    )
+    .on_drag_move(cx.listener(
         move |this, event: &DragMoveEvent<DraggedFiles>, window, cx| {
             // A folder can't be dragged into itself.
-            let over =
-                event.bounds.contains(&event.event.position) && !event.drag(cx).0.contains(&folder);
+            let over = shows_mouse(&hitbox, window) && !event.drag(cx).0.contains(&folder);
             let target = SpringTarget {
                 folder: folder.clone(),
                 bounds: event.bounds,
@@ -606,7 +620,7 @@ pub(super) fn spring_loaded<E: InteractiveElement>(
     ))
     .on_drag_move(cx.listener(
         move |this, event: &DragMoveEvent<ExternalPaths>, window, cx| {
-            let over = event.bounds.contains(&event.event.position);
+            let over = shows_mouse(&external_hitbox, window);
             let target = SpringTarget {
                 folder: external.clone(),
                 bounds: event.bounds,
@@ -616,6 +630,8 @@ pub(super) fn spring_loaded<E: InteractiveElement>(
     ))
 }
 
+/// Make a folder's row or tile take dropped files: dragged items move into
+/// it, and files from other apps are copied in.
 pub(super) fn folder_drop_target<E: InteractiveElement>(
     el: E,
     dest: PathBuf,

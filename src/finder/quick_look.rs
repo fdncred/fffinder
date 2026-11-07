@@ -209,7 +209,7 @@ impl Finder {
             (parent.size.height * 0.85).max(px(400.)),
         );
         let origin = parent.center() - point(size.width / 2., size.height / 2.);
-        let mut options = crate::window_options(entry.name.clone().into(), cx);
+        let mut options = crate::window_options(entry.name.clone().into());
         options.window_bounds = Some(WindowBounds::Windowed(Bounds { origin, size }));
         options.window_min_size = Some(gpui_kit::size(px(400.), px(300.)));
         options.display_id = window.display(cx).map(|display| display.id());

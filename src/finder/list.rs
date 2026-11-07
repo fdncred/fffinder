@@ -3,6 +3,7 @@
 //! Folders on Top, and folder sizes and git statuses from the index. Dragging
 //! an edge also resizes the column view's panes and the sidebar.
 
+use super::fit::FIT_SAMPLE;
 use super::{Finder, Row};
 use crate::actions::ToggleFoldersFirst;
 use crate::model::Location;
@@ -262,9 +263,13 @@ impl Finder {
     /// the other columns leave, and for a column that's gone.
     pub(super) fn edge_width(&self, edge: ResizeEdge) -> Option<f32> {
         match edge {
-            ResizeEdge::Name => self.config.name_column_width,
-            ResizeEdge::Parent => Some(self.config.parent_column_width),
-            ResizeEdge::Column(ix) => self.config.list_columns.get(ix).map(|c| c.width),
+            ResizeEdge::Name => self.config.name_column_width(),
+            ResizeEdge::Parent => Some(self.config.parent_column_width()),
+            ResizeEdge::Column(ix) => self
+                .config
+                .list_columns
+                .get(ix)
+                .map(ColumnSetting::width_in_range),
             ResizeEdge::Pane(col) => self.columns.get(col).map(|pane| pane.width),
             ResizeEdge::Sidebar => Some(self.config.sidebar_width()),
             ResizeEdge::PreviewPane => Some(self.config.preview_pane_width()),
@@ -302,15 +307,29 @@ impl Finder {
     }
 
     /// Start resizing `edge` from the mouse at `x`.
-    pub(super) fn start_resize(&mut self, edge: ResizeEdge, x: Pixels) {
-        // Name has no width of its own until it's dragged, so it starts from
-        // what it was drawn at.
-        let shown = f32::from(self.name_column_shown) / crate::theme::ui_scale();
-        let width = self.edge_width(edge).unwrap_or(shown);
+    pub(super) fn start_resize(
+        &mut self,
+        edge: ResizeEdge,
+        x: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Each starts from where it's drawn, so the edge follows the mouse at
+        // once. Name has no width of its own until it's dragged, and the
+        // sidebar can be drawn narrower than chosen.
+        let width = if edge == ResizeEdge::Sidebar {
+            self.sidebar_width_shown(window)
+        } else {
+            let shown = f32::from(self.name_column_shown) / crate::theme::ui_scale();
+            self.edge_width(edge).unwrap_or(shown)
+        };
         self.resizing = Some((edge, x, width));
+        cx.notify();
     }
 
-    /// The mouse moved to `x` while resizing `edge`.
+    /// The mouse moved to `x` while resizing `edge`. Only this browser hears
+    /// of the new width until the mouse goes up, since publishing it copies
+    /// and saves all the settings.
     pub(super) fn resize_edge(&mut self, edge: ResizeEdge, x: Pixels, cx: &mut Context<Self>) {
         let Some((resizing, start, width)) = self.resizing.filter(|(e, ..)| *e == edge) else {
             return;
@@ -319,10 +338,39 @@ impl Finder {
         // Its edge is on the left, so moving right makes it narrower.
         let moved = match resizing {
             ResizeEdge::PreviewPane => -moved,
-            _ => moved,
+            ResizeEdge::Name
+            | ResizeEdge::Parent
+            | ResizeEdge::Column(_)
+            | ResizeEdge::Pane(_)
+            | ResizeEdge::Sidebar => moved,
         };
         self.set_edge_width(resizing, width + moved);
+        cx.notify();
+    }
+
+    /// The mouse went up after a press on an edge: the drag is over, so this
+    /// browser stops following them, and everything else hears the new width.
+    fn end_resize(&mut self, cx: &mut Context<Self>) {
+        self.resizing = None;
         self.widths_changed(cx);
+    }
+
+    /// Follows the mouse over the whole window during a press on an edge,
+    /// wherever it's let go.
+    pub(super) fn resize_capture(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        view.update(cx, |this, cx| this.end_resize(cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
     }
 
     /// Double-clicking an edge: make a column just wide enough for its
@@ -333,10 +381,15 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The first click's start and width mustn't undo this if the mouse
+        // moves a little during the second.
+        self.resizing = None;
         let width = match edge {
             ResizeEdge::Sidebar => DEFAULT_SIDEBAR_WIDTH,
             ResizeEdge::PreviewPane => DEFAULT_PREVIEW_PANE_WIDTH,
-            _ => self.fitting_width(edge, window, cx),
+            ResizeEdge::Name | ResizeEdge::Parent | ResizeEdge::Column(_) | ResizeEdge::Pane(_) => {
+                self.fitting_width(edge, window, cx)
+            }
         };
         self.set_edge_width(edge, width);
         self.widths_changed(cx);
@@ -373,9 +426,22 @@ impl Finder {
                 let Some(column) = self.config.list_columns.get(ix).map(|c| c.column) else {
                     return MIN_COLUMN_WIDTH;
                 };
+                // Dates and permissions are made as they're asked for and are
+                // all about the same length, so a large list only needs a
+                // sample of them. Other columns' text is already there.
+                let every = match column {
+                    ListColumn::Created | ListColumn::LastOpened | ListColumn::Permissions => {
+                        (self.rows.len() / FIT_SAMPLE).max(1)
+                    }
+                    ListColumn::Modified
+                    | ListColumn::Size
+                    | ListColumn::Kind
+                    | ListColumn::Git => 1,
+                };
                 let rows = self
                     .rows
                     .iter()
+                    .step_by(every)
                     .map(|row| (row.column_text(column), CELL_PADDING));
                 let family = match column {
                     ListColumn::Permissions => theme.mono_font_family.clone(),
@@ -425,7 +491,7 @@ impl Finder {
                     if event.click_count >= 2 {
                         this.fit_edge(edge, window, cx);
                     } else {
-                        this.start_resize(edge, event.position.x);
+                        this.start_resize(edge, event.position.x, window, cx);
                     }
                 }),
             )

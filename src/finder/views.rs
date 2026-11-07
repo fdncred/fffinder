@@ -1,7 +1,7 @@
 //! The four file views (icons, list, columns, gallery), loading skeletons,
 //! file icons, and dragging files out to other apps.
 
-use super::fit::cut_off_tooltip;
+use super::fit::with_cut_off_text;
 use super::list::ResizeEdge;
 use super::{Finder, Row};
 use crate::macos::IconLookup;
@@ -189,6 +189,16 @@ pub fn redraw_soon() -> impl IntoElement {
     .size_0()
 }
 
+/// What a list column's header says and does.
+#[derive(Debug, Clone, Copy)]
+struct ColumnHeading {
+    title: &'static str,
+    /// What clicking the header sorts by.
+    sort_key: Option<SortKey>,
+    /// Whether the title sits at the right, over cells that do.
+    right: bool,
+}
+
 /// Keep to one line, cutting out the middle of a name so its start and its
 /// extension both show, as Finder does.
 pub(super) fn one_line_name<E: Styled>(el: E) -> E {
@@ -202,12 +212,14 @@ fn name_text(row: &Row, selected: bool, pal: &Palette) -> AnyElement {
     let style = row.name_style.as_ref().filter(|_| !selected);
     let match_bg = (!selected).then_some(pal.highlight);
     let name = styled_name(&row.name, style, &row.highlights, match_bg);
-    let tooltip = cut_off_tooltip(&name, row.name.clone());
-    one_line_name(div().id("name"))
-        .child(name)
-        .tooltip(tooltip)
-        .test_support()
-        .into_any_element()
+    with_cut_off_text(
+        one_line_name(div().id("name")),
+        name,
+        row.name.clone(),
+        |name| name,
+    )
+    .test_support()
+    .into_any_element()
 }
 
 /// A name drawn the way `ls` draws it (`LS_COLORS`: colors, a background
@@ -454,7 +466,6 @@ impl Finder {
             &[],
             None,
         );
-        let tooltip = cut_off_tooltip(&name, row.name.clone());
         let el = v_flex()
             .id(("tile", super::views::path_id(&row.entry.path)))
             .when(crate::system::is_cut(&row.entry.path, cx), |this| {
@@ -472,27 +483,27 @@ impl Finder {
                     .when(selected, |this| this.bg(pal.tile_selected))
                     .child(file_icon(&row.entry, icon, true, &pal)),
             )
-            .child(match renaming {
-                Some(field) => div().w(ui(tile_w - 8.)).child(field).into_any_element(),
-                None => div()
-                    .max_w(ui(tile_w - 8.))
-                    .px(ui(5.))
-                    .py(ui(1.))
-                    .rounded(ui(4.))
-                    .text_size(ui(12.))
-                    .text_center()
-                    .line_clamp(2)
-                    .text_ellipsis()
-                    .when(focused_selection, |this| {
-                        this.bg(pal.selection).text_color(pal.selection_text)
-                    })
-                    .when(!selected && row.entry.hidden, |this| {
-                        this.text_color(theme.muted_foreground)
-                    })
-                    .child(name)
-                    .into_any_element(),
+            .map(|tile| match renaming {
+                Some(field) => tile.child(div().w(ui(tile_w - 8.)).child(field)),
+                None => with_cut_off_text(tile, name, row.name.clone(), |name| {
+                    div()
+                        .max_w(ui(tile_w - 8.))
+                        .px(ui(5.))
+                        .py(ui(1.))
+                        .rounded(ui(4.))
+                        .text_size(ui(12.))
+                        .text_center()
+                        .line_clamp(2)
+                        .text_ellipsis()
+                        .when(focused_selection, |this| {
+                            this.bg(pal.selection).text_color(pal.selection_text)
+                        })
+                        .when(!selected && row.entry.hidden, |this| {
+                            this.text_color(theme.muted_foreground)
+                        })
+                        .child(name)
+                }),
             })
-            .tooltip(tooltip)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         self.item_interactions(self.item_drag(el, ix), ix, div(), cx)
     }
@@ -531,9 +542,11 @@ impl Finder {
             .child(
                 self.column_header(
                     ResizeEdge::Name,
-                    "Name",
-                    Some(SortKey::Name),
-                    false,
+                    ColumnHeading {
+                        title: "Name",
+                        sort_key: Some(SortKey::Name),
+                        right: false,
+                    },
                     sort,
                     cx,
                 )
@@ -544,9 +557,11 @@ impl Finder {
             .when(searching, |this| {
                 this.child(self.column_header(
                     ResizeEdge::Parent,
-                    parent_title,
-                    parent_sort,
-                    false,
+                    ColumnHeading {
+                        title: parent_title,
+                        sort_key: parent_sort,
+                        right: false,
+                    },
                     sort,
                     cx,
                 ))
@@ -561,9 +576,11 @@ impl Finder {
                         let column = setting.column;
                         self.column_header(
                             ResizeEdge::Column(ix),
-                            column.title(),
-                            column.sort_key(),
-                            column == ListColumn::Size,
+                            ColumnHeading {
+                                title: column.title(),
+                                sort_key: column.sort_key(),
+                                right: column == ListColumn::Size,
+                            },
                             sort,
                             cx,
                         )
@@ -656,11 +673,16 @@ impl Finder {
             .edge_width(ResizeEdge::Name)
             .unwrap_or(MIN_FILLING_NAME);
         let parent = if searching {
-            self.config.parent_column_width
+            self.config.parent_column_width()
         } else {
             0.
         };
-        let columns: f32 = self.config.list_columns.iter().map(|c| c.width).sum();
+        let columns: f32 = self
+            .config
+            .list_columns
+            .iter()
+            .map(|c| c.width_in_range())
+            .sum();
         // The rows' padding on each side.
         name + parent + columns + 20.
     }
@@ -679,40 +701,40 @@ impl Finder {
     /// cut off.
     fn header_cell(
         &self,
-        label: &'static str,
-        key: Option<SortKey>,
-        right: bool,
+        heading: ColumnHeading,
         sort: fffinder_core::SortOrder,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let ColumnHeading {
+            title: label,
+            sort_key: key,
+            right,
+        } = heading;
         let sorted = key == Some(sort.key);
-        let title = StyledText::new(label);
-        let tooltip = cut_off_tooltip(&title, label.into());
-        h_flex()
+        let cell = h_flex()
             .id(label)
             .size_full()
             .pl(ui(6. - HANDLE_REACH))
             .pr(ui(6.))
             .gap(ui(4.))
             .when(right, |this| this.justify_end())
-            .hover(|s| s.bg(cx.theme().list_hover))
-            .child(div().truncate().child(title))
-            .tooltip(tooltip)
-            .when(sorted, |this| {
-                this.child(
-                    Icon::new(if sort.ascending {
-                        IconName::ChevronUp
-                    } else {
-                        IconName::ChevronDown
-                    })
-                    .with_size(ui(12.)),
-                )
-            })
-            .when_some(key, |this, key| {
-                this.on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sort(key, cx)),
-                )
-            })
+            .hover(|s| s.bg(cx.theme().list_hover));
+        with_cut_off_text(cell, StyledText::new(label), label.into(), |title| {
+            div().truncate().child(title)
+        })
+        .when(sorted, |this| {
+            this.child(
+                Icon::new(if sort.ascending {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .with_size(ui(12.)),
+            )
+        })
+        .when_some(key, |this, key| {
+            this.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_sort(key, cx)))
+        })
     }
 
     /// One column's header, with a line at its right edge to drag or to
@@ -721,15 +743,14 @@ impl Finder {
     fn column_header(
         &self,
         edge: ResizeEdge,
-        title: &'static str,
-        key: Option<SortKey>,
-        right: bool,
+        heading: ColumnHeading,
         sort: fffinder_core::SortOrder,
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = cx.theme();
         let (highlight, line) = (theme.drop_target, theme.border);
-        let cell = self.header_cell(title, key, right, sort, cx);
+        let title = heading.title;
+        let cell = self.header_cell(heading, sort, cx);
         let cell = match edge {
             ResizeEdge::Column(ix) => cell
                 .on_drag(super::list::ColumnMove(ix), move |_, _, _, cx| {
@@ -741,7 +762,11 @@ impl Finder {
                         this.move_column(moved.0, ix, cx)
                     }),
                 ),
-            _ => cell,
+            ResizeEdge::Name
+            | ResizeEdge::Parent
+            | ResizeEdge::Pane(_)
+            | ResizeEdge::Sidebar
+            | ResizeEdge::PreviewPane => cell,
         };
         let handle = self
             .resize_handle(SharedString::from(format!("resize-{title}")), edge, cx)
@@ -791,16 +816,13 @@ impl Finder {
     /// A list cell that cuts its text short to fit, with all of it in a
     /// tooltip when it does.
     fn list_cell(id: impl Into<ElementId>, text: SharedString, width: f32) -> Stateful<Div> {
-        let shown = StyledText::new(text.clone());
-        let tooltip = cut_off_tooltip(&shown, text);
-        div()
+        let cell = div()
             .id(id)
             .w(ui(width))
             .flex_shrink_0()
             .px(ui(6.))
-            .truncate()
-            .child(shown)
-            .tooltip(tooltip)
+            .truncate();
+        with_cut_off_text(cell, StyledText::new(text.clone()), text, |shown| shown)
     }
 
     fn render_list_row(
@@ -861,7 +883,7 @@ impl Finder {
                 Self::list_cell(
                     ("cell", cell),
                     row.column_text(setting.column),
-                    setting.width,
+                    setting.width_in_range(),
                 )
                 .text_color(muted)
                 .when(setting.column == ListColumn::Size, |this| this.text_right())
@@ -904,7 +926,7 @@ impl Finder {
                 h_flex()
                     .h_full()
                     .flex_shrink_0()
-                    .when(self.config.name_column_width.is_some(), |this| {
+                    .when(self.config.name_column_width().is_some(), |this| {
                         this.flex_1()
                     })
                     .on_mouse_down(
@@ -921,7 +943,7 @@ impl Finder {
                             Self::list_cell(
                                 "parent",
                                 row.detail.clone(),
-                                self.config.parent_column_width,
+                                self.config.parent_column_width(),
                             )
                             .text_color(muted)
                             .when(!contents, |this| this.text_ellipsis_middle())
@@ -1060,7 +1082,6 @@ impl Finder {
             &[],
             None,
         );
-        let tooltip = cut_off_tooltip(&name, full_name);
         let row = h_flex()
             .id(("crow", path_id(&entry.path)))
             .when(crate::system::is_cut(&entry.path, cx), |this| {
@@ -1082,10 +1103,13 @@ impl Finder {
             })
             .child(file_icon(entry, ui(16.), false, &pal))
             .child(renaming.unwrap_or_else(|| {
-                one_line_name(div().id("name").flex_1())
-                    .child(name)
-                    .tooltip(tooltip)
-                    .into_any_element()
+                with_cut_off_text(
+                    one_line_name(div().id("name").flex_1()),
+                    name,
+                    full_name,
+                    |name| name,
+                )
+                .into_any_element()
             }))
             .when(entry.is_navigable(), |this| {
                 this.child(
@@ -1108,7 +1132,10 @@ impl Finder {
                     {
                         if this.picker.is_some() && !entry.is_navigable() {
                             this.choose(&crate::actions::Choose, window, cx);
-                        } else if entry.is_navigable() && event.modifiers.secondary(cx) {
+                        } else if entry.is_navigable()
+                            && event.modifiers.secondary(cx)
+                            && this.picker.is_none()
+                        {
                             let folder = Location::Folder(entry.path);
                             this.open_in_new_tabs(vec![folder], window, cx);
                         } else {
@@ -1237,7 +1264,6 @@ impl Finder {
             &[],
             None,
         );
-        let tooltip = cut_off_tooltip(&name, row.name.clone());
         let el = v_flex()
             .id(("strip", path_id(&row.entry.path)))
             .w(ui(96.))
@@ -1252,18 +1278,19 @@ impl Finder {
                     .when(selected, |this| this.bg(pal.tile_selected))
                     .child(file_icon(&row.entry, ui(64.), true, &pal)),
             )
-            .child(
-                one_line_name(div())
-                    .max_w(ui(90.))
-                    .px(ui(4.))
-                    .rounded(ui(4.))
-                    .text_size(ui(11.))
-                    .when(selected, |this| {
-                        this.bg(pal.selection).text_color(pal.selection_text)
-                    })
-                    .child(name),
-            )
-            .tooltip(tooltip);
+            .map(|tile| {
+                with_cut_off_text(tile, name, row.name.clone(), |name| {
+                    one_line_name(div())
+                        .max_w(ui(90.))
+                        .px(ui(4.))
+                        .rounded(ui(4.))
+                        .text_size(ui(11.))
+                        .when(selected, |this| {
+                            this.bg(pal.selection).text_color(pal.selection_text)
+                        })
+                        .child(name)
+                })
+            });
         self.item_interactions(self.item_drag(el, ix), ix, div(), cx)
     }
 

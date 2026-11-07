@@ -3,12 +3,14 @@
 use super::Finder;
 use super::groups::{IconLine, ListLine};
 use super::views::{GRID_PADDING, ICON_PADDING, LIST_ROW, tile_size};
+use crate::model::Selection;
 use crate::theme::ui;
 use fffinder_core::ViewMode;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::scroll::ScrollbarHandle;
 use gpui_kit::*;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// How far the mouse moves before a press becomes a drag, in points.
@@ -31,9 +33,17 @@ pub(super) struct Marquee {
     dragging: bool,
     /// What stays selected whatever the box covers: the selection before the
     /// press when Cmd or Shift was held, else nothing.
-    kept: BTreeSet<usize>,
+    kept: Selection,
     /// Scrolls the view while the mouse is past its top or bottom edge.
     autoscroll: Option<Task<()>>,
+}
+
+impl Marquee {
+    /// The list was re-sorted or refreshed during the drag: keep the same
+    /// items, wherever they are now.
+    pub(super) fn rows_changed(&mut self, old: &[PathBuf], new: &[PathBuf]) {
+        self.kept.remap(old, new);
+    }
 }
 
 /// The sides of the box in the view's content, as `(left, top, right, bottom)`.
@@ -72,8 +82,8 @@ impl Finder {
         let anchor = event.position - scroller.viewport_bounds().origin - scroller.offset();
         let adding = event.modifiers.secondary(cx) || event.modifiers.shift;
         let kept = match adding {
-            true => self.selection.indices().collect(),
-            false => BTreeSet::new(),
+            true => self.selection.clone(),
+            false => Selection::default(),
         };
         self.marquee = Some(Marquee {
             anchor,
@@ -121,6 +131,8 @@ impl Finder {
             }));
         }
         self.select_in_marquee(cx);
+        // The box itself moved, even when what it covers didn't change.
+        cx.notify();
     }
 
     /// Scroll toward the mouse once. Returns whether it's still past an edge.
@@ -144,12 +156,18 @@ impl Finder {
         let offset = scroller.offset();
         // Scroll offsets count down from 0 as the content moves up.
         let y = (offset.y - ui(step)).clamp(-room, Pixels::ZERO);
-        scroller.set_offset(point(offset.x, y));
-        self.select_in_marquee(cx);
+        // At the end of the list nothing moves, so there's nothing to redraw.
+        if y != offset.y {
+            scroller.set_offset(point(offset.x, y));
+            self.select_in_marquee(cx);
+            cx.notify();
+        }
         true
     }
 
-    /// Select what the box covers, along with what was already kept.
+    /// Select what the box covers, along with what was already kept. Several
+    /// items show as a count, so nothing's loaded for each one the box
+    /// crosses; letting go loads what's left selected.
     fn select_in_marquee(&mut self, cx: &mut Context<Self>) {
         let Some(scroller) = self.marquee_view() else {
             return;
@@ -159,15 +177,19 @@ impl Finder {
             return;
         };
         let sides = box_sides(marquee.anchor, marquee.mouse - origin);
-        let mut items = marquee.kept.clone();
+        let mut items: BTreeSet<usize> = marquee.kept.indices().collect();
         match self.effective_view() {
             ViewMode::List => self.rows_in_box(sides, &mut items),
             ViewMode::Icons => self.tiles_in_box(sides, &mut items),
             ViewMode::Columns | ViewMode::Gallery => return,
         }
+        if self.selection.indices().eq(items.iter().copied()) {
+            return;
+        }
         self.selection.select_items(items);
-        self.selection_changed(cx);
-        cx.notify();
+        if self.selection.len() == 1 {
+            self.selection_changed(cx);
+        }
     }
 
     /// The rows of the list that the box reaches, top to bottom.
@@ -221,7 +243,9 @@ impl Finder {
 
     /// The mouse went up, or the press ended some other way.
     fn end_marquee(&mut self, cx: &mut Context<Self>) {
-        self.marquee = None;
+        if self.marquee.take().is_some_and(|marquee| marquee.dragging) {
+            self.selection_changed(cx);
+        }
         cx.notify();
     }
 

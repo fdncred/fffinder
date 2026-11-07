@@ -39,7 +39,11 @@ struct SettingsHandle(Entity<Settings>);
 
 impl Global for SettingsHandle {}
 
-/// The app's settings, read from the file the first time.
+/// Get the app's settings, read from the file the first time.
+///
+/// # Returns
+///
+/// The one [`Settings`] entity, which can be observed for changes
 pub fn entity(cx: &mut App) -> Entity<Settings> {
     if let Some(handle) = cx.try_global::<SettingsHandle>() {
         return handle.0.clone();
@@ -65,23 +69,39 @@ pub fn entity(cx: &mut App) -> Entity<Settings> {
     settings
 }
 
-/// The settings as they are now.
+/// Copy the settings as they are now.
+///
+/// # Returns
+///
+/// A copy of every setting as last changed, by any browser
 pub fn current(cx: &mut App) -> Config {
     entity(cx).read(cx).config.clone()
 }
 
 /// Stop or start writing changes to the file.
+///
+/// # Arguments
+///
+/// * `persist` - Whether changes are written from now on
 pub fn set_persist(persist: bool, cx: &mut App) {
     entity(cx).update(cx, |settings, _| settings.persist = persist);
 }
 
-/// Whether changes are being written to the file.
+/// Check whether changes are being written to the file.
+///
+/// # Returns
+///
+/// `true` unless a tool or test turned writing off
 pub fn persists(cx: &mut App) -> bool {
     entity(cx).read(cx).persist
 }
 
 impl Settings {
-    /// The settings as they are now.
+    /// Read the settings as they are now.
+    ///
+    /// # Returns
+    ///
+    /// Every setting as last changed, by any browser
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -114,9 +134,30 @@ impl Settings {
             };
             let written = config.clone();
             let saving = cx.background_spawn(async move { save(&saved, &config) });
-            saving.await;
-            this.update(cx, |this, _| this.saved = written).ok();
+            // After a failed write `saved` stays as it was, so the next save
+            // and the one at quit still see these changes as unwritten.
+            if saving.await {
+                this.update(cx, |this, _| this.saved = written).ok();
+            }
         });
+    }
+
+    /// Take what changed in the file since this app last read or wrote it,
+    /// such as a hand edit or a `--pick` run. Changes this app hasn't written
+    /// yet are newer than the file, so with any of those it waits for the next
+    /// time. A file that can't be read leaves everything as it is.
+    pub(crate) fn reread_file(&mut self, cx: &mut Context<Self>) {
+        if !self.persist || self.config != self.saved {
+            return;
+        }
+        let Some(file) = Config::read_from(&config_path()) else {
+            return;
+        };
+        if file != self.saved {
+            self.config.clone_from(&file);
+            self.saved = file;
+            cx.notify();
+        }
     }
 
     /// The view and sort last chosen in `folder`, if any.
@@ -145,7 +186,9 @@ impl Settings {
             }) else {
                 return;
             };
-            cx.background_spawn(async move { save_views(&views) }).await;
+            if !cx.background_spawn(async move { save_views(&views) }).await {
+                this.update(cx, |this, _| this.views_unsaved = true).ok();
+            }
         });
     }
 
@@ -153,26 +196,28 @@ impl Settings {
         if !self.persist {
             return;
         }
-        if self.config != self.saved {
-            save(&self.saved, &self.config);
+        if self.config != self.saved && save(&self.saved, &self.config) {
             self.saved.clone_from(&self.config);
         }
-        if self.views_unsaved {
-            save_views(&self.folder_views);
+        if self.views_unsaved && save_views(&self.folder_views) {
             self.views_unsaved = false;
         }
     }
 }
 
-/// Write the changes from `saved` to `config` into the settings file.
-fn save(saved: &Config, config: &Config) {
-    if let Err(err) = Config::save_changes(saved, config, &config_path()) {
-        log::warn!("saving settings: {err}");
-    }
+/// Write the changes from `saved` to `config` into the settings file. Returns
+/// whether that worked.
+fn save(saved: &Config, config: &Config) -> bool {
+    Config::save_changes(saved, config, &config_path())
+        .inspect_err(|err| log::error!("saving settings: {err}"))
+        .is_ok()
 }
 
-fn save_views(views: &FolderViews) {
-    if let Err(err) = views.save() {
-        log::warn!("saving folder views: {err}");
-    }
+/// Write the folder views to their file. Returns whether that worked. Losing
+/// them is harmless, so a failure only warns.
+fn save_views(views: &FolderViews) -> bool {
+    views
+        .save()
+        .inspect_err(|err| log::warn!("saving folder views: {err}"))
+        .is_ok()
 }

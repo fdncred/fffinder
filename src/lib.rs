@@ -318,9 +318,10 @@ fn placed_bounds(
 ) -> Option<Bounds<Pixels>> {
     let size = size(px(saved.width), px(saved.height)).min(&area.size);
     let bounds = Bounds::new(point(px(saved.x), px(saved.y)), size);
-    // Enough of it to see and to drag back.
+    // Enough of it to see, and its top on the display, since the toolbar
+    // along its top is what drags it back.
     let overlap = bounds.intersect(&area).size;
-    if overlap.width < px(100.) || overlap.height < px(40.) {
+    if overlap.width < px(100.) || overlap.height < px(40.) || bounds.top() < area.top() {
         return None;
     }
     let step = px(WINDOW_CASCADE * open as f32);
@@ -332,10 +333,15 @@ fn placed_bounds(
     })
 }
 
-/// Where a new window goes: where the last one was, or the middle of the
-/// screen when that's unknown or no longer on any display.
+/// A new window at the usual size, in the middle of the screen.
+fn centered_place(cx: &App) -> (WindowBounds, Option<DisplayId>) {
+    (WindowBounds::centered(size(px(1100.), px(700.)), cx), None)
+}
+
+/// Where a new browser window goes: where the last one was, or the middle of
+/// the screen when that's unknown or no longer on any display.
 fn new_window_place(cx: &App) -> (WindowBounds, Option<DisplayId>) {
-    let centered = || (WindowBounds::centered(size(px(1100.), px(700.)), cx), None);
+    let centered = || centered_place(cx);
     if term::active() {
         return centered();
     }
@@ -366,14 +372,20 @@ fn new_window_place(cx: &App) -> (WindowBounds, Option<DisplayId>) {
     }
 }
 
-/// Options for a browser window: on macOS a transparent titlebar with the
-/// traffic lights inset into the toolbar, which also handles window drags.
-pub fn window_options(title: SharedString, cx: &App) -> WindowOptions {
+/// Options for a window with no place chosen yet: on macOS a transparent
+/// titlebar with the traffic lights inset into the toolbar, which also
+/// handles window drags.
+///
+/// # Arguments
+///
+/// * `title` - The window's title
+///
+/// # Returns
+///
+/// The options, for the caller to add where the window goes
+pub fn window_options(title: SharedString) -> WindowOptions {
     let mac = cfg!(target_os = "macos");
-    let (window_bounds, display_id) = new_window_place(cx);
     WindowOptions {
-        window_bounds: Some(window_bounds),
-        display_id,
         window_min_size: Some(size(px(850.), px(470.))),
         titlebar: Some(TitlebarOptions {
             title: Some(title),
@@ -398,7 +410,17 @@ pub fn open_window(
         Some(_) => "Choose a File".into(),
         None => "fffinder".into(),
     };
-    let options = window_options(title.clone(), cx);
+    // A chooser is a short dialog for another program, so it doesn't take
+    // the last browser's place.
+    let (window_bounds, display_id) = match picker {
+        Some(_) => centered_place(cx),
+        None => new_window_place(cx),
+    };
+    let options = WindowOptions {
+        window_bounds: Some(window_bounds),
+        display_id,
+        ..window_options(title.clone())
+    };
     let result = gpui_kit::open_window(options, cx, move |window, cx| {
         window.set_window_title(&title);
         graphics::report(window);
@@ -476,6 +498,23 @@ mod tests {
             placed_bounds(&saved(100., -795., 1300., 800.), display(), 0),
             None
         );
+    }
+
+    #[test]
+    fn a_window_with_its_toolbar_above_the_display_is_placed_afresh() {
+        assert_eq!(
+            placed_bounds(&saved(100., -700., 1300., 800.), display(), 0),
+            None,
+            "most of it shows, but nothing's left to drag it by"
+        );
+        assert!(placed_bounds(&saved(100., 0., 1300., 800.), display(), 0).is_some());
+    }
+
+    #[test]
+    fn a_display_above_the_first_one_counts_from_its_own_top() {
+        let above = Bounds::new(point(px(0.), px(-1080.)), size(px(1920.), px(1080.)));
+
+        assert!(placed_bounds(&saved(100., -900., 1300., 800.), above, 0).is_some());
     }
 
     #[test]

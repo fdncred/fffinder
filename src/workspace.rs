@@ -15,10 +15,21 @@ pub struct Workspace {
     active: usize,
     /// The other pane, while split view is on.
     split: Option<Entity<Finder>>,
-    /// Remembers the window's place as it moves; a file chooser's doesn't count.
-    _bounds_watch: Option<Subscription>,
+    /// Remembers the window's place as it moves, and saves it if the window
+    /// closes or the app quits first. A file chooser's place doesn't count.
+    _placement_watches: Vec<Subscription>,
+    /// The window's place, until it's been saved.
+    unsaved_placement: Option<WindowPlacement>,
     /// Saves the window's place once it stops moving.
     placement_task: Task<()>,
+}
+
+/// Write `placement` to its file. A window that opens somewhere else is all
+/// that's lost if this fails, so it only warns.
+fn save_placement(placement: &WindowPlacement) {
+    if let Err(err) = placement.save() {
+        log::warn!("saving the window's place: {err}");
+    }
 }
 
 /// What a new browser in this window starts with.
@@ -50,14 +61,30 @@ impl Workspace {
     ) -> Workspace {
         let host = cx.entity().downgrade();
         let first = new_finder(start, query, picker, host, window, cx);
-        let watches_bounds = picker.is_none() && !crate::term::active();
+        let placement_watches = match picker.is_none() && !crate::term::active() {
+            true => vec![
+                cx.observe_window_bounds(window, Self::remember_placement),
+                cx.on_release(|this, _| this.save_unsaved_placement()),
+                cx.on_app_quit(|this: &mut Workspace, _| {
+                    this.save_unsaved_placement();
+                    async {}
+                }),
+            ],
+            false => Vec::new(),
+        };
         Workspace {
             tabs: vec![first],
             active: 0,
             split: None,
-            _bounds_watch: watches_bounds
-                .then(|| cx.observe_window_bounds(window, Self::remember_placement)),
+            _placement_watches: placement_watches,
+            unsaved_placement: None,
             placement_task: Task::ready(()),
+        }
+    }
+
+    fn save_unsaved_placement(&mut self) {
+        if let Some(placement) = self.unsaved_placement.take() {
+            save_placement(&placement);
         }
     }
 
@@ -72,24 +99,24 @@ impl Workspace {
             .display(cx)
             .and_then(|display| display.uuid().ok())
             .map(|uuid| uuid.to_string());
-        let placement = WindowPlacement {
+        self.unsaved_placement = Some(WindowPlacement {
             x: bounds.origin.x.into(),
             y: bounds.origin.y.into(),
             width: bounds.size.width.into(),
             height: bounds.size.height.into(),
             maximized: matches!(state, WindowBounds::Maximized(_)),
             display,
-        };
-        self.placement_task = cx.spawn(async move |_, cx| {
+        });
+        self.placement_task = cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(500))
                 .await;
-            cx.background_spawn(async move {
-                if let Err(err) = placement.save() {
-                    log::warn!("saving the window's place: {err}");
-                }
-            })
-            .await;
+            let Ok(Some(placement)) = this.update(cx, |this, _| this.unsaved_placement.take())
+            else {
+                return;
+            };
+            cx.background_spawn(async move { save_placement(&placement) })
+                .await;
         });
     }
 
@@ -133,8 +160,16 @@ impl Workspace {
         finder.files_focus_handle().focus(window, cx);
     }
 
+    /// The active tab is about to be hidden. A name being edited in it ends
+    /// here: a hidden tab draws nothing, so its field can't go on.
+    fn leave_active_tab(&self, window: &mut Window, cx: &mut App) {
+        self.active()
+            .update(cx, |finder, cx| finder.end_rename(window, cx));
+    }
+
     /// Open a tab at `start`, after the active one, and show it.
     pub fn new_tab(&mut self, start: Location, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_active_tab(window, cx);
         let host = cx.entity().downgrade();
         let tab = new_finder(start, None, None, host, window, cx);
         self.active += 1;
@@ -146,6 +181,7 @@ impl Workspace {
     /// Show the tab at `ix`; one past the last does nothing.
     pub fn select_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if ix < self.tabs.len() {
+            self.leave_active_tab(window, cx);
             self.active = ix;
             self.focus_active(window, cx);
             self.tabs_changed(cx);

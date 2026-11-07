@@ -11,6 +11,10 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
+
+/// How often to look at the clipboard while something's cut.
+const CUT_CHECK_EVERY: Duration = Duration::from_millis(500);
 
 /// Why the system (AppKit, QuickLook, Launch Services, the Windows shell)
 /// didn't do what it was asked.
@@ -272,12 +276,15 @@ pub fn reveal(path: &Path, cx: &mut App) {
 /// Files copied in fffinder, so a paste in any window finds them. The
 /// system clipboard holds their paths as text, which says whether this copy
 /// is still the latest.
-struct FileClipboard {
+pub(crate) struct FileClipboard {
     paths: Vec<PathBuf>,
     text: String,
     /// The same items, when they were cut: pasting them moves them, and the
     /// views dim them until then.
     cut: HashSet<PathBuf>,
+    /// Forgets the cut once the clipboard holds something else. Dropped with
+    /// this copy, which stops it.
+    cut_watch: Task<()>,
 }
 
 impl Global for FileClipboard {}
@@ -295,6 +302,7 @@ pub fn copy_files(paths: &[PathBuf], cx: &mut App) {
         paths: paths.to_vec(),
         text: text.clone(),
         cut: HashSet::new(),
+        cut_watch: Task::ready(()),
     });
     #[cfg(target_os = "macos")]
     if cx.try_global::<Recorder>().is_none() && crate::macos::write_file_clipboard(paths, &text) {
@@ -308,12 +316,58 @@ pub fn copy_files(paths: &[PathBuf], cx: &mut App) {
 }
 
 /// Put files on the clipboard to be moved by the next paste.
+///
+/// Anything can replace them there, in this app or another, without saying
+/// so, and only reading the clipboard tells. So while something's cut, this
+/// checks now and then. It reads the clipboard off the drawing path, and stops
+/// as soon as the cut is over.
+///
+/// # Arguments
+///
+/// * `paths` - The items to cut
 pub fn cut_files(paths: &[PathBuf], cx: &mut App) {
     copy_files(paths, cx);
-    cx.global_mut::<FileClipboard>().cut = paths.iter().cloned().collect();
+    let cut_watch = cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(CUT_CHECK_EVERY).await;
+            let still_cut = cx.update(|cx| {
+                let still_cut = clipboard_is_cut(cx);
+                if !still_cut {
+                    forget_cut(cx);
+                }
+                still_cut
+            });
+            if !still_cut {
+                break;
+            }
+        }
+    });
+    let copied = cx.global_mut::<FileClipboard>();
+    copied.cut = paths.iter().cloned().collect();
+    copied.cut_watch = cut_watch;
 }
 
-/// Whether what's on the clipboard now is what was cut.
+/// Where a path really leads. The system may hand one back in another form,
+/// such as through a link in one of its folders.
+fn real_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Whether `items` has all of `paths`, however each one is written.
+fn has_all(items: &HashSet<PathBuf>, paths: &[PathBuf]) -> bool {
+    if paths.iter().all(|path| items.contains(path)) {
+        return true;
+    }
+    let items: HashSet<PathBuf> = items.iter().map(|path| real_path(path)).collect();
+    paths.iter().all(|path| items.contains(&real_path(path)))
+}
+
+/// Check whether what's on the clipboard now is exactly what was cut. Part of
+/// it isn't enough: copying one cut item elsewhere asks for a copy of that item.
+///
+/// # Returns
+///
+/// `true` if pasting now should move the items
 pub fn clipboard_is_cut(cx: &App) -> bool {
     let Some(cut) = cx
         .try_global::<FileClipboard>()
@@ -322,27 +376,48 @@ pub fn clipboard_is_cut(cx: &App) -> bool {
     else {
         return false;
     };
-    let files = clipboard_files(cx);
-    if files.is_empty() {
-        return false;
-    }
-    if files.iter().all(|path| cut.contains(path)) {
-        return true;
-    }
-    // The system may hand a path back in another form, such as through a
-    // link in one of its folders, so compare where they really lead.
-    let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-    let cut: HashSet<PathBuf> = cut.iter().map(real).collect();
-    files.iter().all(|path| cut.contains(&real(path)))
+    let mut files = clipboard_files(cx);
+    files.sort_unstable();
+    files.dedup();
+    files.len() == cut.len() && has_all(cut, &files)
 }
 
-/// Whether the item at `path` was cut and hasn't been pasted yet.
+/// Check whether an item is waiting to be moved by a paste.
+///
+/// # Arguments
+///
+/// * `path` - The item, written as the view lists it
+///
+/// # Returns
+///
+/// `true` if it was cut and hasn't been pasted yet
 pub fn is_cut(path: &Path, cx: &App) -> bool {
     cx.try_global::<FileClipboard>()
         .is_some_and(|copied| copied.cut.contains(path))
 }
 
-/// Stop treating anything as cut. Returns whether something was.
+/// Check whether moving some items uses up the cut, which it does when the
+/// clipboard still holds what was cut and they're among those items.
+///
+/// # Arguments
+///
+/// * `paths` - The items being moved
+///
+/// # Returns
+///
+/// `true` if there's nothing left for a second paste to move
+pub fn moving_uses_up_cut(paths: &[PathBuf], cx: &App) -> bool {
+    clipboard_is_cut(cx)
+        && cx
+            .try_global::<FileClipboard>()
+            .is_some_and(|copied| has_all(&copied.cut, paths))
+}
+
+/// Stop treating anything as cut.
+///
+/// # Returns
+///
+/// `true` if something was cut
 pub fn forget_cut(cx: &mut App) -> bool {
     if cx
         .try_global::<FileClipboard>()
@@ -588,7 +663,33 @@ mod volumes {
 
 #[cfg(test)]
 mod tests {
-    use super::paths_in_text;
+    use super::{has_all, paths_in_text};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    #[test]
+    fn has_all_wants_every_path() {
+        let items: HashSet<PathBuf> = ["/a", "/b"].map(PathBuf::from).into();
+
+        assert!(has_all(&items, &["/a".into()]));
+        assert!(has_all(&items, &["/b".into(), "/a".into()]));
+        assert!(!has_all(&items, &["/a".into(), "/c".into()]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn has_all_sees_through_another_form_of_a_path() {
+        let dir = std::env::temp_dir().join(format!("fffinder-forms-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::fs::write(dir.join("real/file"), "x").unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("link")).unwrap();
+        let items: HashSet<PathBuf> = [dir.join("real/file")].into();
+
+        assert!(has_all(&items, &[dir.join("link/file")]));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn reads_file_lists_other_apps_copy() {

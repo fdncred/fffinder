@@ -230,7 +230,6 @@ impl Finder {
                 let menu_path = path.clone();
                 let name = SharedString::from(name);
                 let shown = StyledText::new(name.clone());
-                let tooltip = super::fit::cut_off_tooltip(&shown, name);
                 // Every crumb but the current one narrows on a long path.
                 let shrink = if is_last { 0. } else { 1. };
                 let crumb = h_flex()
@@ -246,13 +245,14 @@ impl Finder {
                     } else {
                         pal.sidebar_icon
                     }))
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(if is_last { fg } else { muted })
-                            .child(shown),
-                    )
-                    .tooltip(tooltip)
+                    .map(|crumb| {
+                        super::fit::with_cut_off_text(crumb, shown, name, |shown| {
+                            div()
+                                .truncate()
+                                .text_color(if is_last { fg } else { muted })
+                                .child(shown)
+                        })
+                    })
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         let path = path.clone();
                         if is_last && is_file {

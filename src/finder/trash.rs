@@ -70,6 +70,7 @@ impl Finder {
                     Err(TrashStopped { trashed, error }) => (trashed, Some(error)),
                 };
                 undo::record("Move to Trash", Change::Trashed(trashed), cx);
+                let mut select: Vec<PathBuf> = next.into_iter().collect();
                 if let Some(err) = failed {
                     window.push_notification(
                         (
@@ -78,8 +79,16 @@ impl Finder {
                         ),
                         cx,
                     );
+                    // What's still there stays selected, to try again.
+                    let left: Vec<PathBuf> = gone
+                        .into_iter()
+                        .filter(|path| path.symlink_metadata().is_ok())
+                        .collect();
+                    if !left.is_empty() {
+                        select = left;
+                    }
                 }
-                this.files_changed(next.into_iter().collect(), cx);
+                this.files_changed(select, cx);
             })
             .ok();
         })
@@ -395,4 +404,73 @@ pub(super) fn can_put_back(trashed: &[Trashed], entries: &[FileEntry]) -> bool {
             .iter()
             .any(|t| t.path == e.path && t.original.is_some())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_after;
+    use crate::finder::Row;
+    use fffinder_core::FileEntry;
+    use std::path::{Path, PathBuf};
+
+    /// A row for each of `names` under `/list`, which needn't exist.
+    fn rows(names: &[&str]) -> Vec<Row> {
+        let meta = std::fs::metadata(std::env::temp_dir()).unwrap();
+        names
+            .iter()
+            .map(|name| {
+                let entry = FileEntry::from_metadata(Path::new("/list").join(name), &meta, false);
+                Row::new(entry, Vec::new(), None)
+            })
+            .collect()
+    }
+
+    fn gone(names: &[&str]) -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|name| Path::new("/list").join(name))
+            .collect()
+    }
+
+    fn after(rows: &[Row], names: &[&str]) -> Option<PathBuf> {
+        item_after(rows, &gone(names))
+    }
+
+    #[test]
+    fn the_next_item_is_the_one_after_the_last_to_go() {
+        let list = rows(&["a", "b", "c", "d"]);
+
+        assert_eq!(after(&list, &["b"]), Some("/list/c".into()));
+        assert_eq!(after(&list, &["a", "c"]), Some("/list/d".into()));
+    }
+
+    #[test]
+    fn after_the_last_row_the_next_item_is_the_nearest_before_it() {
+        let list = rows(&["a", "b", "c"]);
+
+        assert_eq!(after(&list, &["c"]), Some("/list/b".into()));
+        assert_eq!(after(&list, &["b", "c"]), Some("/list/a".into()));
+    }
+
+    #[test]
+    fn an_open_folders_items_go_with_it() {
+        let list = rows(&["a", "dir", "dir/one", "dir/two", "z"]);
+
+        assert_eq!(after(&list, &["dir"]), Some("/list/z".into()));
+
+        let at_the_end = rows(&["a", "dir", "dir/one"]);
+        assert_eq!(
+            after(&at_the_end, &["dir"]),
+            Some("/list/a".into()),
+            "not an item inside it"
+        );
+    }
+
+    #[test]
+    fn with_nothing_left_or_nothing_listed_there_is_no_next_item() {
+        let list = rows(&["a", "b"]);
+
+        assert_eq!(after(&list, &["a", "b"]), None);
+        assert_eq!(after(&list, &["not listed"]), None);
+    }
 }

@@ -19,6 +19,8 @@ pub(super) struct PathCompletions {
     input: Entity<InputState>,
     base: Option<PathBuf>,
     matches: Vec<PathCompletion>,
+    /// What was typed when `matches` were read.
+    matched: String,
     /// Reads the folder; a newer read replaces it.
     task: Task<()>,
     _changes: Subscription,
@@ -32,20 +34,26 @@ impl PathCompletions {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<PathCompletions> {
-        cx.new(|cx| PathCompletions {
-            _changes: cx.subscribe_in(
-                &input,
-                window,
-                |this: &mut PathCompletions, _, event: &InputEvent, _, cx| {
-                    if let InputEvent::Change = event {
-                        this.refresh(cx);
-                    }
-                },
-            ),
-            input,
-            base,
-            matches: Vec::new(),
-            task: Task::ready(()),
+        cx.new(|cx| {
+            let mut completions = PathCompletions {
+                _changes: cx.subscribe_in(
+                    &input,
+                    window,
+                    |this: &mut PathCompletions, _, event: &InputEvent, _, cx| {
+                        if let InputEvent::Change = event {
+                            this.refresh(cx);
+                        }
+                    },
+                ),
+                input,
+                base,
+                matches: Vec::new(),
+                matched: String::new(),
+                task: Task::ready(()),
+            };
+            // The field may start with a path in it, which no edit announces.
+            completions.refresh(cx);
+            completions
         })
     }
 
@@ -55,10 +63,14 @@ impl PathCompletions {
         let typed = self.input.read(cx).value().to_string();
         let base = self.base.clone();
         self.task = cx.spawn(async move |this, cx| {
-            let matches = cx
-                .background_spawn(async move { listing::complete_path(&typed, base.as_deref()) })
+            let (typed, matches) = cx
+                .background_spawn(async move {
+                    let matches = listing::complete_path(&typed, base.as_deref());
+                    (typed, matches)
+                })
                 .await;
             this.update(cx, |this, cx| {
+                this.matched = typed;
                 this.matches = matches;
                 cx.notify();
             })
@@ -66,16 +78,23 @@ impl PathCompletions {
         });
     }
 
-    /// Tab: finish the path as far as every match agrees.
+    /// Tab: finish the path as far as every match agrees. Matches read for
+    /// what was typed earlier would throw away what's been typed since.
     pub(super) fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.matched != self.input.read(cx).value().as_ref() {
+            return;
+        }
         if let Some(text) = listing::common_completion(&self.matches) {
             self.fill(text, window, cx);
         }
     }
 
     fn fill(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.input
-            .update(cx, |input, cx| input.set_value(text, window, cx));
+        self.input.update(cx, |input, cx| {
+            input.set_value(text, window, cx);
+            // Clicking a match isn't a reason to stop typing.
+            input.focus(window, cx);
+        });
         self.refresh(cx);
     }
 }

@@ -62,10 +62,7 @@ impl Finder {
     fn preview_pane_body(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let selected = match self.effective_view() {
-            ViewMode::Columns => self.column_selection().map_or(0, |_| 1),
-            _ => self.selection.len(),
-        };
+        let selected = self.selection.len();
         if selected > 1 {
             let count = SharedString::from(format!("{selected} items"));
             return v_flex()

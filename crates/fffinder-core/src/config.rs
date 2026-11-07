@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const APP_NAME: &str = "fffinder";
 /// Preview text size, in points, before the user changes it.
@@ -132,6 +133,21 @@ impl ListColumn {
 pub struct ColumnSetting {
     pub column: ListColumn,
     pub width: f32,
+}
+
+impl ColumnSetting {
+    /// How wide the column is, kept in range even if the file was edited by hand.
+    ///
+    /// # Returns
+    ///
+    /// The width in points
+    pub fn width_in_range(&self) -> f32 {
+        in_range(
+            self.width,
+            (MIN_COLUMN_WIDTH, f32::MAX),
+            self.column.default_width(),
+        )
+    }
 }
 
 /// The narrowest a list column can be dragged.
@@ -441,14 +457,24 @@ pub fn config_path() -> PathBuf {
 }
 
 /// Write `text` to `path` and then rename it into place, so a crash never
-/// leaves a truncated file.
+/// leaves a truncated file. Each write has a temporary file of its own, so
+/// two writers, in this process or another, can't publish each other's
+/// half-written text.
 pub(crate) fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
+    // A `static` is one value shared by the whole program, like a module-level
+    // variable in Python. Atomics let threads update it without a lock.
+    static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(tmp, path)
+    let write = NEXT_WRITE.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("{}.{write}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        // Nothing to report: the write's own error is the one that matters.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Where the last browser window was, so the next one opens there. It's kept
@@ -466,7 +492,11 @@ pub struct WindowPlacement {
 }
 
 impl WindowPlacement {
-    /// The saved placement, or `None` if there is none yet or it can't be read.
+    /// Read the saved placement.
+    ///
+    /// # Returns
+    ///
+    /// The placement, or `None` if there is none yet or it can't be read
     pub fn load() -> Option<WindowPlacement> {
         Self::load_from(&window_placement_path())
     }
@@ -502,13 +532,22 @@ fn window_placement_path() -> PathBuf {
 macro_rules! settings_by_scope {
     (shared: $($shared:ident),* $(,)?; own: $($own:ident),* $(,)?) => {
         impl Config {
-            /// Copy the settings every browser shows the same from `from`.
+            /// Copy the settings every browser shows the same.
+            ///
+            /// # Arguments
+            ///
+            /// * `from` - The settings to copy them from
             pub fn copy_shared_from(&mut self, from: &Config) {
                 $( self.$shared.clone_from(&from.$shared); )*
             }
 
-            /// Take the shared settings that differ between `before` and
-            /// `after`, leaving every other field as it is.
+            /// Take the shared settings that changed, leaving every other
+            /// field as it is.
+            ///
+            /// # Arguments
+            ///
+            /// * `before` - The settings before the change
+            /// * `after` - The settings after it
             pub fn take_shared_changes(&mut self, before: &Config, after: &Config) {
                 $(
                     if before.$shared != after.$shared {
@@ -517,8 +556,13 @@ macro_rules! settings_by_scope {
                 )*
             }
 
-            /// Take every setting that differs between `before` and `after`,
-            /// leaving every other field as it is.
+            /// Take every setting that changed, leaving every other field as
+            /// it is.
+            ///
+            /// # Arguments
+            ///
+            /// * `before` - The settings before the change
+            /// * `after` - The settings after it
             pub fn take_changes(&mut self, before: &Config, after: &Config) {
                 let Config { $($shared: _,)* $($own: _,)* } = after;
                 self.take_shared_changes(before, after);
@@ -552,10 +596,21 @@ impl Config {
     }
 
     pub fn load_from(path: &Path) -> Config {
-        let mut config: Config = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
+        Self::read_from(path).unwrap_or_default()
+    }
+
+    /// Read the file at `path`, bringing older settings up to date.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The settings file
+    ///
+    /// # Returns
+    ///
+    /// The settings, or `None` if the file is missing or can't be read or parsed
+    pub fn read_from(path: &Path) -> Option<Config> {
+        let text = std::fs::read_to_string(path).ok()?;
+        let mut config: Config = serde_json::from_str(&text).ok()?;
         if let Some(command) = config.terminal.take().filter(|c| !c.trim().is_empty()) {
             config
                 .terminals
@@ -570,7 +625,7 @@ impl Config {
         {
             log::warn!("saving upgraded settings to {}: {err}", path.display());
         }
-        config
+        Some(config)
     }
 
     /// Make the one-time changes older settings are missing. Returns whether
@@ -620,6 +675,10 @@ impl Config {
     }
 
     /// The sidebar's width, kept in range even if the file was edited by hand.
+    ///
+    /// # Returns
+    ///
+    /// The width in points
     pub fn sidebar_width(&self) -> f32 {
         in_range(
             self.sidebar_width,
@@ -629,6 +688,10 @@ impl Config {
     }
 
     /// The preview pane's width, kept in range even if the file was edited by hand.
+    ///
+    /// # Returns
+    ///
+    /// The width in points
     pub fn preview_pane_width(&self) -> f32 {
         in_range(
             self.preview_pane_width,
@@ -638,11 +701,40 @@ impl Config {
     }
 
     /// How wide a new pane of the column view opens, kept in range.
+    ///
+    /// # Returns
+    ///
+    /// The width in points
     pub fn column_view_width(&self) -> f32 {
         in_range(
             self.column_view_width,
             COLUMN_VIEW_WIDTH_RANGE,
             DEFAULT_COLUMN_VIEW_WIDTH,
+        )
+    }
+
+    /// The list's Name column, kept in range even if the file was edited by hand.
+    ///
+    /// # Returns
+    ///
+    /// The width in points, or `None` while it fills the room the other
+    /// columns leave
+    pub fn name_column_width(&self) -> Option<f32> {
+        self.name_column_width
+            .filter(|width| width.is_finite())
+            .map(|width| width.max(MIN_NAME_WIDTH))
+    }
+
+    /// The list's Folder column, kept in range even if the file was edited by hand.
+    ///
+    /// # Returns
+    ///
+    /// The width in points
+    pub fn parent_column_width(&self) -> f32 {
+        in_range(
+            self.parent_column_width,
+            (MIN_COLUMN_WIDTH, f32::MAX),
+            DEFAULT_PARENT_COLUMN_WIDTH,
         )
     }
 
@@ -675,6 +767,8 @@ impl Config {
     /// Put the changes from `before` to `after` into the file at `path`,
     /// keeping everything else in it. Another fffinder process, such as a
     /// `--pick` or `--term` one, may have changed the file since it was read.
+    /// When the file is missing or can't be read or parsed there are no fields
+    /// to keep, so all of `after` is written.
     ///
     /// # Arguments
     ///
@@ -686,9 +780,14 @@ impl Config {
     ///
     /// Returns the I/O error if the file can't be written.
     pub fn save_changes(before: &Config, after: &Config, path: &Path) -> std::io::Result<()> {
-        let mut file = Config::load_from(path);
-        file.take_changes(before, after);
-        file.save_to(path)
+        match Config::read_from(path) {
+            Some(mut file) => {
+                file.take_changes(before, after);
+                file.save_to(path)
+            }
+            // Merging into defaults here would wipe every setting on disk.
+            None => after.save_to(path),
+        }
     }
 }
 
@@ -787,6 +886,76 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    /// An empty folder of its own, for tests that look at what's beside the file.
+    fn empty_settings_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fffinder-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn saving_over_a_file_that_cant_be_parsed_keeps_every_setting() {
+        let dir = empty_settings_folder("bad-saved");
+        let path = dir.join("settings.json");
+        let before = Config {
+            favorites: vec!["/some/favorite".into()],
+            nu_font_size: 22.,
+            ..Default::default()
+        };
+        let after = Config {
+            show_hidden: true,
+            ..before.clone()
+        };
+        std::fs::write(&path, "{ a typo").unwrap();
+
+        Config::save_changes(&before, &after, &path).unwrap();
+
+        assert_eq!(Config::load_from(&path), after);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reading_tells_a_bad_file_from_a_good_one() {
+        let path = std::env::temp_dir().join(format!("fffinder-cfg7-{}.json", std::process::id()));
+
+        assert_eq!(Config::read_from(&path), None, "no file yet");
+        std::fs::write(&path, "{ a typo").unwrap();
+        assert_eq!(Config::read_from(&path), None);
+        assert_eq!(Config::load_from(&path), Config::default());
+        std::fs::write(&path, r#"{"show_hidden": true}"#).unwrap();
+        assert!(Config::read_from(&path).is_some_and(|config| config.show_hidden));
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn writers_at_once_never_publish_each_others_half_written_text() {
+        let dir = std::env::temp_dir().join(format!("fffinder-write-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let texts: Vec<String> = (0..8).map(|ix| ix.to_string().repeat(100_000)).collect();
+
+        std::thread::scope(|scope| {
+            for text in &texts {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        write_file(path, text).unwrap();
+                    }
+                });
+            }
+        });
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(texts.contains(&written), "one writer's whole text");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temporary files left behind"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn window_placement_round_trips() {
         let path = std::env::temp_dir().join(format!("fffinder-win-{}.json", std::process::id()));
@@ -817,6 +986,36 @@ mod tests {
 
         assert_eq!(config.sidebar_width(), SIDEBAR_WIDTH_RANGE.1);
         assert_eq!(config.column_view_width(), DEFAULT_COLUMN_VIEW_WIDTH);
+
+        let config = Config {
+            name_column_width: Some(-50.),
+            parent_column_width: -50.,
+            ..Default::default()
+        };
+        assert_eq!(config.name_column_width(), Some(MIN_NAME_WIDTH));
+        assert_eq!(config.parent_column_width(), MIN_COLUMN_WIDTH);
+
+        let config = Config {
+            name_column_width: Some(f32::NAN),
+            parent_column_width: f32::NAN,
+            ..Default::default()
+        };
+        assert_eq!(config.name_column_width(), None, "fills the room again");
+        assert_eq!(config.parent_column_width(), DEFAULT_PARENT_COLUMN_WIDTH);
+
+        let narrow = ColumnSetting {
+            column: ListColumn::Size,
+            width: -50.,
+        };
+        assert_eq!(narrow.width_in_range(), MIN_COLUMN_WIDTH);
+        let not_a_number = ColumnSetting {
+            column: ListColumn::Size,
+            width: f32::NAN,
+        };
+        assert_eq!(
+            not_a_number.width_in_range(),
+            ListColumn::Size.default_width()
+        );
     }
 
     #[test]

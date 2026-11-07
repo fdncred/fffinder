@@ -315,7 +315,6 @@ impl Finder {
             let drop_host = weak;
             let label: SharedString = title.clone().into();
             let shown = StyledText::new(label.clone());
-            let tooltip = super::fit::cut_off_tooltip(&shown, label.clone());
             h_flex()
                 .id(("tab", ix))
                 .flex_1()
@@ -330,8 +329,11 @@ impl Finder {
                     this.bg(selected_bg).border_1().border_color(border)
                 })
                 .when(!on, |this| this.text_color(muted).hover(|s| s.bg(hover)))
-                .child(div().flex_1().min_w_0().truncate().child(shown))
-                .tooltip(tooltip)
+                .map(|tab| {
+                    super::fit::with_cut_off_text(tab, shown, label.clone(), |shown| {
+                        div().flex_1().min_w_0().truncate().child(shown)
+                    })
+                })
                 .child(
                     div()
                         .id(("close-tab", ix))

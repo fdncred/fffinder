@@ -37,7 +37,11 @@ fn default_path() -> PathBuf {
 }
 
 impl FolderViews {
-    /// What's saved, or nothing if there's no file or it can't be read.
+    /// Read what's saved.
+    ///
+    /// # Returns
+    ///
+    /// What's saved, or nothing if there's no file or it can't be read
     pub fn load() -> FolderViews {
         Self::load_from(&default_path())
     }
@@ -63,12 +67,27 @@ impl FolderViews {
         write_file(path, &text)
     }
 
-    /// The view and sort last chosen in `folder`, if any.
+    /// Look up what was chosen in a folder.
+    ///
+    /// # Arguments
+    ///
+    /// * `folder` - The folder to look up
+    ///
+    /// # Returns
+    ///
+    /// The view and sort last chosen there, or `None` if none was
     pub fn get(&self, folder: &Path) -> Option<(ViewMode, SortOrder)> {
         self.folders.get(&key(folder)).map(|f| (f.view, f.sort))
     }
 
-    /// Remember `view` and `sort` for `folder`.
+    /// Remember what was chosen in a folder, forgetting the folder chosen
+    /// longest ago once there are too many.
+    ///
+    /// # Arguments
+    ///
+    /// * `folder` - The folder it was chosen in
+    /// * `view` - The view chosen
+    /// * `sort` - The sort chosen
     pub fn set(&mut self, folder: &Path, view: ViewMode, sort: SortOrder) {
         let chosen = self.next_choice;
         self.next_choice += 1;

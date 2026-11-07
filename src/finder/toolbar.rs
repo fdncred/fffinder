@@ -23,18 +23,60 @@ pub const TOOLBAR_HEIGHT: f32 = 52.;
 const SEARCH_MIN_WIDTH: f32 = 120.;
 /// How far the search field narrows once nothing else can go.
 const SEARCH_LAST_WIDTH: f32 = 80.;
+
+// The controls are icons in fixed-size buttons, so what fits is arithmetic.
+// They're drawn with these same numbers, so the two can't disagree, and a test
+// in `tests/basics.rs` measures the drawn toolbar against the sums. All are in
+// points.
+const PILL_BUTTON_WIDTH: f32 = 36.;
+const MENU_BUTTON_WIDTH: f32 = 52.;
+const WINDOW_BUTTON_WIDTH: f32 = 28.;
+const PILL_PADDING: f32 = 2.;
+const PILL_GAP: f32 = 2.;
+/// A pill's border, on its two sides together.
+const PILL_BORDERS: f32 = 2.;
+const TOOLBAR_GAP: f32 = 8.;
+const TOOLBAR_LEFT: f32 = 12.;
+const TOOLBAR_RIGHT: f32 = 10.;
+const TITLE_PADDING: f32 = 4.;
+
+/// How wide a pill of `count` buttons, each `button` wide, is. A `const fn`
+/// can run while compiling, which lets the constants below use it.
+const fn pill_width(count: f32, button: f32) -> f32 {
+    PILL_BORDERS + 2. * PILL_PADDING + count * button + (count - 1.) * PILL_GAP
+}
+
+const ONE_BUTTON_PILL: f32 = pill_width(1., PILL_BUTTON_WIDTH);
+const NAV_PILL: f32 = pill_width(2., PILL_BUTTON_WIDTH);
+const VIEWS_PILL: f32 = pill_width(4., PILL_BUTTON_WIDTH);
+const MENU_PILL: f32 = pill_width(1., MENU_BUTTON_WIDTH);
+
 /// What each of the toolbar's folding controls takes up, with the gap after
-/// it, in points: the folder search button, the view buttons beyond what a
-/// single menu button needs, the Nushell menu, and the Sort menu.
-const SCOPE_ROOM: f32 = 50.;
-const VIEWS_ROOM: f32 = 98.;
-const NUSHELL_ROOM: f32 = 66.;
-const SORT_ROOM: f32 = 66.;
+/// it: the folder search button, the view buttons beyond what a single menu
+/// button needs, the Nushell menu, and the Sort menu.
+const SCOPE_ROOM: f32 = ONE_BUTTON_PILL + TOOLBAR_GAP;
+const VIEWS_ROOM: f32 = VIEWS_PILL - MENU_PILL;
+const NUSHELL_ROOM: f32 = MENU_PILL + TOOLBAR_GAP;
+const SORT_ROOM: f32 = MENU_PILL + TOOLBAR_GAP;
+/// What the toolbar's extras take up, with the gap beside them: the Show
+/// Sidebar button, and the three window buttons where fffinder draws them.
+const SHOW_SIDEBAR_ROOM: f32 = ONE_BUTTON_PILL + TOOLBAR_GAP;
+const WINDOW_CONTROLS_ROOM: f32 = 3. * WINDOW_BUTTON_WIDTH + 2. * PILL_GAP + TOOLBAR_GAP;
 /// The room the toolbar needs with everything showing and the search field at
-/// its narrowest, in points.
-const TOOLBAR_FULL_WIDTH: f32 = 534. + SEARCH_MIN_WIDTH;
-/// The room it needs with everything that can fold folded, in points. The
-/// sidebar leaves it at least this much.
+/// its narrowest: its padding, the title's, the seven gaps between the title,
+/// back and forward, the views, Sort, Nushell, Actions, folder search, and
+/// the search field, and then each of those.
+const TOOLBAR_FULL_WIDTH: f32 = TOOLBAR_LEFT
+    + TITLE_PADDING
+    + TOOLBAR_RIGHT
+    + 7. * TOOLBAR_GAP
+    + NAV_PILL
+    + VIEWS_PILL
+    + 3. * MENU_PILL
+    + ONE_BUTTON_PILL
+    + SEARCH_MIN_WIDTH;
+/// The room it needs with everything that can fold folded. The sidebar leaves
+/// it at least this much.
 pub const TOOLBAR_MIN_WIDTH: f32 =
     TOOLBAR_FULL_WIDTH - SCOPE_ROOM - VIEWS_ROOM - NUSHELL_ROOM - SORT_ROOM;
 
@@ -80,8 +122,8 @@ pub fn pill(cx: &App) -> Div {
     let pal = palette(cx);
     h_flex()
         .h(ui(34.))
-        .p(ui(2.))
-        .gap(ui(2.))
+        .p(ui(PILL_PADDING))
+        .gap(ui(PILL_GAP))
         .rounded_full()
         .bg(pal.pill)
         .border_1()
@@ -96,7 +138,7 @@ pub fn pill_button(id: impl Into<ElementId>, icon: impl Into<Icon>, cx: &App) ->
         .ghost()
         .icon(icon)
         .rounded(ButtonRounded::Size(ui(15.)))
-        .w(ui(36.))
+        .w(ui(PILL_BUTTON_WIDTH))
         .h(ui(28.))
         .text_color(cx.theme().foreground)
 }
@@ -106,7 +148,7 @@ pub fn menu_button(id: impl Into<ElementId>, icon: impl Into<Icon>, cx: &App) ->
     // The button puts its icon and caret at its two edges; the padding moves
     // them in from the pill's rounded ends.
     pill_button(id, icon, cx)
-        .w(ui(52.))
+        .w(ui(MENU_BUTTON_WIDTH))
         .px(ui(8.))
         .dropdown_caret(true)
 }
@@ -176,10 +218,12 @@ fn window_controls(window: &Window, cx: &mut Context<Finder>) -> Option<Div> {
         (IconName::WindowMaximize, "Maximize")
     };
     let button = |id: &'static str, icon: IconName, tip: &'static str, cx: &App| {
-        pill_button(id, icon, cx).w(ui(28.)).tooltip(tip)
+        pill_button(id, icon, cx)
+            .w(ui(WINDOW_BUTTON_WIDTH))
+            .tooltip(tip)
     };
     let controls = h_flex()
-        .gap(ui(2.))
+        .gap(ui(PILL_GAP))
         .flex_shrink_0()
         // Clicks on the buttons must not start a window drag.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -238,15 +282,13 @@ impl Finder {
     fn toolbar_room(&self, traffic: bool, window: &Window) -> ToolbarFit {
         let mut extras = 0.;
         if !self.config.show_sidebar {
-            // The Show Sidebar button.
-            extras += 50.;
+            extras += SHOW_SIDEBAR_ROOM;
         }
         if traffic {
-            extras += TRAFFIC_LIGHTS - 12.;
+            extras += TRAFFIC_LIGHTS - TOOLBAR_LEFT;
         }
         if window_controls_shown(window) {
-            // Three of them, with the gaps around them.
-            extras += 96.;
+            extras += WINDOW_CONTROLS_ROOM;
         }
         let room = f32::from(self.toolbar_width) / crate::theme::ui_scale() - extras;
         ToolbarFit::for_room(room)
@@ -454,9 +496,13 @@ impl Finder {
                     }
                 })
                 // macOS draws the window buttons at a fixed size.
-                .pl(if traffic { px(TRAFFIC_LIGHTS) } else { ui(12.) })
-                .pr(ui(10.))
-                .gap(ui(8.))
+                .pl(if traffic {
+                    px(TRAFFIC_LIGHTS)
+                } else {
+                    ui(TOOLBAR_LEFT)
+                })
+                .pr(ui(TOOLBAR_RIGHT))
+                .gap(ui(TOOLBAR_GAP))
                 .when(!self.config.show_sidebar, |this| {
                     this.child(
                         pill(cx).child(
@@ -472,7 +518,7 @@ impl Finder {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .pl(ui(4.))
+                        .pl(ui(TITLE_PADDING))
                         .text_size(ui(15.))
                         .font_weight(FontWeight::BOLD)
                         .truncate()
