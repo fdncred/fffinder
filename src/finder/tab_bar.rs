@@ -37,8 +37,8 @@ impl Finder {
     /// view changes aren't saved over the main pane's.
     pub fn become_split_pane(&mut self, cx: &mut Context<Self>) {
         self.split_pane = true;
-        self.persist = false;
         self.config.show_sidebar = false;
+        self.published.show_sidebar = false;
         cx.notify();
     }
 

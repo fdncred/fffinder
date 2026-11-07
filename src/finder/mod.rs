@@ -337,7 +337,10 @@ pub struct Finder {
     /// Applies Settings › Search engine; a newer change replaces it.
     search_settings_task: Task<()>,
     watch_task: Task<()>,
-    save_task: Task<()>,
+    /// The app's one copy of the settings.
+    settings: Entity<crate::settings::Settings>,
+    /// `config` as last published, to tell what this browser has changed.
+    published: Config,
     /// The open Get Info panel's contents.
     info: Option<info::InfoPanel>,
     /// Folders open in the list view's tree, and what they hold.
@@ -372,8 +375,6 @@ pub struct Finder {
 
     icon_slider: Entity<SliderState>,
     dialog_sub: Option<Subscription>,
-    /// Write settings changes to disk (off for headless screenshots).
-    persist: bool,
     picker: Option<PickerOptions>,
     _subscriptions: Vec<Subscription>,
 }
@@ -393,7 +394,8 @@ impl Finder {
         cx: &mut Context<Self>,
     ) -> Self {
         let engine = cx.global::<AppState>().engine.clone();
-        let config = Config::load();
+        let settings = crate::settings::entity(cx);
+        let config = settings.read(cx).config().clone();
         crate::theme::set_ui_scale(config.ui_scale(), cx);
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -430,6 +432,7 @@ impl Finder {
                     this.run_nu_pipeline(window, cx);
                 }
             }),
+            cx.observe_in(&settings, window, Self::adopt_settings),
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.config.appearance == fffinder_core::Appearance::System {
                     crate::theme::apply(this.config.appearance, Some(window), cx);
@@ -533,7 +536,8 @@ impl Finder {
             roots_task: Task::ready(()),
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
-            save_task: Task::ready(()),
+            settings,
+            published: config.clone(),
             info: None,
             free_space: None,
             host: None,
@@ -554,7 +558,6 @@ impl Finder {
             fps_task: Task::ready(()),
             icon_slider,
             dialog_sub: None,
-            persist: true,
             picker,
             _subscriptions: subscriptions,
             config,
@@ -806,7 +809,7 @@ impl Finder {
         self.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
         if let Some(folder) = self.current_folder() {
             self.config.last_folder = Some(folder.to_path_buf());
-            self.schedule_save(cx);
+            self.settings_changed(cx);
         }
         window.set_window_title(&self.history.current().title());
         self.load_listing(select.into_iter().collect(), false, cx);
@@ -1258,7 +1261,7 @@ impl Finder {
     pub fn set_kind(&mut self, kind: KindFilter, cx: &mut Context<Self>) {
         if self.config.kind_filter != kind {
             self.config.kind_filter = kind;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
             self.run_search(false, cx);
         }
     }
@@ -1334,7 +1337,7 @@ impl Finder {
 
     pub fn set_search_roots(&mut self, roots: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.config.search_roots = roots;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         let engine = self.engine.clone();
         let roots = self.config.search_roots.clone();
         self.roots_task = cx.spawn(async move |this, cx| {
@@ -1349,7 +1352,7 @@ impl Finder {
     /// or stop.
     pub fn set_search_apps(&mut self, on: bool, cx: &mut Context<Self>) {
         self.config.search_apps = on;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         self.engine.set_app_dirs(&self.config.app_dirs());
         if self.is_searching() {
             self.run_search(false, cx);
@@ -1365,7 +1368,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         edit(&mut self.config.search);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         let engine = self.engine.clone();
         let settings = self.config.search.clone();
         self.search_settings_task = cx.spawn(async move |this, cx| {
@@ -1385,7 +1388,7 @@ impl Finder {
     /// The most results a search shows.
     pub fn set_result_limit(&mut self, limit: usize, cx: &mut Context<Self>) {
         self.config.result_limit = limit.max(1);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
@@ -1809,7 +1812,7 @@ impl Finder {
         }
         self.select_first_for_gallery(cx);
         self.selection_changed(cx);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1830,7 +1833,7 @@ impl Finder {
             self.result_sort = order;
         } else {
             self.config.sort = order;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
             if key == SortKey::LastOpened {
                 // Last-opened dates are only read when something needs them.
                 self.load_listing(Vec::new(), true, cx);
@@ -1844,7 +1847,7 @@ impl Finder {
             self.result_sort.ascending = ascending;
         } else {
             self.config.sort.ascending = ascending;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
         }
         self.rebuild_rows(cx);
     }
@@ -1862,7 +1865,12 @@ impl Finder {
             return;
         }
         self.config.show_hidden = show;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
+        self.show_hidden_changed(cx);
+    }
+
+    /// Hidden files came or went: list everything again.
+    fn show_hidden_changed(&mut self, cx: &mut Context<Self>) {
         self.load_listing(Vec::new(), true, cx);
         self.reload_columns(cx);
         self.reload_children(cx);
@@ -1879,13 +1887,13 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.config.show_sidebar = !self.config.show_sidebar;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
     pub fn set_icon_size(&mut self, size: f32, cx: &mut Context<Self>) {
         self.config.icon_size = size.clamp(32., 128.);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1894,7 +1902,7 @@ impl Finder {
         use fffinder_core::config::{DEFAULT_PREVIEW_FONT_SIZE, FONT_SIZE_RANGE, in_range};
         let size = size.unwrap_or(DEFAULT_PREVIEW_FONT_SIZE);
         self.config.preview_font_size = in_range(size, FONT_SIZE_RANGE, DEFAULT_PREVIEW_FONT_SIZE);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1903,7 +1911,7 @@ impl Finder {
         use fffinder_core::config::{DEFAULT_NU_FONT_SIZE, FONT_SIZE_RANGE, in_range};
         let size = size.unwrap_or(DEFAULT_NU_FONT_SIZE);
         self.config.nu_font_size = in_range(size, FONT_SIZE_RANGE, DEFAULT_NU_FONT_SIZE);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1914,7 +1922,7 @@ impl Finder {
         let scale = (in_range(scale.unwrap_or(1.0), UI_SCALE_RANGE, 1.0) * 10.).round() / 10.;
         self.config.ui_scale = scale;
         crate::theme::set_ui_scale(scale, cx);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1950,7 +1958,7 @@ impl Finder {
         };
         crate::theme::apply(self.config.appearance, Some(window), cx);
         self.previews.clear();
-        self.schedule_save(cx);
+        self.settings_changed(cx);
     }
 
     pub fn set_appearance(
@@ -1962,29 +1970,81 @@ impl Finder {
         self.config.appearance = appearance;
         crate::theme::apply(appearance, Some(window), cx);
         self.previews.clear();
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
-    /// Persist settings shortly after the last change.
-    pub fn schedule_save(&mut self, cx: &mut Context<Self>) {
-        if !self.persist {
+    /// A setting changed in this browser: publish it, for the other browsers
+    /// and the settings file.
+    pub fn settings_changed(&mut self, cx: &mut Context<Self>) {
+        // Split view's second pane has its own view and sidebar.
+        if self.split_pane {
+            self.published.show_sidebar = self.config.show_sidebar;
+        }
+        if self.config == self.published {
             return;
         }
-        self.save_task = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(400))
-                .await;
-            let config = this.read_with(cx, |this, _| this.config.clone()).ok();
-            if let Some(config) = config {
-                cx.background_spawn(async move {
-                    if let Err(err) = config.save() {
-                        log::warn!("saving settings: {err}");
-                    }
-                })
-                .await;
-            }
+        let shared_only = self.split_pane;
+        let (before, after) = (&self.published, &self.config);
+        self.settings.update(cx, |settings, cx| {
+            settings.take_changes(before, after, shared_only, cx)
         });
+        self.published.clone_from(&self.config);
+    }
+
+    /// Another browser changed a shared setting: show it here too.
+    fn adopt_settings(
+        &mut self,
+        settings: Entity<crate::settings::Settings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.config.clone();
+        let shared = settings.read(cx).config();
+        self.config.copy_shared_from(shared);
+        self.published.copy_shared_from(shared);
+        if self.split_pane {
+            self.config.show_sidebar = before.show_sidebar;
+            self.published.show_sidebar = before.show_sidebar;
+        }
+        if self.config == before {
+            return;
+        }
+        if self.config.favorites != before.favorites {
+            self.favorites = self
+                .config
+                .favorites
+                .iter()
+                .map(|path| places::favorite_for(path))
+                .collect();
+        }
+        if self.config.appearance != before.appearance {
+            crate::theme::apply(self.config.appearance, Some(window), cx);
+            self.previews.clear();
+        }
+        if self.config.ui_scale != before.ui_scale {
+            crate::theme::set_ui_scale(self.config.ui_scale(), cx);
+        }
+        if self.config.use_nu_environment != before.use_nu_environment {
+            self.apply_nu_environment(cx);
+        }
+        let shows = |config: &Config, column: ListColumn| {
+            config.list_columns.iter().any(|c| c.column == column)
+        };
+        // Last-opened dates and git statuses are only read while they're shown.
+        let new_data = [ListColumn::LastOpened, ListColumn::Git]
+            .into_iter()
+            .any(|column| shows(&self.config, column) && !shows(&before, column));
+        if self.config.show_hidden != before.show_hidden {
+            self.show_hidden_changed(cx);
+        } else if new_data || self.config.folder_sizes != before.folder_sizes {
+            self.load_listing(Vec::new(), true, cx);
+            self.reload_children(cx);
+            self.reload_folder_stats(cx);
+        } else if self.config.folders_first != before.folders_first {
+            self.folders_first_changed(cx);
+        }
+        cx.notify();
     }
 
     // ----- favorites ------------------------------------------------------------
@@ -1993,7 +2053,7 @@ impl Finder {
         if !self.config.favorites.contains(&path) {
             self.favorites.push(places::favorite_for(&path));
             self.config.favorites.push(path);
-            self.schedule_save(cx);
+            self.settings_changed(cx);
             cx.notify();
         }
     }
@@ -2001,7 +2061,7 @@ impl Finder {
     pub fn remove_favorite(&mut self, path: &Path, cx: &mut Context<Self>) {
         self.config.favorites.retain(|p| p != path);
         self.favorites.retain(|p| p.path != path);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2186,7 +2246,7 @@ impl Finder {
         let mut setting = self.config.terminal_setting();
         setting.app = app;
         self.config.set_terminal_setting(setting);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2194,7 +2254,7 @@ impl Finder {
         let mut setting = self.config.terminal_setting();
         setting.command = (!command.trim().is_empty()).then_some(command);
         self.config.set_terminal_setting(setting);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2305,16 +2365,6 @@ impl Finder {
 
     pub fn nu_busy(&self) -> bool {
         self.nu_running
-    }
-
-    /// Stop writing settings to disk; used by the screenshot tool.
-    /// Whether this browser writes what changes to the settings file.
-    pub fn persists(&self) -> bool {
-        self.persist
-    }
-
-    pub fn set_persist(&mut self, persist: bool) {
-        self.persist = persist;
     }
 
     pub fn set_sidebar_visible(&mut self, visible: bool, cx: &mut Context<Self>) {

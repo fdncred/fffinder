@@ -6,6 +6,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ### Changed
 
+- Tabs and windows now share settings as they change: hidden files, Keep Folders on Top, columns and widths, the sidebar, favorites, Smart Folders, appearance, and text sizes. Each tab or pane keeps its own view, sort, groups, icon size, and search kind, and a new tab or window starts with the latest of those.
 - Move to Trash no longer asks first, as in Finder and Explorer. Cmd+Z or Put Back restores the items. Delete Immediately and Empty Trash still ask, since neither can be undone.
 - In the list view, only the Name column drags a file. The other columns draw a selection box, as in Finder and Explorer.
 - On macOS, apps are no longer indexed. "This Computer" searches find them by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, so Calculator, Terminal, and the other apps in `/System/Applications` are found too. Leaving the files inside app bundles out of the index took memory once settled from 258 MB to 150 MB on the development Mac, and name searches from 65–100 ms to 25–35 ms. Existing settings drop `/Applications` from the search locations once; add it back with Add Folder… to search inside bundles. Settings › Search locations has an Applications switch to stop finding apps.
@@ -34,7 +35,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 - The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name gives way instead, down to its smallest size.
 - The next item is selected after Move to Trash and Delete Immediately, instead of nothing.
 - Icon view names cut off at two lines now end in an ellipsis.
-- A tab's copy of the settings could write old column widths back over new ones made in another tab or window. Tabs and windows now share column and sidebar widths as they change.
+- Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too.
 - The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
 
 ## [0.2.0] - 2026-10-28

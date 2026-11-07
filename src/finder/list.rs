@@ -426,64 +426,9 @@ impl Finder {
             .on_drag(ResizeDrag(edge), |_, _, _, cx| cx.new(|_| EmptyView))
     }
 
-    /// Widths changed: save them and show them in every other browser. Each
-    /// browser has its own copy of the settings and saves all of them, so one
-    /// left out would later write the old widths back.
+    /// Widths or columns changed: publish them and redraw.
     fn widths_changed(&mut self, cx: &mut Context<Self>) {
-        self.schedule_save(cx);
-        cx.notify();
-        let others = crate::browsers(cx.entity_id(), cx);
-        if others.is_empty() {
-            return;
-        }
-        let from = self.column_layout();
-        // Split view's second pane doesn't save, so one that does has to.
-        let needs_saver = !self.persist;
-        cx.defer(move |cx| {
-            let mut saved = !needs_saver;
-            for other in others {
-                other.update(cx, |other, cx| {
-                    other.adopt_column_layout(&from, cx);
-                    if !saved && other.persist {
-                        other.schedule_save(cx);
-                        saved = true;
-                    }
-                });
-            }
-        });
-    }
-
-    fn column_layout(&self) -> ColumnLayout {
-        ColumnLayout {
-            list_columns: self.config.list_columns.clone(),
-            name_column_width: self.config.name_column_width,
-            parent_column_width: self.config.parent_column_width,
-            column_view_width: self.config.column_view_width,
-            sidebar_width: self.config.sidebar_width,
-        }
-    }
-
-    /// Show another browser's columns and sidebar here.
-    fn adopt_column_layout(&mut self, from: &ColumnLayout, cx: &mut Context<Self>) {
-        // Last-opened dates and git statuses are only read while shown.
-        let shows = |columns: &[ColumnSetting], column: ListColumn| {
-            columns.iter().any(|c| c.column == column)
-        };
-        let reread = [ListColumn::LastOpened, ListColumn::Git]
-            .into_iter()
-            .any(|column| {
-                shows(&from.list_columns, column) && !shows(&self.config.list_columns, column)
-            });
-        self.config.list_columns.clone_from(&from.list_columns);
-        self.config.name_column_width = from.name_column_width;
-        self.config.parent_column_width = from.parent_column_width;
-        self.config.column_view_width = from.column_view_width;
-        self.config.sidebar_width = from.sidebar_width;
-        if reread {
-            self.load_listing(Vec::new(), true, cx);
-            self.reload_children(cx);
-            self.reload_folder_stats(cx);
-        }
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -538,7 +483,12 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.config.folders_first = !self.config.folders_first;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
+        self.folders_first_changed(cx);
+    }
+
+    /// Sort everything again with folders on top, or not.
+    pub(super) fn folders_first_changed(&mut self, cx: &mut Context<Self>) {
         self.rebuild_rows(cx);
         let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
         for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
@@ -548,20 +498,11 @@ impl Finder {
 
     pub(super) fn set_folder_sizes(&mut self, on: bool, cx: &mut Context<Self>) {
         self.config.folder_sizes = on;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         self.load_listing(Vec::new(), true, cx);
         self.reload_children(cx);
         self.reload_folder_stats(cx);
     }
-}
-
-/// The widths and order that every browser shows the same.
-struct ColumnLayout {
-    list_columns: Vec<ColumnSetting>,
-    name_column_width: Option<f32>,
-    parent_column_width: f32,
-    column_view_width: f32,
-    sidebar_width: f32,
 }
 
 /// Right-click on the list's header: choose columns, and the list options.

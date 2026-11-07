@@ -369,11 +369,6 @@ fn every_tab_shows_the_same_widths(cx: &mut TestAppContext) {
         .unwrap()
         .read_with(ui.cx, |w, _| w.tabs().to_vec());
     assert_eq!(tabs.len(), 2);
-    // Tests in this process share a settings folder; keep the new tab out of it.
-    for tab in &tabs {
-        tab.update(ui.cx, |f, _| f.set_persist(false));
-    }
-
     // A tab's copy of the settings can't go stale and overwrite the widths.
     ui.drag_by("resize-sidebar", 30.);
     ui.settle();

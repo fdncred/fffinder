@@ -482,6 +482,54 @@ fn window_placement_path() -> PathBuf {
     config_dir().join("window.json")
 }
 
+// `macro_rules!` writes code from a template, here so each list of fields is
+// written once. Listing every field in the `let Config { .. }` below, with no
+// `..` to skip the rest, makes a new field a compile error until it's added
+// to one list or the other.
+macro_rules! settings_by_scope {
+    (shared: $($shared:ident),* $(,)?; own: $($own:ident),* $(,)?) => {
+        impl Config {
+            /// Copy the settings every browser shows the same from `from`.
+            pub fn copy_shared_from(&mut self, from: &Config) {
+                $( self.$shared.clone_from(&from.$shared); )*
+            }
+
+            /// Take the shared settings that differ between `before` and
+            /// `after`, leaving every other field as it is.
+            pub fn take_shared_changes(&mut self, before: &Config, after: &Config) {
+                $(
+                    if before.$shared != after.$shared {
+                        self.$shared.clone_from(&after.$shared);
+                    }
+                )*
+            }
+
+            /// Take every setting that differs between `before` and `after`,
+            /// leaving every other field as it is.
+            pub fn take_changes(&mut self, before: &Config, after: &Config) {
+                let Config { $($shared: _,)* $($own: _,)* } = after;
+                self.take_shared_changes(before, after);
+                $(
+                    if before.$own != after.$own {
+                        self.$own.clone_from(&after.$own);
+                    }
+                )*
+            }
+        }
+    };
+}
+
+settings_by_scope! {
+    shared: search_roots, search_apps, favorites, show_hidden, folders_first, list_columns,
+        name_column_width, parent_column_width, column_view_width, sidebar_width, folder_sizes,
+        recent_servers, show_sidebar, appearance, result_limit, terminals, smart_folders,
+        use_nu_environment, preview_font_size, nu_font_size, ui_scale, search, terminal, nu_path,
+        settings_version;
+    // Each tab or pane has its own of these; the last one changed is what
+    // the next one starts with.
+    own: view_mode, sort, use_groups, group_by, icon_size, kind_filter, last_folder,
+}
+
 impl Config {
     /// Load settings; missing or malformed files fall back to defaults.
     pub fn load() -> Config {
@@ -599,6 +647,25 @@ impl Config {
         let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         write_file(path, &text)
     }
+
+    /// Put the changes from `before` to `after` into the file at `path`,
+    /// keeping everything else in it. Another fffinder process, such as a
+    /// `--pick` or `--term` one, may have changed the file since it was read.
+    ///
+    /// # Arguments
+    ///
+    /// * `before` - The settings when `path` was last read or written
+    /// * `after` - The settings now
+    /// * `path` - The settings file
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the file can't be written.
+    pub fn save_changes(before: &Config, after: &Config, path: &Path) -> std::io::Result<()> {
+        let mut file = Config::load_from(path);
+        file.take_changes(before, after);
+        file.save_to(path)
+    }
 }
 
 #[cfg(test)]
@@ -631,6 +698,68 @@ mod tests {
         );
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn taking_changes_leaves_what_did_not_change() {
+        let before = Config::default();
+        let mut after = before.clone();
+        after.show_hidden = true;
+        after.icon_size = 96.;
+        let mut newer = before.clone();
+        newer.nu_font_size = 20.;
+        newer.ui_scale = 1.3;
+
+        newer.take_changes(&before, &after);
+
+        assert!(newer.show_hidden);
+        assert_eq!(newer.icon_size, 96.);
+        assert_eq!(newer.nu_font_size, 20., "a change that wasn't made stays");
+        assert_eq!(newer.ui_scale, 1.3);
+    }
+
+    #[test]
+    fn taking_shared_changes_leaves_a_browsers_own_settings() {
+        let before = Config::default();
+        let mut after = before.clone();
+        after.show_hidden = true;
+        after.view_mode = ViewMode::Gallery;
+        let mut shared = before.clone();
+
+        shared.take_shared_changes(&before, &after);
+
+        assert!(shared.show_hidden);
+        assert_eq!(shared.view_mode, before.view_mode);
+
+        let mut other = before.clone();
+        other.view_mode = ViewMode::Columns;
+        other.copy_shared_from(&after);
+        assert!(other.show_hidden);
+        assert_eq!(
+            other.view_mode,
+            ViewMode::Columns,
+            "a tab keeps its own view"
+        );
+    }
+
+    #[test]
+    fn saving_keeps_what_another_process_wrote() {
+        let path = std::env::temp_dir().join(format!("fffinder-cfg5-{}.json", std::process::id()));
+        let before = Config::default();
+        before.save_to(&path).unwrap();
+        // Another fffinder changes the file while this one has it open.
+        let mut elsewhere = before.clone();
+        elsewhere.nu_font_size = 22.;
+        elsewhere.save_to(&path).unwrap();
+        let mut after = before.clone();
+        after.show_hidden = true;
+
+        Config::save_changes(&before, &after, &path).unwrap();
+
+        let file = Config::load_from(&path);
+        assert!(file.show_hidden);
+        assert_eq!(file.nu_font_size, 22.);
         std::fs::remove_file(path).unwrap();
     }
 

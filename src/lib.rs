@@ -18,6 +18,7 @@ pub mod nushell;
 pub mod picker;
 pub mod rename;
 pub mod server;
+pub mod settings;
 pub mod system;
 pub mod term;
 pub mod theme;
@@ -88,7 +89,8 @@ pub fn run(args: args::Args) {
         });
     app.on_reopen(|cx| {
         if cx.windows().is_empty() {
-            open_window(start_location(None, &Config::load()), None, None, cx);
+            let config = settings::current(cx);
+            open_window(start_location(None, &config), None, None, cx);
         }
     });
     app.run(move |cx: &mut App| {
@@ -121,7 +123,7 @@ pub fn run(args: args::Args) {
             cx.quit();
         });
         cx.on_action(|_: &actions::NewWindow, cx: &mut App| {
-            let config = Config::load();
+            let config = settings::current(cx);
             open_window(start_location(None, &config), None, None, cx);
         });
         open_window(start, args.query.clone(), picker, cx);
@@ -139,34 +141,6 @@ impl Global for Windows {}
 struct ServerGuard(#[allow(dead_code)] server::Server);
 
 impl Global for ServerGuard {}
-
-/// Remember a browser window, for requests and for [`browsers`].
-pub(crate) fn register_window(
-    handle: AnyWindowHandle,
-    workspace: WeakEntity<workspace::Workspace>,
-    cx: &mut App,
-) {
-    cx.default_global::<Windows>().0.push((handle, workspace));
-}
-
-/// Every browser in every window except `except`: each tab and split pane.
-pub(crate) fn browsers(except: EntityId, cx: &App) -> Vec<Entity<Finder>> {
-    let Some(windows) = cx.try_global::<Windows>() else {
-        return Vec::new();
-    };
-    windows
-        .0
-        .iter()
-        .filter_map(|(_, workspace)| workspace.upgrade())
-        .flat_map(|workspace| {
-            let workspace = workspace.read(cx);
-            let mut all = workspace.tabs().to_vec();
-            all.extend(workspace.split_pane().cloned());
-            all
-        })
-        .filter(|finder| finder.entity_id() != except)
-        .collect()
-}
 
 /// The window a request should go to (the active one, else the newest),
 /// and the tab it shows.
@@ -262,7 +236,7 @@ fn handle_request(request: server::UiRequest, cx: &mut App) {
                     });
                 }
                 None => {
-                    let start = start_location(path.as_ref(), &Config::load());
+                    let start = start_location(path.as_ref(), &settings::current(cx));
                     open_window(start, query, None, cx);
                 }
             }
@@ -438,6 +412,9 @@ pub fn open_window(
     });
     match result {
         Ok((handle, view)) => {
+            cx.default_global::<Windows>()
+                .0
+                .push((handle, view.downgrade()));
             let finder = view.read(cx).active().clone();
             Some((handle, finder))
         }

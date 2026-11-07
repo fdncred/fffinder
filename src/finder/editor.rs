@@ -47,8 +47,13 @@ impl Finder {
             return;
         }
         self.config.use_nu_environment = on;
-        self.schedule_save(cx);
-        if on {
+        self.settings_changed(cx);
+        self.apply_nu_environment(cx);
+    }
+
+    /// Load Nushell's colors and editor, or drop them, as the setting says.
+    pub(super) fn apply_nu_environment(&mut self, cx: &mut Context<Self>) {
+        if self.config.use_nu_environment {
             self.load_nu_env(cx);
         } else {
             self.nu_env = None;

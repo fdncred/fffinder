@@ -201,13 +201,13 @@ impl Finder {
     pub fn add_smart_folder(&mut self, folder: SmartFolder, cx: &mut Context<Self>) {
         self.config.smart_folders.retain(|f| f.name != folder.name);
         self.config.smart_folders.push(folder);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
     pub fn remove_smart_folder(&mut self, name: &str, cx: &mut Context<Self>) {
         self.config.smart_folders.retain(|f| f.name != name);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 

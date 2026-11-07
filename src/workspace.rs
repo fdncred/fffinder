@@ -49,7 +49,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Workspace {
         let host = cx.entity().downgrade();
-        crate::register_window(window.window_handle(), host.clone(), cx);
         let first = new_finder(start, query, picker, host, window, cx);
         let watches_bounds = picker.is_none() && !crate::term::active();
         Workspace {
@@ -64,7 +63,7 @@ impl Workspace {
 
     /// The window moved or changed size: save that for the next window.
     fn remember_placement(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.active().read(cx).persists() {
+        if !crate::settings::persists(cx) {
             return;
         }
         let state = window.window_bounds();

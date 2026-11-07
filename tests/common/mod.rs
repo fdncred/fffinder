@@ -179,6 +179,8 @@ impl<'a> Ui<'a> {
                 },
                 Appearance::Light,
             );
+            // Tests in this process share a settings folder; stay out of it.
+            fffinder::settings::set_persist(false, cx);
             cx.set_global(Recorder::default());
             cx.set_global(fffinder::trash_bin::TrashOverride(std::sync::Arc::new(
                 fffinder::trash_bin::FolderBin::new(trash_dir(dir)),
@@ -222,7 +224,6 @@ impl<'a> Ui<'a> {
         };
         let root = dir.to_path_buf();
         view.update(cx, |f, cx| {
-            f.set_persist(false);
             // Settings shows these; the engine already indexes them.
             f.set_search_roots(vec![root], cx);
         });

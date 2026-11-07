@@ -137,7 +137,7 @@ The status bar shows:
 
 ## Tabs and split view
 
-**Tabs.** New Tab (Cmd+T, or File › New Tab) opens a tab at the folder the window shows. Each tab is a whole browser with its own history, search, filter, and selection. With two or more tabs, a tab bar appears under the toolbar: click a tab to show it, click its × to close it, drag it onto another tab to move it there, or click + for another tab. Ctrl+Tab and Cmd+Shift+] show the next tab, Ctrl+Shift+Tab and Cmd+Shift+[ the previous one, both wrapping around. Cmd+W closes the tab, and the window only when it's the last tab. Right-click a tab, or use Window › Move Tab to New Window, to give it a window of its own at the same folder and search; its back and forward history stays behind.
+**Tabs.** New Tab (Cmd+T, or File › New Tab) opens a tab at the folder the window shows. Each tab is a whole browser with its own history, search, filter, selection, view, and sort. With two or more tabs, a tab bar appears under the toolbar: click a tab to show it, click its × to close it, drag it onto another tab to move it there, or click + for another tab. Ctrl+Tab and Cmd+Shift+] show the next tab, Ctrl+Shift+Tab and Cmd+Shift+[ the previous one, both wrapping around. Cmd+W closes the tab, and the window only when it's the last tab. Right-click a tab, or use Window › Move Tab to New Window, to give it a window of its own at the same folder and search; its back and forward history stays behind.
 
 **Opening a folder in a new tab.** Open in New Tab and Open in New Window are in the right-click menu of folders in the views, sidebar rows, and path bar crumbs. Middle-click a folder, sidebar row, or crumb to open it in a new tab. So does Cmd+double-click on a folder and Cmd+click on a sidebar row. The tab you were in stays as it was.
 
@@ -931,7 +931,9 @@ The Nushell text size setting has a small "A" button and a large "A" button that
 
 ## settings.json
 
-Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change, through a temporary file so a crash never leaves it half written. Missing fields use their defaults, and a file that can't be read falls back to defaults.
+Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and a file that can't be read falls back to defaults.
+
+Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, and `kind_filter`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
