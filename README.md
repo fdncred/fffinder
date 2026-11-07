@@ -2,7 +2,7 @@
 
 # fffinder
 
-A Finder-style file browser with instant fuzzy search across your whole computer, written in Rust. Search uses [fff-search](https://crates.io/crates/fff-search), the UI is built with [GPUI Kit](https://github.com/longbridge/gpui-kit), and Nushell is built in. Your shell can query the index the app keeps live, and the app runs Nushell on the files you select.
+A Finder-style file browser for macOS, Linux, and Windows, written in Rust. It keeps an index of your home folder, or the folders you choose, and fuzzy-searches it. Search uses [fff-search](https://crates.io/crates/fff-search), the UI uses [GPUI Kit](https://github.com/longbridge/gpui-kit), and Nushell is built in. Your shell can query the same index, and the app runs Nushell on the files you select.
 
 This README is an overview. [The manual](docs/manual.md) documents every view, menu, shortcut, setting, and command.
 
@@ -10,9 +10,9 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 
 ## What it does
 
-- Indexes your home folder in the background and keeps the index live, and on macOS finds apps by reading the app folders instead of indexing them. On the development Mac that's about 310,000 files in 3 seconds, and a search over all of them returns in 25 to 35 ms.
+- Indexes your home folder in the background and keeps the index up to date as files change. On the development Mac that's about 310,000 files in 3 seconds, and a search over all of them takes 25 to 35 ms. On macOS it finds apps by reading the app folders instead of indexing them.
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
-- Browses folders as icons, a list, columns, or a gallery, with a sidebar, tabs, a split view with F5 to copy and F6 to move between panes, back and forward history, and a clickable path bar. The list and icon views can show items in collapsible groups by kind, date, size, or name. The list opens folders in place and has a column chooser (dates created and last opened, permissions, git status), resizable and movable columns, Keep Folders on Top, and folder sizes added up from the index.
+- Browses folders as icons, a list, columns, or a gallery. There's a sidebar, tabs, back and forward history, a clickable path bar, and a split view where F5 copies and F6 moves between panes. The list and icon views can group items by kind, date, size, or name, and you can collapse each group. The list opens folders in place and has a column chooser (dates created and last opened, permissions, git status), resizable and movable columns, Keep Folders on Top, and folder sizes added up from the index. You can drag a box to select, rename in place, cut and paste, and open a preview pane beside the list or icon view. Each folder remembers its view and sort, and windows reopen where they were.
 - Previews files in the gallery, the column view, and Quick Look (Space): syntax-highlighted code, rendered Markdown, fonts, archive contents, media durations, PDFs you can scroll through and zoom, and the system's thumbnails of PDFs, videos, and documents (QuickLook, Explorer's, or the desktop's thumbnailers), which also show in the icon view. CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
 - Handles everyday file work: open, open with another app or change the default, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, undo and redo, Get Info with folder sizes and permissions, duplicate, aliases and symbolic links, zip and tar archives, copy paths, rename one item or many, new file and folder, a Trash view with Put Back and Empty, eject, free space in the status bar, and Connect to Server for SMB, SFTP, and WebDAV.
 - Has light and dark themes that follow the system, and a text size setting for the whole window.
@@ -45,7 +45,7 @@ The manual lists [every `fff` command](docs/manual.md#the-fff-nushell-module).
 
 ### Inside the app
 
-- **The Nushell panel** (Ctrl+`) runs a pipeline with the selected files as `$in`. Each row has `name`, `path`, `type`, `kind`, `size`, and `modified`, so `where size > 1mb | sort-by modified` works as you'd expect.
+- **The Nushell panel** (Ctrl+`) runs a pipeline with the selected files as `$in`. Each row has `name`, `path`, `type`, `kind`, `size`, and `modified`, so `where size > 1mb | sort-by modified` works on them.
 - **Filters** (Cmd+Alt+F) narrow a folder or search results with a `where` condition such as `size > 10mb and modified > 2024-01-01`. Save a search and its filter in the sidebar as a Smart Folder.
 - **Batch rename** (F2 with several items selected) renames with a closure, such as `{|f| $f.name | str downcase }`, and previews every new name first.
 - **Your own actions.** Commands you export from `actions.nu` in the settings folder appear in the context menu and get the selection on `$in`. The first run writes a few starters, such as Count Lines and Find Duplicates.

@@ -42,7 +42,7 @@ fn main() {
             let Some((handle, view)) = fffinder::open_window(start, None, None, cx) else {
                 return;
             };
-            view.update(cx, |f, _| f.set_persist(false));
+            fffinder::settings::set_persist(false, cx);
             cx.activate(true);
 
             cx.spawn(async move |cx| {

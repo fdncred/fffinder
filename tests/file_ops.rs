@@ -107,13 +107,218 @@ fn copy_and_paste_from_the_context_menus(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn cut_and_paste_moves_files(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+
+    ui.press(&cmd("x"));
+    assert!(
+        fx.path("notes.txt").exists(),
+        "nothing moves until the paste"
+    );
+    assert_eq!(
+        ui.clipboard(),
+        fx.path("notes.txt").display().to_string(),
+        "the path goes on the clipboard as text too"
+    );
+
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(!fx.path("notes.txt").exists(), "a paste after a cut moves");
+    assert_eq!(ui.selected(), ["notes.txt"], "the moved item is selected");
+
+    // Undo puts it back, as for any move.
+    ui.press(&cmd("z"));
+    assert!(fx.path("notes.txt").exists());
+    assert!(!fx.path("Projects/notes.txt").exists());
+}
+
+#[gpui_kit::test]
+fn escape_cancels_a_cut_and_a_copy_replaces_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-cancel");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+
+    // Escape means the paste copies after all.
+    ui.press(&cmd("x"));
+    ui.press("escape");
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(fx.path("notes.txt").exists());
+
+    // So does copying something else afterward.
+    ui.go_to(&fx.dir);
+    ui.select("Budget.csv");
+    ui.press(&cmd("x"));
+    ui.press(&cmd("c"));
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(fx.path("Projects/Budget.csv").exists());
+    assert!(fx.path("Budget.csv").exists());
+}
+
+fn is_cut(ui: &mut Ui, path: &std::path::Path) -> bool {
+    ui.cx.update(|cx| fffinder::system::is_cut(path, cx))
+}
+
+#[gpui_kit::test]
+fn copying_part_of_a_cut_copies_that_part(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-part");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.select_also("Budget.csv");
+    ui.press(&cmd("x"));
+
+    // Copy Path on one of them, or a copy of it in another app.
+    ui.copy_text(fx.path("notes.txt").display().to_string());
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(fx.path("notes.txt").exists(), "copied, not moved");
+    assert!(fx.path("Budget.csv").exists());
+}
+
+#[gpui_kit::test]
+fn a_cut_lasts_as_long_as_the_clipboard_holds_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-lasts");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.press(&cmd("x"));
+
+    // Each of these is long enough for a look at the clipboard.
+    ui.settle();
+    ui.settle();
+    assert!(is_cut(&mut ui, &fx.path("notes.txt")));
+
+    ui.copy_text("something else");
+    ui.settle();
+    assert!(!is_cut(&mut ui, &fx.path("notes.txt")), "no longer faint");
+}
+
+#[gpui_kit::test]
+fn dragging_a_cut_item_leaves_text_copied_since_on_the_clipboard(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-drag");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    ui.press(&cmd("x"));
+    ui.copy_text("text from the search field");
+
+    ui.drag(
+        item_id("name-cell", &fx.path("notes.txt")),
+        item_id("row", &fx.path("Projects")),
+        Modifiers::none(),
+    );
+
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert_eq!(ui.clipboard(), "text from the search field");
+}
+
+#[gpui_kit::test]
+fn dragging_a_cut_item_ends_the_cut(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-drag-ends");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    ui.press(&cmd("x"));
+
+    ui.drag(
+        item_id("name-cell", &fx.path("notes.txt")),
+        item_id("row", &fx.path("Projects")),
+        Modifiers::none(),
+    );
+
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert_eq!(ui.clipboard(), "", "a second paste has nothing to move");
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn a_paste_ends_a_cut_whose_path_came_back_in_another_form(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-form");
+    let alias = fx.path("Projects/alias");
+    std::os::unix::fs::symlink(&fx.dir, &alias).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.press(&cmd("x"));
+
+    // The same file, as the system might hand it back.
+    ui.copy_text(alias.join("notes.txt").display().to_string());
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+
+    assert!(fx.path("Projects/notes.txt").exists());
+    assert!(!fx.path("notes.txt").exists(), "moved");
+    assert_eq!(ui.clipboard(), "", "a second paste has nothing to move");
+    assert!(!is_cut(&mut ui, &fx.path("notes.txt")));
+}
+
+#[gpui_kit::test]
+fn a_cut_redraws_every_pane(cx: &mut TestAppContext) {
+    use common::Open;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let fx = Fixture::new("cut-panes");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            workspace: true,
+            ..Default::default()
+        },
+    );
+    ui.press(&cmd("\\"));
+    let workspace = ui.workspace.clone().unwrap();
+    let other = workspace
+        .read_with(ui.cx, |w, _| w.split_pane().cloned())
+        .expect("a second pane");
+    let redraws = Rc::new(Cell::new(0));
+    let counted = redraws.clone();
+    let _watch = ui
+        .cx
+        .update(|cx| cx.observe(&other, move |_, _| counted.set(counted.get() + 1)));
+    let active = workspace.read_with(ui.cx, |w, _| w.active().clone());
+    let notes = fx.path("notes.txt");
+    ui.window(|window, cx| active.read(cx).files_focus_handle().focus(window, cx));
+    ui.select("notes.txt");
+
+    redraws.set(0);
+    ui.press(&cmd("x"));
+    assert!(is_cut(&mut ui, &notes));
+    assert!(redraws.get() > 0, "the other pane dims it too");
+
+    redraws.set(0);
+    ui.press("escape");
+    assert!(!is_cut(&mut ui, &notes));
+    assert!(redraws.get() > 0, "and stops dimming it");
+}
+
+#[gpui_kit::test]
+fn pasting_what_was_cut_into_its_own_folder_does_nothing(cx: &mut TestAppContext) {
+    let fx = Fixture::new("cut-same");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let before = ui.names().len();
+    ui.select("notes.txt");
+
+    ui.press(&cmd("x"));
+    ui.press(&cmd("v"));
+
+    assert!(fx.path("notes.txt").exists());
+    assert_eq!(ui.names().len(), before, "no copy appeared beside it");
+}
+
+#[gpui_kit::test]
 fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
     let fx = Fixture::new("drag");
     let mut ui = Ui::open(cx, &fx.dir);
     ui.click("view-list");
     let projects = item_id("row", &fx.path("Projects"));
     ui.drag(
-        item_id("row", &fx.path("notes.txt")),
+        item_id("name-cell", &fx.path("notes.txt")),
         projects.clone(),
         Modifiers::none(),
     );
@@ -129,7 +334,7 @@ fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
         control: !cfg!(target_os = "macos"),
         ..Modifiers::none()
     };
-    ui.drag(item_id("row", &fx.path("Budget.csv")), projects, copy);
+    ui.drag(item_id("name-cell", &fx.path("Budget.csv")), projects, copy);
     assert!(fx.path("Projects/Budget.csv").exists());
     assert!(fx.path("Budget.csv").exists(), "the copy key copies");
 }
@@ -149,7 +354,7 @@ fn undo_reverses_file_operations(cx: &mut TestAppContext) {
     assert_eq!(ui.selected(), ["Roadmap.md"], "the item is selected again");
 
     ui.press(&cmd("shift-n"));
-    ui.click("rename-cancel");
+    ui.press("escape");
     assert!(fx.path("untitled folder").is_dir());
     ui.press(&cmd("z"));
     assert!(
@@ -256,7 +461,10 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
     ui.click("view-list");
     ui.select("notes.txt");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
+    assert!(
+        !ui.dialog_open(),
+        "the Trash doesn't ask; Undo puts things back"
+    );
     assert!(!fx.path("notes.txt").exists());
 
     ui.click("trash");
@@ -273,7 +481,7 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
     // Trash by dragging onto the sidebar, then Cmd+Z puts it back.
     ui.go_to(&fx.dir);
     ui.drag(
-        item_id("row", &fx.path("Budget.csv")),
+        item_id("name-cell", &fx.path("Budget.csv")),
         "trash",
         Modifiers::none(),
     );
@@ -283,7 +491,6 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
 
     ui.select("Roadmap.md");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
     ui.click("trash");
     ui.click("empty-trash");
     ui.click("ok");

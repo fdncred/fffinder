@@ -5,6 +5,7 @@
 use super::Finder;
 use super::views::DraggedFiles;
 use crate::actions::MoveItemsHere;
+use crate::model::Location;
 use crate::theme::ui;
 use crate::undo::{self, Change};
 use fffinder_core::entry::display_name;
@@ -16,9 +17,21 @@ use gpui_kit::component::notification::NotificationType;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _, h_flex};
 use gpui_kit::*;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// The place a drag is waiting over: a folder, and where it's drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SpringTarget {
+    folder: PathBuf,
+    bounds: Bounds<Pixels>,
+}
+
+/// How long dragged items wait over a folder before it opens.
+const SPRING_DELAY: Duration = Duration::from_millis(700);
 
 /// A transfer only gets a progress row once it has run this long.
 const SHOW_AFTER: Duration = Duration::from_millis(300);
@@ -101,14 +114,39 @@ impl Finder {
         window.push_notification(format!("Copied {}", items_label(&paths)), cx);
     }
 
-    /// Cmd+V in the files: copy what's on the clipboard into this folder.
+    /// Cmd+X in the files: mark the selected items to be moved by the next
+    /// paste. They stay where they are until then.
+    pub(super) fn cut_files(
+        &mut self,
+        _: &input::Cut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths: Vec<PathBuf> = self
+            .selected_entries()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        crate::system::cut_files(&paths, cx);
+        window.push_notification(format!("Cut {}. Paste to move.", items_label(&paths)), cx);
+    }
+
+    /// Cmd+V in the files: put what's on the clipboard into this folder,
+    /// moving what was cut and copying the rest.
     pub(super) fn paste_files(
         &mut self,
         _: &input::Paste,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.paste(Mode::Copy, window, cx);
+        let mode = match crate::system::clipboard_is_cut(cx) {
+            true => Mode::Move,
+            false => Mode::Copy,
+        };
+        self.paste(mode, window, cx);
     }
 
     /// Cmd+Alt+V: move what's on the clipboard into this folder.
@@ -151,11 +189,52 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The drag is over, so no folder it was held over should open now,
+        // even if another drag has started by the time the wait ends.
+        self.spring_folder = None;
         let copy = !from_here
             || copy_modifier(window.modifiers())
             || paths.iter().any(|p| !ops::same_volume(p, &dest));
         let mode = if copy { Mode::Copy } else { Mode::Move };
         self.start_transfer(paths, dest, mode, window, cx);
+    }
+
+    /// A drag moved over `target`, or off it. If it stays long enough, the
+    /// folder opens with the drag still going. The same folder can show in
+    /// several places, such as a row and the sidebar, and each hears about
+    /// every move, so what's being waited on is one place, not one path.
+    fn drag_over_folder(
+        &mut self,
+        target: SpringTarget,
+        over: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting = self
+            .spring_folder
+            .as_ref()
+            .is_some_and(|(place, _)| *place == target);
+        if !over {
+            if waiting {
+                self.spring_folder = None;
+            }
+            return;
+        }
+        if waiting || self.current_folder() == Some(target.folder.as_path()) {
+            return;
+        }
+        let folder = target.folder.clone();
+        let opens = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SPRING_DELAY).await;
+            this.update_in(cx, |this, window, cx| {
+                this.spring_folder = None;
+                if cx.has_active_drag() {
+                    this.navigate(Location::Folder(folder), window, cx);
+                }
+            })
+            .ok();
+        });
+        self.spring_folder = Some((target, opens));
     }
 
     /// Check a transfer, ask about name clashes, then start it.
@@ -264,6 +343,11 @@ impl Finder {
             Mode::Copy => COPY,
             Mode::Move => MOVE,
         };
+        // What was cut is on its way, so a second paste has nothing to move.
+        if mode == Mode::Move && crate::system::moving_uses_up_cut(&transfer.sources, cx) {
+            crate::system::forget_cut(cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+        }
         let progress = self.start_job(kind, transfer.sources.len(), cx);
         cx.spawn_in(window, async move |this, cx| {
             let report = cx
@@ -493,6 +577,57 @@ pub(super) fn copy_modifier(modifiers: Modifiers) -> bool {
     } else {
         modifiers.control
     }
+}
+
+/// Holding dragged items over `el`, which shows the folder at `folder`, opens
+/// that folder after a moment, so they can go on down into it.
+pub(super) fn spring_loaded<E: InteractiveElement + ParentElement>(
+    el: E,
+    folder: PathBuf,
+    cx: &mut Context<Finder>,
+) -> E {
+    let external = folder.clone();
+    // A drag move only says where `el` is laid out, and a row in a list wider
+    // than its view can be laid out under the preview pane or the header. A
+    // hitbox knows what clips it and what's drawn over it.
+    let hitbox: Rc<RefCell<Option<Hitbox>>> = Rc::default();
+    let drawn = hitbox.clone();
+    let external_hitbox = hitbox.clone();
+    let shows_mouse = |hitbox: &RefCell<Option<Hitbox>>, window: &Window| {
+        hitbox
+            .borrow()
+            .as_ref()
+            .is_some_and(|hitbox| hitbox.is_hovered(window))
+    };
+    el.child(
+        canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, _, _| *drawn.borrow_mut() = Some(hitbox),
+        )
+        .absolute()
+        .size_full(),
+    )
+    .on_drag_move(cx.listener(
+        move |this, event: &DragMoveEvent<DraggedFiles>, window, cx| {
+            // A folder can't be dragged into itself.
+            let over = shows_mouse(&hitbox, window) && !event.drag(cx).0.contains(&folder);
+            let target = SpringTarget {
+                folder: folder.clone(),
+                bounds: event.bounds,
+            };
+            this.drag_over_folder(target, over, window, cx);
+        },
+    ))
+    .on_drag_move(cx.listener(
+        move |this, event: &DragMoveEvent<ExternalPaths>, window, cx| {
+            let over = shows_mouse(&external_hitbox, window);
+            let target = SpringTarget {
+                folder: external.clone(),
+                bounds: event.bounds,
+            };
+            this.drag_over_folder(target, over, window, cx);
+        },
+    ))
 }
 
 /// Make a folder's row or tile take dropped files: dragged items move into

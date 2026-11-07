@@ -103,11 +103,25 @@ pub struct Selection {
     items: BTreeSet<usize>,
     anchor: Option<usize>,
     cursor: Option<usize>,
+    /// Counts each change to `items`.
+    revision: u64,
 }
 
 impl Selection {
     pub fn clear(&mut self) {
-        *self = Selection::default();
+        *self = Selection {
+            revision: self.revision + 1,
+            ..Selection::default()
+        };
+    }
+
+    /// Tells one set of selected items from another without comparing them.
+    ///
+    /// # Returns
+    ///
+    /// A number that changes whenever the selected items may have changed
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn is_empty(&self) -> bool {
@@ -132,6 +146,7 @@ impl Selection {
     }
 
     pub fn select_only(&mut self, ix: usize) {
+        self.revision += 1;
         self.items.clear();
         self.items.insert(ix);
         self.anchor = Some(ix);
@@ -139,6 +154,7 @@ impl Selection {
     }
 
     pub fn toggle(&mut self, ix: usize) {
+        self.revision += 1;
         if !self.items.remove(&ix) {
             self.items.insert(ix);
         }
@@ -148,13 +164,28 @@ impl Selection {
 
     /// Select the contiguous range from the anchor to `ix`.
     pub fn extend_to(&mut self, ix: usize) {
+        self.revision += 1;
         let anchor = self.anchor.unwrap_or(ix);
         self.items = (anchor.min(ix)..=anchor.max(ix)).collect();
         self.anchor = Some(anchor);
         self.cursor = Some(ix);
     }
 
+    /// Select exactly `items`, leaving the cursor on the last one and the
+    /// anchor on the first, as a drag across them would.
+    ///
+    /// # Arguments
+    ///
+    /// * `items` - The indices to select
+    pub fn select_items(&mut self, items: BTreeSet<usize>) {
+        self.revision += 1;
+        self.anchor = items.first().copied();
+        self.cursor = items.last().copied();
+        self.items = items;
+    }
+
     pub fn select_all(&mut self, len: usize) {
+        self.revision += 1;
         self.items = (0..len).collect();
         if len > 0 {
             self.anchor.get_or_insert(0);
@@ -197,6 +228,7 @@ impl Selection {
 
     /// Keep the same items selected after the list was re-sorted or refreshed.
     pub fn remap(&mut self, old: &[PathBuf], new: &[PathBuf]) {
+        self.revision += 1;
         let index_of = |path: &PathBuf| new.iter().position(|p| p == path);
         let items: BTreeSet<usize> = self
             .items
@@ -213,6 +245,53 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selecting_a_set_of_items_runs_from_the_first_to_the_last() {
+        let mut selection = Selection::default();
+
+        selection.select_items([2, 5, 7].into_iter().collect());
+
+        assert_eq!(selection.indices().collect::<Vec<_>>(), [2, 5, 7]);
+        assert_eq!(selection.cursor(), Some(7));
+        // Shift+click starts again from the first of them.
+        selection.extend_to(3);
+        assert_eq!(selection.indices().collect::<Vec<_>>(), [2, 3]);
+
+        selection.select_items(Default::default());
+        assert!(selection.is_empty());
+        assert_eq!(selection.cursor(), None);
+    }
+
+    #[test]
+    fn the_revision_changes_with_the_selected_items() {
+        let mut s = Selection::default();
+        let mut seen = vec![s.revision()];
+        let mut changed = |s: &Selection| {
+            assert!(!seen.contains(&s.revision()), "{seen:?}");
+            seen.push(s.revision());
+        };
+
+        s.select_only(1);
+        changed(&s);
+        s.toggle(2);
+        changed(&s);
+        s.extend_to(4);
+        changed(&s);
+        s.select_items([3].into_iter().collect());
+        changed(&s);
+        s.select_all(9);
+        changed(&s);
+        s.move_by(1, false, 9);
+        changed(&s);
+        s.clear();
+        changed(&s);
+        s.select_only(1);
+        changed(&s);
+        let paths: Vec<PathBuf> = ["/a", "/b"].map(PathBuf::from).into();
+        s.remap(&paths, &paths);
+        changed(&s);
+    }
 
     #[test]
     fn history_back_forward() {

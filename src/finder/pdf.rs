@@ -612,27 +612,30 @@ impl Finder {
         }
     }
 
+    /// Page Down: the next page of the PDF showing, or a screenful of items
+    /// in the other views.
     pub(super) fn next_pdf_page(
         &mut self,
         _: &NextPdfPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match self.shows_large_preview() {
             true => self.step_pdf_page(1, Surface::Gallery, cx),
-            false => cx.propagate(),
+            false => self.move_by_page(1, false, window, cx),
         }
     }
 
+    /// Page Up, the other way from [`Self::next_pdf_page`].
     pub(super) fn previous_pdf_page(
         &mut self,
         _: &PreviousPdfPage,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match self.shows_large_preview() {
             true => self.step_pdf_page(-1, Surface::Gallery, cx),
-            false => cx.propagate(),
+            false => self.move_by_page(-1, false, window, cx),
         }
     }
 

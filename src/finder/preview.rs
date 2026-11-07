@@ -673,11 +673,24 @@ pub fn render_preview_card(finder: &Finder, entry: &FileEntry, cx: &App) -> AnyE
     let theme = cx.theme();
     let muted = theme.muted_foreground;
     let row = |label: &'static str, value: String| {
+        let value = SharedString::from(value);
+        let shown = StyledText::new(value.clone());
         h_flex()
             .gap(ui(8.))
             .text_size(ui(11.))
-            .child(div().w(ui(70.)).text_color(muted).child(label))
-            .child(div().flex_1().truncate().child(value))
+            .child(
+                div()
+                    .w(ui(70.))
+                    .flex_shrink_0()
+                    .text_color(muted)
+                    .child(label),
+            )
+            .child(super::fit::with_cut_off_text(
+                div().id(label).flex_1().truncate(),
+                shown,
+                value,
+                |shown| shown,
+            ))
     };
     v_flex()
         .size_full()

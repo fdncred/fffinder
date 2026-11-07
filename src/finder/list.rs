@@ -1,41 +1,61 @@
 //! The list view's extras: folders that open in place (disclosure
 //! triangles), the column chooser, resizing and reordering columns, Keep
-//! Folders on Top, and folder sizes and git statuses from the index.
+//! Folders on Top, and folder sizes and git statuses from the index. Dragging
+//! an edge also resizes the column view's panes and the sidebar.
 
+use super::fit::FIT_SAMPLE;
 use super::{Finder, Row};
 use crate::actions::ToggleFoldersFirst;
 use crate::model::Location;
 use crate::theme::ui;
-use fffinder_core::config::{MIN_COLUMN_WIDTH, default_list_columns};
+use fffinder_core::config::{
+    COLUMN_VIEW_WIDTH_RANGE, DEFAULT_PARENT_COLUMN_WIDTH, DEFAULT_PREVIEW_PANE_WIDTH,
+    DEFAULT_SIDEBAR_WIDTH, MIN_COLUMN_WIDTH, MIN_NAME_WIDTH, PREVIEW_PANE_WIDTH_RANGE,
+    SIDEBAR_WIDTH_RANGE, default_list_columns,
+};
 use fffinder_core::{ColumnSetting, FileEntry, ListColumn, SortKey, ViewMode, listing};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::*;
 use std::path::{Path, PathBuf};
 
-/// Dragged to resize list column `.0`.
+/// The widest double-clicking an edge makes a column, in points.
+const MAX_FIT_WIDTH: f32 = 800.;
+
+/// What a list row adds around each text: its cell's padding, in points.
+const CELL_PADDING: f32 = 12.;
+
+/// An edge the mouse drags to make something wider or narrower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResizeEdge {
+    /// The list's Name column.
+    Name,
+    /// The list's Folder column, shown for search results.
+    Parent,
+    /// One of the list's other columns, by its place in `list_columns`.
+    Column(usize),
+    /// A pane of the column view, by its place in `columns`.
+    Pane(usize),
+    /// The sidebar.
+    Sidebar,
+    /// The preview pane, whose edge to drag is on its left.
+    PreviewPane,
+}
+
+/// Dragged to resize `.0`.
 #[derive(Clone)]
-pub(super) struct ColumnResize(pub usize);
+pub(super) struct ResizeDrag(pub ResizeEdge);
 
 /// Dragged to move list column `.0` to where it's dropped.
 #[derive(Clone)]
 pub(super) struct ColumnMove(pub usize);
 
-/// What a dragged column header looks like.
-pub(super) struct ColumnPreview(pub SharedString);
+/// What a dragged column header or sidebar row looks like: its name.
+pub(super) struct DragLabel(pub SharedString);
 
-impl Render for ColumnPreview {
+impl Render for DragLabel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::component::ActiveTheme as _;
-        let theme = cx.theme();
-        div()
-            .px(ui(8.))
-            .py(ui(3.))
-            .rounded(ui(5.))
-            .bg(theme.popover)
-            .border_1()
-            .border_color(theme.border)
-            .text_size(ui(12.))
-            .child(self.0.clone())
+        super::views::drag_frame(cx).child(self.0.clone())
     }
 }
 
@@ -216,6 +236,274 @@ impl Finder {
         true
     }
 
+    /// Whether the list's Folder column shows the matching line of a contents
+    /// search instead of a folder.
+    pub(super) fn parent_column_shows_match(&self) -> bool {
+        self.search_contents && self.is_searching()
+    }
+
+    /// What the list's Folder column is called here.
+    pub(super) fn parent_column_title(&self) -> &'static str {
+        if self.parent_column_shows_match() {
+            "Match"
+        } else if self.in_trash() {
+            "Original Folder"
+        } else {
+            "Folder"
+        }
+    }
+
+    /// What clicking the Folder column's header sorts by. A matching line has
+    /// no useful order, and everything in the Trash is in the one folder.
+    pub(super) fn parent_column_sort(&self) -> Option<SortKey> {
+        (!self.parent_column_shows_match() && !self.in_trash()).then_some(SortKey::Folder)
+    }
+
+    /// How wide `edge` is in points; `None` for Name while it fills the room
+    /// the other columns leave, and for a column that's gone.
+    pub(super) fn edge_width(&self, edge: ResizeEdge) -> Option<f32> {
+        match edge {
+            ResizeEdge::Name => self.config.name_column_width(),
+            ResizeEdge::Parent => Some(self.config.parent_column_width()),
+            ResizeEdge::Column(ix) => self
+                .config
+                .list_columns
+                .get(ix)
+                .map(ColumnSetting::width_in_range),
+            ResizeEdge::Pane(col) => self.columns.get(col).map(|pane| pane.width),
+            ResizeEdge::Sidebar => Some(self.config.sidebar_width()),
+            ResizeEdge::PreviewPane => Some(self.config.preview_pane_width()),
+        }
+    }
+
+    /// Make `edge` `width` points wide, as near as it can be.
+    fn set_edge_width(&mut self, edge: ResizeEdge, width: f32) {
+        match edge {
+            ResizeEdge::Name => self.config.name_column_width = Some(width.max(MIN_NAME_WIDTH)),
+            ResizeEdge::Parent => self.config.parent_column_width = width.max(MIN_COLUMN_WIDTH),
+            ResizeEdge::Column(ix) => {
+                if let Some(column) = self.config.list_columns.get_mut(ix) {
+                    column.width = width.max(MIN_COLUMN_WIDTH);
+                }
+            }
+            ResizeEdge::Pane(col) => {
+                let (min, max) = COLUMN_VIEW_WIDTH_RANGE;
+                let width = width.clamp(min, max);
+                if let Some(pane) = self.columns.get_mut(col) {
+                    pane.width = width;
+                }
+                // The next pane to open starts at the width last chosen.
+                self.config.column_view_width = width;
+            }
+            ResizeEdge::Sidebar => {
+                let (min, max) = SIDEBAR_WIDTH_RANGE;
+                self.config.sidebar_width = width.clamp(min, max);
+            }
+            ResizeEdge::PreviewPane => {
+                let (min, max) = PREVIEW_PANE_WIDTH_RANGE;
+                self.config.preview_pane_width = width.clamp(min, max);
+            }
+        }
+    }
+
+    /// Start resizing `edge` from the mouse at `x`.
+    pub(super) fn start_resize(
+        &mut self,
+        edge: ResizeEdge,
+        x: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Each starts from where it's drawn, so the edge follows the mouse at
+        // once. Name has no width of its own until it's dragged, and the
+        // sidebar can be drawn narrower than chosen.
+        let width = if edge == ResizeEdge::Sidebar {
+            self.sidebar_width_shown(window)
+        } else {
+            let shown = f32::from(self.name_column_shown) / crate::theme::ui_scale();
+            self.edge_width(edge).unwrap_or(shown)
+        };
+        self.resizing = Some((edge, x, width));
+        cx.notify();
+    }
+
+    /// The mouse moved to `x` while resizing `edge`. Only this browser hears
+    /// of the new width until the mouse goes up, since publishing it copies
+    /// and saves all the settings.
+    pub(super) fn resize_edge(&mut self, edge: ResizeEdge, x: Pixels, cx: &mut Context<Self>) {
+        let Some((resizing, start, width)) = self.resizing.filter(|(e, ..)| *e == edge) else {
+            return;
+        };
+        let moved = f32::from(x - start) / crate::theme::ui_scale();
+        // Its edge is on the left, so moving right makes it narrower.
+        let moved = match resizing {
+            ResizeEdge::PreviewPane => -moved,
+            ResizeEdge::Name
+            | ResizeEdge::Parent
+            | ResizeEdge::Column(_)
+            | ResizeEdge::Pane(_)
+            | ResizeEdge::Sidebar => moved,
+        };
+        self.set_edge_width(resizing, width + moved);
+        cx.notify();
+    }
+
+    /// The mouse went up after a press on an edge: the drag is over, so this
+    /// browser stops following them, and everything else hears the new width.
+    fn end_resize(&mut self, cx: &mut Context<Self>) {
+        self.resizing = None;
+        self.widths_changed(cx);
+    }
+
+    /// Follows the mouse over the whole window during a press on an edge,
+    /// wherever it's let go.
+    pub(super) fn resize_capture(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        view.update(cx, |this, cx| this.end_resize(cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
+    /// Double-clicking an edge: make a column just wide enough for its
+    /// longest text. The sidebar goes back to its usual width.
+    pub(super) fn fit_edge(
+        &mut self,
+        edge: ResizeEdge,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The first click's start and width mustn't undo this if the mouse
+        // moves a little during the second.
+        self.resizing = None;
+        let width = match edge {
+            ResizeEdge::Sidebar => DEFAULT_SIDEBAR_WIDTH,
+            ResizeEdge::PreviewPane => DEFAULT_PREVIEW_PANE_WIDTH,
+            ResizeEdge::Name | ResizeEdge::Parent | ResizeEdge::Column(_) | ResizeEdge::Pane(_) => {
+                self.fitting_width(edge, window, cx)
+            }
+        };
+        self.set_edge_width(edge, width);
+        self.widths_changed(cx);
+    }
+
+    /// The room `edge`'s longest text needs, and its header's, in points.
+    fn fitting_width(&self, edge: ResizeEdge, window: &Window, cx: &App) -> f32 {
+        let theme = cx.theme();
+        // The header's title and the arrow that shows it's sorted by it.
+        let header = |title: &str| vec![(SharedString::from(title.to_string()), 34.)];
+        let (texts, family) = match edge {
+            ResizeEdge::Name => {
+                let tree = if self.tree_mode() { 20. } else { 0. };
+                let rows = self.rows.iter().map(|row| {
+                    let indent = 16. * row.depth as f32;
+                    (row.name.clone(), CELL_PADDING + 22. + tree + indent)
+                });
+                (
+                    rows.chain(header("Name")).collect(),
+                    theme.font_family.clone(),
+                )
+            }
+            ResizeEdge::Parent => {
+                let rows = self
+                    .rows
+                    .iter()
+                    .map(|row| (row.detail.clone(), CELL_PADDING));
+                (
+                    rows.chain(header(self.parent_column_title())).collect(),
+                    theme.font_family.clone(),
+                )
+            }
+            ResizeEdge::Column(ix) => {
+                let Some(column) = self.config.list_columns.get(ix).map(|c| c.column) else {
+                    return MIN_COLUMN_WIDTH;
+                };
+                // Dates and permissions are made as they're asked for and are
+                // all about the same length, so a large list only needs a
+                // sample of them. Other columns' text is already there.
+                let every = match column {
+                    ListColumn::Created | ListColumn::LastOpened | ListColumn::Permissions => {
+                        (self.rows.len() / FIT_SAMPLE).max(1)
+                    }
+                    ListColumn::Modified
+                    | ListColumn::Size
+                    | ListColumn::Kind
+                    | ListColumn::Git => 1,
+                };
+                let rows = self
+                    .rows
+                    .iter()
+                    .step_by(every)
+                    .map(|row| (row.column_text(column), CELL_PADDING));
+                let family = match column {
+                    ListColumn::Permissions => theme.mono_font_family.clone(),
+                    _ => theme.font_family.clone(),
+                };
+                (rows.chain(header(column.title())).collect(), family)
+            }
+            ResizeEdge::Pane(col) => {
+                let Some(pane) = self.columns.get(col) else {
+                    return COLUMN_VIEW_WIDTH_RANGE.0;
+                };
+                // Its row's margins, icon, and arrow, and the edge to drag.
+                let extra = CELL_PADDING * 2. + 22. + 18. + super::views::PANE_EDGE;
+                let rows = pane
+                    .entries
+                    .iter()
+                    .map(|entry| (SharedString::from(entry.name.clone()), extra));
+                (rows.collect(), theme.font_family.clone())
+            }
+            ResizeEdge::Sidebar | ResizeEdge::PreviewPane => {
+                (Vec::new(), theme.font_family.clone())
+            }
+        };
+        let font = font(family);
+        super::fit::widest_points(texts, &font, ui(12.), window).min(MAX_FIT_WIDTH)
+    }
+
+    /// A strip over an edge that drags it, and fits it on a double-click. The
+    /// caller says where it goes. Dragging is watched from the window, so it
+    /// keeps working when the mouse leaves the strip.
+    pub(super) fn resize_handle(
+        &self,
+        id: impl Into<ElementId>,
+        edge: ResizeEdge,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let highlight = cx.theme().primary.opacity(0.35);
+        div()
+            .id(id)
+            .cursor(CursorStyle::ResizeLeftRight)
+            .occlude()
+            .hover(move |style| style.bg(highlight))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    if event.click_count >= 2 {
+                        this.fit_edge(edge, window, cx);
+                    } else {
+                        this.start_resize(edge, event.position.x, window, cx);
+                    }
+                }),
+            )
+            .on_drag(ResizeDrag(edge), |_, _, _, cx| cx.new(|_| EmptyView))
+    }
+
+    /// Widths or columns changed: publish them and redraw.
+    fn widths_changed(&mut self, cx: &mut Context<Self>) {
+        self.settings_changed(cx);
+        cx.notify();
+    }
+
     /// Show or hide a list column.
     pub(super) fn toggle_column(&mut self, column: ListColumn, cx: &mut Context<Self>) {
         let columns = &mut self.config.list_columns;
@@ -239,41 +527,23 @@ impl Finder {
         }
         let moved = columns.remove(from);
         columns.insert(to, moved);
-        self.schedule_save(cx);
-        cx.notify();
-    }
-
-    /// Start resizing column `ix` from the mouse at `x`.
-    pub(super) fn start_column_resize(&mut self, ix: usize, x: Pixels) {
-        if let Some(column) = self.config.list_columns.get(ix) {
-            self.column_resize = Some((ix, x, column.width));
-        }
-    }
-
-    /// The mouse moved to `x` while resizing a column.
-    pub(super) fn resize_column(&mut self, ix: usize, x: Pixels, cx: &mut Context<Self>) {
-        let Some((resizing, start, width)) = self.column_resize.filter(|(i, ..)| *i == ix) else {
-            return;
-        };
-        let moved = f32::from(x - start) / crate::theme::ui_scale();
-        if let Some(column) = self.config.list_columns.get_mut(resizing) {
-            column.width = (width + moved).max(MIN_COLUMN_WIDTH);
-            self.schedule_save(cx);
-            cx.notify();
-        }
+        self.widths_changed(cx);
     }
 
     fn list_columns_changed(&mut self, cx: &mut Context<Self>) {
-        self.schedule_save(cx);
+        self.widths_changed(cx);
         // Last-opened dates and git statuses are only read when shown.
         self.load_listing(Vec::new(), true, cx);
         self.reload_children(cx);
         self.reload_folder_stats(cx);
-        cx.notify();
     }
 
+    /// Reset Columns: the usual columns at their usual widths, with Name
+    /// filling the room again.
     pub(super) fn reset_list_columns(&mut self, cx: &mut Context<Self>) {
         self.config.list_columns = default_list_columns();
+        self.config.name_column_width = None;
+        self.config.parent_column_width = DEFAULT_PARENT_COLUMN_WIDTH;
         self.list_columns_changed(cx);
     }
 
@@ -285,7 +555,12 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.config.folders_first = !self.config.folders_first;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
+        self.folders_first_changed(cx);
+    }
+
+    /// Sort everything again with folders on top, or not.
+    pub(super) fn folders_first_changed(&mut self, cx: &mut Context<Self>) {
         self.rebuild_rows(cx);
         let dirs: Vec<PathBuf> = self.columns.iter().map(|c| c.dir.clone()).collect();
         for (ix, dir) in dirs.into_iter().enumerate().skip(1) {
@@ -295,7 +570,7 @@ impl Finder {
 
     pub(super) fn set_folder_sizes(&mut self, on: bool, cx: &mut Context<Self>) {
         self.config.folder_sizes = on;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         self.load_listing(Vec::new(), true, cx);
         self.reload_children(cx);
         self.reload_folder_stats(cx);

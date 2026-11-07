@@ -6,16 +6,21 @@ mod batch_rename;
 mod dialogs;
 mod editor;
 mod filter;
+mod fit;
 mod fps;
+mod go_to;
 mod groups;
 mod info;
+mod inline_rename;
 mod list;
 mod make;
+mod marquee;
 mod menus;
 mod nu_panel;
 mod open_with;
 mod pdf;
 mod preview;
+mod preview_pane;
 mod quick_look;
 mod sidebar;
 mod tab_bar;
@@ -32,8 +37,8 @@ use crate::theme::ui;
 use fffinder_core::places::{self, Place};
 use fffinder_core::terminals::{self, CUSTOM, Terminal, TerminalSetting};
 use fffinder_core::{
-    Config, Engine, FileEntry, GrepRequest, KindFilter, RootStatus, SearchRequest, SortKey,
-    SortOrder, ViewMode, format, listing,
+    Config, Engine, FileEntry, GrepRequest, KindFilter, ListColumn, RootStatus, SearchRequest,
+    SortKey, SortOrder, ViewMode, format, listing,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -41,6 +46,7 @@ use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme as _, ElementExt as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -123,6 +129,27 @@ impl Row {
         }
     }
 
+    /// Get the text a list column shows for this item.
+    ///
+    /// # Arguments
+    ///
+    /// * `column` - The list view's column
+    ///
+    /// # Returns
+    ///
+    /// The text, made only now for the columns that aren't usually shown
+    pub fn column_text(&self, column: ListColumn) -> SharedString {
+        match column {
+            ListColumn::Modified => self.date.clone(),
+            ListColumn::Created => self.created(),
+            ListColumn::LastOpened => self.opened(),
+            ListColumn::Size => self.size.clone(),
+            ListColumn::Kind => self.kind.clone(),
+            ListColumn::Permissions => self.permissions(),
+            ListColumn::Git => self.git.clone(),
+        }
+    }
+
     /// When the item was made, for the list view's column. This and the
     /// next two are only made for rows drawn with those columns showing.
     pub fn created(&self) -> SharedString {
@@ -173,6 +200,8 @@ pub struct ColumnPane {
     pub entries: Vec<FileEntry>,
     pub selected: Option<usize>,
     pub scroll: UniformListScrollHandle,
+    /// The pane's width in points.
+    pub width: f32,
 }
 
 /// What the index is doing, for the sidebar footer and the status bar.
@@ -242,6 +271,8 @@ pub struct Finder {
     result_sort: SortOrder,
     grid_cols: usize,
     list_scroll: UniformListScrollHandle,
+    /// The list's columns, when they're wider than the view.
+    list_sideways: ScrollHandle,
     grid_scroll: gpui_kit::component::VirtualListScrollHandle,
     /// The icon view's lines, kept between frames.
     icon_layout: Option<groups::IconLayout>,
@@ -318,7 +349,10 @@ pub struct Finder {
     /// Applies Settings › Search engine; a newer change replaces it.
     search_settings_task: Task<()>,
     watch_task: Task<()>,
-    save_task: Task<()>,
+    /// The app's one copy of the settings.
+    settings: Entity<crate::settings::Settings>,
+    /// `config` as last published, to tell what this browser has changed.
+    published: Config,
     /// The open Get Info panel's contents.
     info: Option<info::InfoPanel>,
     /// Folders open in the list view's tree, and what they hold.
@@ -326,8 +360,24 @@ pub struct Finder {
     children: HashMap<PathBuf, Vec<FileEntry>>,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
-    /// A list column being resized: which, where the drag began, its width then.
-    column_resize: Option<(usize, Pixels, f32)>,
+    /// The folder dragged items are waiting over, and what opens it.
+    spring_folder: Option<(transfer::SpringTarget, Task<()>)>,
+    /// The name being edited in place.
+    renaming: Option<inline_rename::InlineRename>,
+    /// How wide the toolbar was last drawn, which decides what fits in it.
+    toolbar_width: Pixels,
+    /// What the toolbar last showed.
+    toolbar_fit: toolbar::ToolbarFit,
+    /// A box being dragged around items.
+    marquee: Option<marquee::Marquee>,
+    /// What the selected items add up to, and the selection's revision then.
+    /// The status bar asks on every frame, and a `Cell` lets a method that
+    /// only reads `self` keep the answer.
+    selected_size_memo: Cell<Option<(u64, Option<u64>)>>,
+    /// An edge being dragged: which, where the drag began, its width then.
+    resizing: Option<(list::ResizeEdge, Pixels, f32)>,
+    /// How wide the list's Name column was last drawn.
+    name_column_shown: Pixels,
     /// Space left on the current folder's volume.
     free_space: Option<u64>,
     /// The window's tabs, when this browser is one of them.
@@ -345,8 +395,6 @@ pub struct Finder {
 
     icon_slider: Entity<SliderState>,
     dialog_sub: Option<Subscription>,
-    /// Write settings changes to disk (off for headless screenshots).
-    persist: bool,
     picker: Option<PickerOptions>,
     _subscriptions: Vec<Subscription>,
 }
@@ -366,7 +414,9 @@ impl Finder {
         cx: &mut Context<Self>,
     ) -> Self {
         let engine = cx.global::<AppState>().engine.clone();
-        let config = Config::load();
+        let settings = crate::settings::entity(cx);
+        settings.update(cx, |settings, cx| settings.reread_file(cx));
+        let config = settings.read(cx).config().clone();
         crate::theme::set_ui_scale(config.ui_scale(), cx);
         let search_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -403,6 +453,7 @@ impl Finder {
                     this.run_nu_pipeline(window, cx);
                 }
             }),
+            cx.observe_in(&settings, window, Self::adopt_settings),
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.config.appearance == fffinder_core::Appearance::System {
                     crate::theme::apply(this.config.appearance, Some(window), cx);
@@ -414,8 +465,11 @@ impl Finder {
                 if window.is_window_active() {
                     this.reload_locations(cx);
                     this.check_for_changes(cx);
+                    this.check_rename_field(window, cx);
                 }
             }),
+            // Every browser dims what's cut, wherever the cut was made or ended.
+            cx.observe_global::<crate::system::FileClipboard>(|_, cx| cx.notify()),
         ];
         let favorites = config
             .favorites
@@ -451,6 +505,7 @@ impl Finder {
             },
             grid_cols: 1,
             list_scroll: UniformListScrollHandle::new(),
+            list_sideways: ScrollHandle::new(),
             grid_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
             icon_layout: None,
             strip_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
@@ -505,7 +560,8 @@ impl Finder {
             roots_task: Task::ready(()),
             search_settings_task: Task::ready(()),
             watch_task: Task::ready(()),
-            save_task: Task::ready(()),
+            settings,
+            published: config.clone(),
             info: None,
             free_space: None,
             host: None,
@@ -513,7 +569,15 @@ impl Finder {
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
-            column_resize: None,
+            spring_folder: None,
+            renaming: None,
+            // Wide until it's measured, so a first frame doesn't fold anything.
+            toolbar_width: px(f32::MAX),
+            toolbar_fit: toolbar::ToolbarFit::Everything,
+            marquee: None,
+            selected_size_memo: Cell::new(None),
+            resizing: None,
+            name_column_shown: Pixels::ZERO,
             trashed: Vec::new(),
             transfers: Vec::new(),
             transfers_task: Task::ready(()),
@@ -521,11 +585,11 @@ impl Finder {
             fps_task: Task::ready(()),
             icon_slider,
             dialog_sub: None,
-            persist: true,
             picker,
             _subscriptions: subscriptions,
             config,
         };
+        this.show_folder_view(cx);
         this.load_listing(Vec::new(), false, cx);
         this.reload_locations(cx);
         this.poll_index_status(cx);
@@ -729,10 +793,22 @@ impl Finder {
 
     fn sort_order(&self) -> SortOrder {
         if self.is_searching() {
-            self.result_sort
-        } else {
-            self.config.sort
+            return self.result_sort;
         }
+        let sort = self.config.sort;
+        // Everything in a folder is in the one folder, so a sort by folder
+        // chosen in Recents means nothing there.
+        let spans_folders = matches!(
+            self.history.current(),
+            Location::Recents | Location::Results { .. }
+        );
+        if sort.key == SortKey::Folder && !spans_folders {
+            return SortOrder {
+                key: SortKey::Name,
+                ..sort
+            };
+        }
+        sort
     }
 
     // ----- navigation --------------------------------------------------------
@@ -751,6 +827,10 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.selection.clear();
+        self.marquee = None;
+        self.renaming = None;
+        self.spring_folder = None;
+        self.show_folder_view(cx);
         self.columns.clear();
         self.active_column = 0;
         self.expanded.clear();
@@ -760,7 +840,7 @@ impl Finder {
         self.grid_scroll.scroll_to_item(0, ScrollStrategy::Top);
         if let Some(folder) = self.current_folder() {
             self.config.last_folder = Some(folder.to_path_buf());
-            self.schedule_save(cx);
+            self.settings_changed(cx);
         }
         window.set_window_title(&self.history.current().title());
         self.load_listing(select.into_iter().collect(), false, cx);
@@ -1012,6 +1092,9 @@ impl Finder {
         let rows = self.group_rows(rows);
         let new: Vec<PathBuf> = rows.iter().map(|r| r.entry.path.clone()).collect();
         self.selection.remap(&old, &new);
+        if let Some(marquee) = self.marquee.as_mut() {
+            marquee.rows_changed(&old, &new);
+        }
         self.rows = rows;
         if self.effective_view() == ViewMode::Columns {
             self.sync_root_column();
@@ -1212,7 +1295,7 @@ impl Finder {
     pub fn set_kind(&mut self, kind: KindFilter, cx: &mut Context<Self>) {
         if self.config.kind_filter != kind {
             self.config.kind_filter = kind;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
             self.run_search(false, cx);
         }
     }
@@ -1288,7 +1371,7 @@ impl Finder {
 
     pub fn set_search_roots(&mut self, roots: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.config.search_roots = roots;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         let engine = self.engine.clone();
         let roots = self.config.search_roots.clone();
         self.roots_task = cx.spawn(async move |this, cx| {
@@ -1303,7 +1386,7 @@ impl Finder {
     /// or stop.
     pub fn set_search_apps(&mut self, on: bool, cx: &mut Context<Self>) {
         self.config.search_apps = on;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         self.engine.set_app_dirs(&self.config.app_dirs());
         if self.is_searching() {
             self.run_search(false, cx);
@@ -1319,7 +1402,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         edit(&mut self.config.search);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         let engine = self.engine.clone();
         let settings = self.config.search.clone();
         self.search_settings_task = cx.spawn(async move |this, cx| {
@@ -1339,7 +1422,7 @@ impl Finder {
     /// The most results a search shows.
     pub fn set_result_limit(&mut self, limit: usize, cx: &mut Context<Self>) {
         self.config.result_limit = limit.max(1);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         if self.is_searching() {
             self.run_search(false, cx);
         }
@@ -1380,10 +1463,23 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A name still being edited here was refused by this same press, which
+        // was to leave the field. The selection stays with the item being named.
+        if self.renaming.is_some() {
+            return;
+        }
         self.focus_files(window, cx);
         if click_count >= 2 {
             self.selection.select_only(ix);
-            self.open_rows(vec![ix], window, cx);
+            let folder = self.rows.get(ix).filter(|row| row.entry.is_navigable());
+            match folder {
+                // Cmd+double-click opens a folder in a tab of its own.
+                Some(row) if modifiers.secondary(cx) && self.picker.is_none() => {
+                    let location = Location::Folder(row.entry.path.clone());
+                    self.open_in_new_tabs(vec![location], window, cx);
+                }
+                _ => self.open_rows(vec![ix], window, cx),
+            }
             return;
         }
         if modifiers.secondary(cx) {
@@ -1413,6 +1509,25 @@ impl Finder {
         self.item_menu_at.take() == Some(position)
     }
 
+    /// A press in the empty part of a view: start a box, and unless Cmd or
+    /// Shift is held to add to what's selected, clear the selection.
+    pub(super) fn press_in_empty_space(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // As with a click on a row: this press was refused, and only said why.
+        if self.renaming.is_some() {
+            return;
+        }
+        self.focus_files(window, cx);
+        self.begin_marquee(event, cx);
+        if !event.modifiers.secondary(cx) && !event.modifiers.shift {
+            self.clear_selection(cx);
+        }
+    }
+
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selection.clear();
         self.selection_changed(cx);
@@ -1421,7 +1536,8 @@ impl Finder {
 
     fn selection_changed(&mut self, cx: &mut Context<Self>) {
         let wants_preview = matches!(self.effective_view(), ViewMode::Gallery | ViewMode::Columns)
-            || self.quick_look_open;
+            || self.quick_look_open
+            || self.shows_preview_pane();
         if wants_preview && let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
             // Quick Look's window follows clicks in the browser.
@@ -1429,6 +1545,36 @@ impl Finder {
                 self.ensure_pdf(&entry, cx);
             }
         }
+    }
+
+    /// How much the selected items add up to, as far as their sizes are known.
+    /// `None` when none of them has a known size.
+    pub(super) fn selected_size(&self) -> Option<u64> {
+        if self.effective_view() == ViewMode::Columns {
+            return self.column_selection().and_then(|entry| entry.size);
+        }
+        let revision = self.selection.revision();
+        if let Some((worked_out_for, size)) = self.selected_size_memo.get()
+            && worked_out_for == revision
+        {
+            return size;
+        }
+        let size = self
+            .selection
+            .indices()
+            .filter_map(|ix| self.rows.get(ix)?.entry.size)
+            .reduce(u64::saturating_add);
+        self.selected_size_memo.set(Some((revision, size)));
+        size
+    }
+
+    /// The selected folders, in display order.
+    pub(super) fn selected_folders(&self) -> Vec<PathBuf> {
+        self.selected_entries()
+            .into_iter()
+            .filter(FileEntry::is_navigable)
+            .map(|entry| entry.path)
+            .collect()
     }
 
     /// Selected entries, in display order.
@@ -1486,6 +1632,72 @@ impl Finder {
             return;
         }
         self.selection.move_by(delta, extend, self.rows.len());
+        if let Some(ix) = self.selection.cursor() {
+            self.scroll_to(ix);
+        }
+        self.selection_changed(cx);
+        cx.notify();
+    }
+
+    /// Home and End: go to the first or last item, or extend the selection
+    /// to it. In columns, the same within the active column.
+    fn move_to_end(
+        &mut self,
+        last: bool,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.effective_view() == ViewMode::Columns {
+            let col = self.active_column;
+            let end = self
+                .columns
+                .get(col)
+                .and_then(|pane| pane.entries.len().checked_sub(1));
+            if let Some(end) = end {
+                self.select_in_column(col, if last { end } else { 0 }, window, cx);
+            }
+            return;
+        }
+        let Some(end) = self.rows.len().checked_sub(1) else {
+            return;
+        };
+        let ix = if last { end } else { 0 };
+        if extend {
+            self.selection.extend_to(ix);
+        } else {
+            self.selection.select_only(ix);
+        }
+        self.scroll_to(ix);
+        self.selection_changed(cx);
+        cx.notify();
+    }
+
+    /// Page Up and Page Down: move the selection a screenful of items, or
+    /// extend it that far. The gallery's strip has no pages to speak of.
+    pub(super) fn move_by_page(
+        &mut self,
+        direction: isize,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let height = f32::from(self.content_height) / crate::theme::ui_scale();
+        let lines = |line: f32| ((height / line).floor() as isize).max(1);
+        let delta = match self.effective_view() {
+            ViewMode::Gallery => return,
+            ViewMode::Columns => {
+                self.move_in_columns(0, direction * lines(views::COLUMN_ROW), window, cx);
+                return;
+            }
+            ViewMode::List => lines(views::LIST_ROW),
+            ViewMode::Icons => {
+                let (_, tile_height) = views::tile_size(self.config.icon_size);
+                lines(tile_height) * self.grid_cols.max(1) as isize
+            }
+        };
+        self.selection
+            .move_by(direction * delta, extend, self.rows.len());
         if let Some(ix) = self.selection.cursor() {
             self.scroll_to(ix);
         }
@@ -1558,6 +1770,9 @@ impl Finder {
     }
 
     fn escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::system::forget_cut(cx) {
+            return;
+        }
         if !self.selection.is_empty() {
             self.clear_selection(cx);
         } else if self.is_searching() {
@@ -1651,8 +1866,58 @@ impl Finder {
 
     // ----- view state -----------------------------------------------------------
 
+    /// Show the view and sort last chosen in the folder being opened. A folder
+    /// with none keeps the view this browser is showing.
+    fn show_folder_view(&mut self, cx: &App) {
+        if !self.config.remember_folder_views {
+            return;
+        }
+        let Location::Folder(dir) = self.history.current() else {
+            return;
+        };
+        let Some((view, sort)) = self.settings.read(cx).folder_view(dir) else {
+            return;
+        };
+        if view != ViewMode::Gallery {
+            self.forget_pdf_surface(pdf::Surface::Gallery);
+        }
+        self.config.view_mode = view;
+        self.config.sort = sort;
+        // Opening a folder isn't choosing anything, so there's nothing to publish.
+        self.published.view_mode = view;
+        self.published.sort = sort;
+    }
+
+    /// A view or sort was chosen: this folder opens with it from now on.
+    fn remember_folder_view(&mut self, cx: &mut Context<Self>) {
+        if !self.config.remember_folder_views || self.split_pane || self.is_searching() {
+            return;
+        }
+        let Location::Folder(dir) = self.history.current() else {
+            return;
+        };
+        let (dir, view, sort) = (dir.clone(), self.config.view_mode, self.config.sort);
+        self.settings.update(cx, |settings, cx| {
+            settings.remember_folder_view(dir, view, sort, cx)
+        });
+    }
+
+    /// Settings: remember what's chosen in each folder, or stop.
+    ///
+    /// # Arguments
+    ///
+    /// * `on` - Whether each folder opens with the view and sort chosen in it
+    pub fn set_remember_folder_views(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.config.remember_folder_views = on;
+        self.settings_changed(cx);
+        cx.notify();
+    }
+
     pub fn set_view_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.config.view_mode == mode {
+            // It may only have been inherited from the last folder; choosing
+            // it means this folder opens with it from now on.
+            self.remember_folder_view(cx);
             return;
         }
         self.config.view_mode = mode;
@@ -1670,7 +1935,8 @@ impl Finder {
         }
         self.select_first_for_gallery(cx);
         self.selection_changed(cx);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
+        self.remember_folder_view(cx);
         cx.notify();
     }
 
@@ -1691,7 +1957,8 @@ impl Finder {
             self.result_sort = order;
         } else {
             self.config.sort = order;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
+            self.remember_folder_view(cx);
             if key == SortKey::LastOpened {
                 // Last-opened dates are only read when something needs them.
                 self.load_listing(Vec::new(), true, cx);
@@ -1705,7 +1972,8 @@ impl Finder {
             self.result_sort.ascending = ascending;
         } else {
             self.config.sort.ascending = ascending;
-            self.schedule_save(cx);
+            self.settings_changed(cx);
+            self.remember_folder_view(cx);
         }
         self.rebuild_rows(cx);
     }
@@ -1723,7 +1991,12 @@ impl Finder {
             return;
         }
         self.config.show_hidden = show;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
+        self.show_hidden_changed(cx);
+    }
+
+    /// Hidden files came or went: list everything again.
+    fn show_hidden_changed(&mut self, cx: &mut Context<Self>) {
         self.load_listing(Vec::new(), true, cx);
         self.reload_columns(cx);
         self.reload_children(cx);
@@ -1740,13 +2013,13 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.config.show_sidebar = !self.config.show_sidebar;
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
     pub fn set_icon_size(&mut self, size: f32, cx: &mut Context<Self>) {
         self.config.icon_size = size.clamp(32., 128.);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1755,7 +2028,7 @@ impl Finder {
         use fffinder_core::config::{DEFAULT_PREVIEW_FONT_SIZE, FONT_SIZE_RANGE, in_range};
         let size = size.unwrap_or(DEFAULT_PREVIEW_FONT_SIZE);
         self.config.preview_font_size = in_range(size, FONT_SIZE_RANGE, DEFAULT_PREVIEW_FONT_SIZE);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1764,7 +2037,7 @@ impl Finder {
         use fffinder_core::config::{DEFAULT_NU_FONT_SIZE, FONT_SIZE_RANGE, in_range};
         let size = size.unwrap_or(DEFAULT_NU_FONT_SIZE);
         self.config.nu_font_size = in_range(size, FONT_SIZE_RANGE, DEFAULT_NU_FONT_SIZE);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1775,7 +2048,7 @@ impl Finder {
         let scale = (in_range(scale.unwrap_or(1.0), UI_SCALE_RANGE, 1.0) * 10.).round() / 10.;
         self.config.ui_scale = scale;
         crate::theme::set_ui_scale(scale, cx);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -1811,7 +2084,7 @@ impl Finder {
         };
         crate::theme::apply(self.config.appearance, Some(window), cx);
         self.previews.clear();
-        self.schedule_save(cx);
+        self.settings_changed(cx);
     }
 
     pub fn set_appearance(
@@ -1823,29 +2096,81 @@ impl Finder {
         self.config.appearance = appearance;
         crate::theme::apply(appearance, Some(window), cx);
         self.previews.clear();
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
-    /// Persist settings shortly after the last change.
-    pub fn schedule_save(&mut self, cx: &mut Context<Self>) {
-        if !self.persist {
+    /// A setting changed in this browser: publish it, for the other browsers
+    /// and the settings file.
+    pub fn settings_changed(&mut self, cx: &mut Context<Self>) {
+        // Split view's second pane has its own view and sidebar.
+        if self.split_pane {
+            self.published.show_sidebar = self.config.show_sidebar;
+        }
+        if self.config == self.published {
             return;
         }
-        self.save_task = cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(400))
-                .await;
-            let config = this.read_with(cx, |this, _| this.config.clone()).ok();
-            if let Some(config) = config {
-                cx.background_spawn(async move {
-                    if let Err(err) = config.save() {
-                        log::warn!("saving settings: {err}");
-                    }
-                })
-                .await;
-            }
+        let shared_only = self.split_pane;
+        let (before, after) = (&self.published, &self.config);
+        self.settings.update(cx, |settings, cx| {
+            settings.take_changes(before, after, shared_only, cx)
         });
+        self.published.clone_from(&self.config);
+    }
+
+    /// Another browser changed a shared setting: show it here too.
+    fn adopt_settings(
+        &mut self,
+        settings: Entity<crate::settings::Settings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let before = self.config.clone();
+        let shared = settings.read(cx).config();
+        self.config.copy_shared_from(shared);
+        self.published.copy_shared_from(shared);
+        if self.split_pane {
+            self.config.show_sidebar = before.show_sidebar;
+            self.published.show_sidebar = before.show_sidebar;
+        }
+        if self.config == before {
+            return;
+        }
+        if self.config.favorites != before.favorites {
+            self.favorites = self
+                .config
+                .favorites
+                .iter()
+                .map(|path| places::favorite_for(path))
+                .collect();
+        }
+        if self.config.appearance != before.appearance {
+            crate::theme::apply(self.config.appearance, Some(window), cx);
+            self.previews.clear();
+        }
+        if self.config.ui_scale != before.ui_scale {
+            crate::theme::set_ui_scale(self.config.ui_scale(), cx);
+        }
+        if self.config.use_nu_environment != before.use_nu_environment {
+            self.apply_nu_environment(cx);
+        }
+        let shows = |config: &Config, column: ListColumn| {
+            config.list_columns.iter().any(|c| c.column == column)
+        };
+        // Last-opened dates and git statuses are only read while they're shown.
+        let new_data = [ListColumn::LastOpened, ListColumn::Git]
+            .into_iter()
+            .any(|column| shows(&self.config, column) && !shows(&before, column));
+        if self.config.show_hidden != before.show_hidden {
+            self.show_hidden_changed(cx);
+        } else if new_data || self.config.folder_sizes != before.folder_sizes {
+            self.load_listing(Vec::new(), true, cx);
+            self.reload_children(cx);
+            self.reload_folder_stats(cx);
+        } else if self.config.folders_first != before.folders_first {
+            self.folders_first_changed(cx);
+        }
+        cx.notify();
     }
 
     // ----- favorites ------------------------------------------------------------
@@ -1854,15 +2179,32 @@ impl Finder {
         if !self.config.favorites.contains(&path) {
             self.favorites.push(places::favorite_for(&path));
             self.config.favorites.push(path);
-            self.schedule_save(cx);
+            self.settings_changed(cx);
             cx.notify();
         }
+    }
+
+    /// Put the favorite at `from` where the one at `to` is.
+    pub(super) fn move_favorite(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
+        let favorites = &mut self.config.favorites;
+        let (Some(from), Some(to)) = (
+            favorites.iter().position(|path| path == from),
+            favorites.iter().position(|path| path == to),
+        ) else {
+            return;
+        };
+        let moved = favorites.remove(from);
+        favorites.insert(to, moved);
+        let moved = self.favorites.remove(from);
+        self.favorites.insert(to, moved);
+        self.settings_changed(cx);
+        cx.notify();
     }
 
     pub fn remove_favorite(&mut self, path: &Path, cx: &mut Context<Self>) {
         self.config.favorites.retain(|p| p != path);
         self.favorites.retain(|p| p.path != path);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2047,7 +2389,7 @@ impl Finder {
         let mut setting = self.config.terminal_setting();
         setting.app = app;
         self.config.set_terminal_setting(setting);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2055,7 +2397,7 @@ impl Finder {
         let mut setting = self.config.terminal_setting();
         setting.command = (!command.trim().is_empty()).then_some(command);
         self.config.set_terminal_setting(setting);
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         cx.notify();
     }
 
@@ -2168,11 +2510,6 @@ impl Finder {
         self.nu_running
     }
 
-    /// Stop writing settings to disk; used by the screenshot tool.
-    pub fn set_persist(&mut self, persist: bool) {
-        self.persist = persist;
-    }
-
     pub fn set_sidebar_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
         self.config.show_sidebar = visible;
         cx.notify();
@@ -2243,8 +2580,7 @@ impl Finder {
                     cx,
                 );
                 self.end_search(window, cx);
-                self.load_listing(vec![path.clone()], true, cx);
-                self.open_rename_dialog(path, window, cx);
+                self.add_and_rename(path, window, cx);
             }
             Err(err) => window.push_notification(
                 (
@@ -2261,7 +2597,7 @@ impl Finder {
         if selected.len() > 1 {
             self.open_batch_rename(selected, window, cx);
         } else if let Some(entry) = self.primary_entry() {
-            self.open_rename_dialog(entry.path, window, cx);
+            self.begin_rename(entry.path, window, cx);
         }
     }
 
@@ -2289,6 +2625,7 @@ impl Finder {
                     entries,
                     selected: None,
                     scroll: UniformListScrollHandle::new(),
+                    width: self.config.column_view_width(),
                 }];
                 self.active_column = 0;
             }
@@ -2323,11 +2660,13 @@ impl Finder {
             self.selection.select_only(ix);
         }
         if entry.is_navigable() {
+            let width = self.config.column_view_width();
             self.columns.push(ColumnPane {
                 dir: entry.path.clone(),
                 entries: Vec::new(),
                 selected: None,
                 scroll: UniformListScrollHandle::new(),
+                width,
             });
             self.load_column(col + 1, entry.path.clone(), cx);
         } else {
@@ -2385,6 +2724,7 @@ impl Finder {
             }
             let next = match pane.selected {
                 Some(cur) => (cur as isize + dy).clamp(0, len as isize - 1) as usize,
+                None if dy < 0 => len - 1,
                 None => 0,
             };
             self.select_in_column(col, next, window, cx);
@@ -2449,6 +2789,7 @@ fn content_search(
 
 impl Render for Finder {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rename_frame_started();
         let (background, foreground, font) = {
             let theme = cx.theme();
             (
@@ -2502,8 +2843,10 @@ impl Render for Finder {
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(Self::toggle_hidden))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::toggle_preview_pane))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
+            .on_action(cx.listener(Self::cut_files))
             .on_action(cx.listener(Self::copy_files))
             .on_action(cx.listener(Self::paste_files))
             .on_action(cx.listener(Self::move_items_here))
@@ -2556,6 +2899,26 @@ impl Render for Finder {
                     this.set_view_mode(ViewMode::Gallery, cx)
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.go_back(&GoBack, window, cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.go_forward(&GoForward, window, cx)
+                }),
+            )
+            // Watched from here so a drag goes on wherever the mouse wanders.
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<list::ResizeDrag>, _, cx| {
+                    let edge = event.drag(cx).0;
+                    this.resize_edge(edge, event.event.position.x, cx);
+                }),
+            )
+            .relative()
             .child(
                 h_flex()
                     .size_full()
@@ -2590,6 +2953,15 @@ impl Render for Finder {
                             .child(self.render_status_bar(window, cx)),
                     ),
             )
+            .when(show_sidebar, |this| {
+                this.child(self.sidebar_handle(window, cx).test_support())
+            })
+            .when(self.marquee.is_some(), |this| {
+                this.child(self.marquee_capture(cx))
+            })
+            .when(self.resizing.is_some(), |this| {
+                this.child(self.resize_capture(cx))
+            })
     }
 }
 
@@ -2648,7 +3020,14 @@ impl Finder {
         div()
             .id("content")
             .test_support()
-            .key_context(FILES)
+            // While a name is being edited, the file views' keys are its text.
+            .key_context(if self.renaming.is_some() {
+                FILES_RENAMING
+            } else if self.has_split_view(cx) {
+                FILES
+            } else {
+                FILES_ONE_PANE
+            })
             .track_focus(&self.files_focus)
             .flex_1()
             .min_h_0()
@@ -2679,26 +3058,28 @@ impl Finder {
             .on_action(cx.listener(|this, _: &ExtendRight, window, cx| {
                 this.move_selection(1, 0, true, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &MoveHome, _, cx| {
-                if !this.rows.is_empty() {
-                    this.selection.select_only(0);
-                    this.scroll_to(0);
-                    this.selection_changed(cx);
-                    cx.notify();
-                }
+            .on_action(cx.listener(|this, _: &MoveHome, window, cx| {
+                this.move_to_end(false, false, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &MoveEnd, _, cx| {
-                if let Some(last) = this.rows.len().checked_sub(1) {
-                    this.selection.select_only(last);
-                    this.scroll_to(last);
-                    this.selection_changed(cx);
-                    cx.notify();
-                }
+            .on_action(cx.listener(|this, _: &MoveEnd, window, cx| {
+                this.move_to_end(true, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendHome, window, cx| {
+                this.move_to_end(false, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendEnd, window, cx| {
+                this.move_to_end(true, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendPageUp, window, cx| {
+                this.move_by_page(-1, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendPageDown, window, cx| {
+                this.move_by_page(1, true, window, cx)
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let keys = &event.keystroke;
                 let m = keys.modifiers;
-                if m.control || m.platform || m.alt || m.function {
+                if m.control || m.platform || m.alt || m.function || this.renaming.is_some() {
                     return;
                 }
                 if let Some(text) = keys.key_char.as_deref()
@@ -2733,7 +3114,15 @@ impl Finder {
             .on_prepaint(move |bounds, _, cx| {
                 entity.update(cx, |this, _| this.content_height = bounds.size.height);
             })
-            .child(body)
+            .map(|this| match self.render_preview_pane(cx) {
+                Some(pane) => this.child(
+                    h_flex()
+                        .size_full()
+                        .child(div().flex_1().min_w_0().h_full().child(body))
+                        .child(pane),
+                ),
+                None => this.child(body),
+            })
     }
 
     /// The folder that files dropped on the view go into: the one shown,

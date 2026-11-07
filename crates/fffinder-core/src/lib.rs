@@ -8,6 +8,7 @@ pub mod config;
 pub mod desktop_apps;
 pub mod engine;
 pub mod entry;
+pub mod folder_views;
 pub mod format;
 pub mod grouping;
 pub mod info;

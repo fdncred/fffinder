@@ -164,7 +164,7 @@ fn main() {
 
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |finder, cx| {
-            finder.set_persist(false);
+            fffinder::settings::set_persist(false, cx);
             finder.set_appearance(o.appearance, window, cx);
             finder.set_sidebar_visible(o.sidebar, cx);
             finder.set_view_mode(o.view, cx);

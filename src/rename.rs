@@ -55,6 +55,29 @@ fn key(path: &Path) -> String {
     }
 }
 
+/// Check whether a rename only changes the case of a name, on a disk that
+/// treats both spellings as one name. There `to` seems to exist only because
+/// it is `from`. A disk that tells them apart lists an item really named `to`
+/// under exactly that name.
+///
+/// # Arguments
+///
+/// * `from` - The item being renamed
+/// * `to` - The path it would be renamed to
+///
+/// # Returns
+///
+/// `true` if nothing else has the name, so the rename can go ahead
+pub fn only_case_differs(from: &Path, to: &Path) -> bool {
+    let (Some(old), Some(new), Some(folder)) = (from.file_name(), to.file_name(), from.parent())
+    else {
+        return false;
+    };
+    old.to_string_lossy().to_lowercase() == new.to_string_lossy().to_lowercase()
+        && std::fs::read_dir(folder)
+            .is_ok_and(|items| items.flatten().all(|item| item.file_name() != new))
+}
+
 /// Why `name` can't be a file name, if it can't.
 pub fn name_problem(name: &str) -> Option<String> {
     let bad_chars: &[char] = if cfg!(windows) {
@@ -323,6 +346,31 @@ mod tests {
     }
 
     #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn only_case_differs_needs_the_same_name_and_no_other_item() {
+        let dir = Dir::new("case-check", &["photo.JPG", "other.txt"]);
+        let photo = dir.0.join("photo.JPG");
+
+        assert!(only_case_differs(&photo, &dir.0.join("photo.jpg")));
+        assert!(!only_case_differs(&photo, &dir.0.join("other.txt")));
+        assert!(
+            !only_case_differs(&photo, &photo),
+            "that item is listed under exactly that name"
+        );
+    }
+
+    #[test]
+    fn only_case_differs_sees_an_item_with_the_other_spelling() {
+        let dir = Dir::new("case-both", &["photo.JPG"]);
+        let photo = dir.0.join("photo.JPG");
+        let lower = dir.0.join("photo.jpg");
+        let ignores_case = lower.exists();
+        std::fs::write(&lower, "another item").unwrap();
+
+        // Where the disk ignores case, that write went to the same file.
+        assert_eq!(only_case_differs(&photo, &lower), ignores_case);
+    }
+
     #[test]
     fn case_only_renames_work() {
         let dir = Dir::new("case", &["photo.JPG"]);

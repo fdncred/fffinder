@@ -1,5 +1,7 @@
 //! The floating sidebar: Recents, Favorites, Locations, and index status.
 
+use super::fit::with_cut_off_text;
+use super::list::ResizeEdge;
 use super::toolbar::{TOOLBAR_HEIGHT, pill, pill_button, window_drag_area};
 use super::views::DraggedFiles;
 use super::{Finder, IndexActivity, group_digits};
@@ -8,17 +10,21 @@ use crate::macos::IconLookup;
 use crate::model::Location;
 use crate::theme::palette;
 use crate::theme::ui;
+use fffinder_core::config::SIDEBAR_WIDTH_RANGE;
 use fffinder_core::places::{Place, PlaceIcon};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::path::PathBuf;
 
-pub const SIDEBAR_WIDTH: f32 = 212.;
+/// A Favorites row being dragged to a new place in the list.
+#[derive(Clone)]
+struct DraggedFavorite(PathBuf);
 
 /// Finder's own sidebar icon for a place, in CoreTypes.bundle.
 fn finder_sidebar_icon(icon: PlaceIcon) -> &'static str {
@@ -78,9 +84,31 @@ pub fn place_icon(icon: PlaceIcon) -> Icon {
 }
 
 impl Finder {
+    /// The sidebar's width in points: what was chosen, unless the toolbar
+    /// beside it would run out of the window.
+    pub(super) fn sidebar_width_shown(&self, window: &Window) -> f32 {
+        let room = f32::from(window.viewport_size().width) / crate::theme::ui_scale();
+        let (min, _) = SIDEBAR_WIDTH_RANGE;
+        self.config
+            .sidebar_width()
+            .min(room - super::toolbar::TOOLBAR_MIN_WIDTH)
+            .max(min)
+    }
+
+    /// The strip over the sidebar's right edge that drags it, drawn over
+    /// everything so the toolbar beside it can't take the press.
+    pub(super) fn sidebar_handle(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        self.resize_handle("resize-sidebar", ResizeEdge::Sidebar, cx)
+            .absolute()
+            .top_0()
+            .h_full()
+            .left(ui(self.sidebar_width_shown(window) - 3.))
+            .w(ui(6.))
+    }
+
     pub(super) fn render_sidebar(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -169,7 +197,7 @@ impl Finder {
         ));
 
         div()
-            .w(ui(SIDEBAR_WIDTH))
+            .w(ui(self.sidebar_width_shown(window)))
             .h_full()
             .flex_shrink_0()
             .p(ui(8.))
@@ -248,6 +276,7 @@ impl Finder {
                         .with_size(ui(13.))
                         .text_color(theme.muted_foreground),
                 )
+                .tooltip(|window, cx| Tooltip::new("Eject").build(window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
@@ -255,6 +284,11 @@ impl Finder {
                 }))
                 .test_support()
         });
+        // Favorites can be dragged into another order.
+        let reorder = place
+            .as_ref()
+            .filter(|(_, is_favorite)| *is_favorite)
+            .map(|(place, _)| (place.path.clone(), label.clone()));
         let row = h_flex()
             .id(id)
             .h(ui(28.))
@@ -266,10 +300,33 @@ impl Finder {
             .when(active, |this| this.bg(theme.sidebar_accent))
             .when(!active, |this| this.hover(|s| s.bg(theme.list_hover)))
             .child(icon)
-            .child(div().flex_1().truncate().child(label))
+            .child(row_label(label))
             .children(eject_button)
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.navigate(target.clone(), window, cx);
+            .when_some(reorder, |row, (path, name)| {
+                let highlight = theme.drop_target;
+                let onto = path.clone();
+                row.on_drag(DraggedFavorite(path), move |_, _, _, cx| {
+                    cx.new(|_| super::list::DragLabel(name.clone()))
+                })
+                .drag_over::<DraggedFavorite>(move |style, _, _, _| style.bg(highlight))
+                .on_drop(cx.listener(
+                    move |this, moved: &DraggedFavorite, _, cx| {
+                        this.move_favorite(&moved.0, &onto, cx)
+                    },
+                ))
+            })
+            .on_mouse_down(MouseButton::Middle, {
+                let target = target.clone();
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    this.open_in_new_tabs(vec![target.clone()], window, cx)
+                })
+            })
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.modifiers().secondary(cx) && this.picker.is_none() {
+                    this.open_in_new_tabs(vec![target.clone()], window, cx);
+                } else {
+                    this.navigate(target.clone(), window, cx);
+                }
             }))
             .test_support();
         let Some((place, is_favorite)) = place else {
@@ -278,6 +335,7 @@ impl Finder {
         let path: PathBuf = place.path.clone();
         // Files dropped on a place go into it; dropped between rows, folders
         // are added to Favorites.
+        let row = super::transfer::spring_loaded(row, path.clone(), cx);
         let row = super::transfer::folder_drop_target(row, path.clone(), cx);
         // The menu lives on a wrapper so the row itself stays observable in UI tests.
         div()
@@ -287,7 +345,9 @@ impl Finder {
                 let open_nu = path.clone();
                 let reveal = path.clone();
                 let remove = path.clone();
-                let mut menu = menu
+                let here = vec![Location::Folder(path.clone())];
+                let mut menu = super::menus::open_elsewhere_items(&view, menu, here, window)
+                    .separator()
                     .item(
                         PopupMenuItem::new("Open Nushell Here")
                             .icon(IconName::SquareTerminal)
@@ -357,7 +417,7 @@ impl Finder {
                 Icon::new(Lucide::FolderCog),
                 pal.sidebar_icon,
             ))
-            .child(div().flex_1().truncate().child(name.clone()))
+            .child(row_label(name.clone().into()))
             .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.open_smart_folder(ix, window, cx)
             }))
@@ -418,12 +478,24 @@ impl Finder {
                             .with_size(ui(14.))
                             .text_color(muted),
                     )
+                    .tooltip(|window, cx| Tooltip::new("Settings").build(window, cx))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                         this.show_settings(&ShowSettings, window, cx)
                     }))
                     .test_support(),
             )
     }
+}
+
+/// A sidebar row's name, with all of it in a tooltip when the sidebar is too
+/// narrow for it.
+fn row_label(label: SharedString) -> impl IntoElement {
+    with_cut_off_text(
+        div().id("label").flex_1().truncate(),
+        StyledText::new(label.clone()),
+        label,
+        |shown| shown,
+    )
 }
 
 fn section_heading(label: &'static str, color: Hsla) -> impl IntoElement {

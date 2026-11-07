@@ -198,7 +198,7 @@ impl Finder {
                     recent.retain(|a| *a != address);
                     recent.insert(0, address.clone());
                     recent.truncate(RECENT_SERVERS);
-                    this.schedule_save(cx);
+                    this.settings_changed(cx);
                     this.reload_locations(cx);
                     this.navigate(Location::Folder(path), window, cx);
                 }

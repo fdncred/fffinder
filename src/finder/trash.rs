@@ -18,6 +18,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex,
 };
 use gpui_kit::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 impl Finder {
@@ -33,9 +34,13 @@ impl Finder {
             self.put_back(&PutBack, window, cx);
             return;
         }
-        let entries = self.selected_entries();
-        if !entries.is_empty() {
-            self.confirm_trash(entries, window, cx);
+        let paths: Vec<PathBuf> = self
+            .selected_entries()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        if !paths.is_empty() {
+            self.trash_now(paths, window, cx);
         }
     }
 
@@ -46,14 +51,18 @@ impl Finder {
     /// Move items to the Trash now; Undo puts them back. An item inside
     /// another one being trashed goes with it.
     pub fn trash_now(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        // These may have been dropped on the Trash, which ends a drag.
+        self.spring_folder = None;
         if self.wait_for_undo(window, cx) {
             return;
         }
         let bin = trash_bin::bin(cx);
         let paths = ops::outermost(&paths);
         cx.spawn_in(window, async move |this, cx| {
+            let gone = paths.clone();
             let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
             this.update_in(cx, |this, window, cx| {
+                let next = item_after(&this.rows, &gone);
                 this.selection.clear();
                 // What went before a failure can still be put back.
                 let (trashed, failed) = match result {
@@ -61,6 +70,7 @@ impl Finder {
                     Err(TrashStopped { trashed, error }) => (trashed, Some(error)),
                 };
                 undo::record("Move to Trash", Change::Trashed(trashed), cx);
+                let mut select: Vec<PathBuf> = next.into_iter().collect();
                 if let Some(err) = failed {
                     window.push_notification(
                         (
@@ -69,8 +79,16 @@ impl Finder {
                         ),
                         cx,
                     );
+                    // What's still there stays selected, to try again.
+                    let left: Vec<PathBuf> = gone
+                        .into_iter()
+                        .filter(|path| path.symlink_metadata().is_ok())
+                        .collect();
+                    if !left.is_empty() {
+                        select = left;
+                    }
                 }
-                this.files_changed(Vec::new(), cx);
+                this.files_changed(select, cx);
             })
             .ok();
         })
@@ -191,8 +209,10 @@ impl Finder {
                 if let Err(err) = result {
                     window.push_notification((NotificationType::Error, err.to_string()), cx);
                 }
+                let selected = this.selected_entries().into_iter().map(|e| e.path);
+                let next = item_after(&this.rows, &selected.collect::<Vec<_>>());
                 this.selection.clear();
-                this.files_changed(Vec::new(), cx);
+                this.files_changed(next.into_iter().collect(), cx);
             })
             .ok();
         })
@@ -302,10 +322,13 @@ impl Finder {
     /// Items changed on disk: reload the view, keep only search results
     /// that still exist, and select `select` where it shows.
     pub(super) fn files_changed(&mut self, select: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let here: Vec<PathBuf> = select
-            .into_iter()
-            .filter(|p| p.parent() == self.current_folder())
-            .collect();
+        // Search results come from anywhere, and so do open folders' items.
+        let shows = |path: &PathBuf| {
+            self.is_searching()
+                || path.parent() == self.current_folder()
+                || path.parent().is_some_and(|dir| self.expanded.contains(dir))
+        };
+        let here: Vec<PathBuf> = select.into_iter().filter(shows).collect();
         self.load_listing(here, true, cx);
         if self.is_searching() {
             self.results.retain(|r| r.entry.path.exists());
@@ -351,6 +374,20 @@ pub(super) fn trash_drop_target<E: InteractiveElement>(el: E, cx: &mut Context<F
         }))
 }
 
+/// The item to select once `gone` have left the list: the first after the
+/// last of them, or else the nearest before. An item inside a folder that's
+/// going goes with it.
+fn item_after(rows: &[super::Row], gone: &[PathBuf]) -> Option<PathBuf> {
+    let gone: HashSet<&Path> = gone.iter().map(PathBuf::as_path).collect();
+    let is_gone = |row: &super::Row| row.entry.path.ancestors().any(|dir| gone.contains(dir));
+    let last = rows.iter().rposition(is_gone)?;
+    rows[last + 1..]
+        .iter()
+        .chain(rows[..last].iter().rev())
+        .find(|row| !is_gone(row))
+        .map(|row| row.entry.path.clone())
+}
+
 /// The folder an item in the Trash came from, as the list shows it.
 pub(super) fn original_folder(item: &Trashed) -> String {
     item.original
@@ -367,4 +404,73 @@ pub(super) fn can_put_back(trashed: &[Trashed], entries: &[FileEntry]) -> bool {
             .iter()
             .any(|t| t.path == e.path && t.original.is_some())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_after;
+    use crate::finder::Row;
+    use fffinder_core::FileEntry;
+    use std::path::{Path, PathBuf};
+
+    /// A row for each of `names` under `/list`, which needn't exist.
+    fn rows(names: &[&str]) -> Vec<Row> {
+        let meta = std::fs::metadata(std::env::temp_dir()).unwrap();
+        names
+            .iter()
+            .map(|name| {
+                let entry = FileEntry::from_metadata(Path::new("/list").join(name), &meta, false);
+                Row::new(entry, Vec::new(), None)
+            })
+            .collect()
+    }
+
+    fn gone(names: &[&str]) -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|name| Path::new("/list").join(name))
+            .collect()
+    }
+
+    fn after(rows: &[Row], names: &[&str]) -> Option<PathBuf> {
+        item_after(rows, &gone(names))
+    }
+
+    #[test]
+    fn the_next_item_is_the_one_after_the_last_to_go() {
+        let list = rows(&["a", "b", "c", "d"]);
+
+        assert_eq!(after(&list, &["b"]), Some("/list/c".into()));
+        assert_eq!(after(&list, &["a", "c"]), Some("/list/d".into()));
+    }
+
+    #[test]
+    fn after_the_last_row_the_next_item_is_the_nearest_before_it() {
+        let list = rows(&["a", "b", "c"]);
+
+        assert_eq!(after(&list, &["c"]), Some("/list/b".into()));
+        assert_eq!(after(&list, &["b", "c"]), Some("/list/a".into()));
+    }
+
+    #[test]
+    fn an_open_folders_items_go_with_it() {
+        let list = rows(&["a", "dir", "dir/one", "dir/two", "z"]);
+
+        assert_eq!(after(&list, &["dir"]), Some("/list/z".into()));
+
+        let at_the_end = rows(&["a", "dir", "dir/one"]);
+        assert_eq!(
+            after(&at_the_end, &["dir"]),
+            Some("/list/a".into()),
+            "not an item inside it"
+        );
+    }
+
+    #[test]
+    fn with_nothing_left_or_nothing_listed_there_is_no_next_item() {
+        let list = rows(&["a", "b"]);
+
+        assert_eq!(after(&list, &["a", "b"]), None);
+        assert_eq!(after(&list, &["not listed"]), None);
+    }
 }

@@ -2,21 +2,68 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-07
+
+This release adds file manager basics that were missing: resizable columns, box selection, renaming in place, cut and paste, and windows that reopen where they were. Unless a line says otherwise, each feature works on macOS, Linux, and Windows. Shortcuts are written as on macOS; on Linux and Windows, Cmd is Ctrl.
 
 ### Changed
 
-- On macOS, apps are no longer indexed. "This Computer" searches find them by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, so Calculator, Terminal, and the other apps in `/System/Applications` are found too. Leaving the files inside app bundles out of the index took memory once settled from 258 MB to 150 MB on the development Mac, and name searches from 65–100 ms to 25–35 ms. Existing settings drop `/Applications` from the search locations once; add it back with Add Folder… to search inside bundles. Settings › Search locations has an Applications switch to stop finding apps.
-- Apps in the app folders show their sizes in the list view, added up in the background the first time you open the folder.
-- Run from a terminal without a folder, fffinder opens the folder you ran it from on every system, as `--term` already did; before, it opened the last folder. When fffinder is already running, that window goes to the folder instead of only coming forward. Started from the Dock, Finder, Explorer, or a desktop menu, it still opens the last folder.
+- Tabs and windows now share settings as they change: hidden files, Keep Folders on Top, columns and widths, the sidebar, favorites, Smart Folders, appearance, and text sizes. Each tab or pane keeps its own view, sort, groups, icon size, and search kind, and a new tab or window starts with the latest of those.
+- Move to Trash no longer asks first, as in Finder and Explorer. Cmd+Z or Put Back restores the items. Delete Immediately and Empty Trash still ask, since neither can be undone.
+- In the list view, only the Name column drags a file. The other columns draw a selection box, as in Finder and Explorer.
+- On macOS, apps are no longer indexed. "This Computer" searches find them by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, so Calculator, Terminal, and the other apps in `/System/Applications` are found too. With the files inside app bundles out of the index, memory after indexing settled at 150 MB instead of 258 MB on the development Mac, and name searches took 25 to 35 ms instead of 65 to 100 ms. fffinder removes `/Applications` from existing search locations once. Add it back with Add Folder… to search inside bundles. Settings › Search locations has an Applications switch to stop finding apps.
+- Apps in the app folders show their sizes in the list view. fffinder adds them up in the background the first time you open the folder.
+- Run from a terminal without a folder, fffinder opens the folder you ran it from, on every system, as `--term` already did. Before, it opened the last folder. When fffinder is already running, that window goes to the folder instead of only coming forward. Started from the Dock, Finder, Explorer, or a desktop menu, it still opens the last folder.
 
 ### Added
 
-- The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
+#### Columns and text that doesn't fit
+
+- You can resize every list column now, including Name and the Folder column in search results, by dragging the line at the edge of its header. Double-click the line to fit the column to its longest text. When columns are wider than the window, the list scrolls sideways.
+- Text that's cut off shows in full in a tooltip when you rest the mouse on it: list cells and headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. fffinder cuts file names and folder paths in the middle, so their ends stay visible.
+- Drag the edge of the sidebar or of a column view pane to resize it. fffinder saves the width.
+- Click the Folder header in search results and Recents to sort by folder.
+
+#### Selecting and moving around
+
+- Drag in empty space to select with a box in the icon and list views. In the list, drag from any column but Name. The view scrolls when the mouse goes past its edge, and Cmd or Shift adds to the selection.
+- Page Up and Page Down move through the list, icon, and column views. Shift extends the selection with them and with Home and End.
+- Move to Trash and Delete Immediately select the next item. Anything that couldn't go to the Trash stays selected, so you can try again.
+- The status bar adds up the selected items: "2 of 12 selected (1.4 MB)".
+- The back and forward buttons on a mouse go back and forward.
+- Go to Folder lists the items that match from the moment it opens and as you type. Tab finishes the path, and clicking a match fills it in. Relative paths start from your home folder in places like Recents and the Trash.
+- F5 refreshes outside split view, and Alt+Up goes to the enclosing folder. On Linux and Windows, Ctrl+L is Go to Folder, Alt+Enter is Get Info, and Shift+Delete is Delete Immediately.
+
+#### Working with files
+
+- Rename edits the name in place in the list, icon, and column views, with the part before the extension selected. Return or clicking elsewhere keeps it, and Escape cancels. Going to another app leaves the edit as it is. New Folder names the folder the same way. The gallery still asks in a dialog.
+- Cmd+X cuts the selected items, and Cmd+V then moves them. They look faint until they're pasted. Escape cancels, and so does copying anything else, here or in another app. Edit › Cut and the item menu have it too.
+- Hold dragged items over a folder, a sidebar place, or a path bar crumb for a moment and it opens, with the drag still going.
+- Drop items on a path bar crumb to move them there, and right-click a crumb for its menu.
+
+#### Windows, tabs, and the sidebar
+
+- Windows reopen where they were, at the same size. fffinder saves the place even if you close the window or quit right after moving it. `--pick` windows open in the middle of the screen.
+- A preview pane beside the list and icon views (Cmd+Shift+P, or View › Toggle Preview Pane). It follows the selection and resizes from its left edge.
+- A folder opens in the view and sort last chosen in it, and a folder with none keeps the view you're in. Settings › Remember each folder's view turns this off.
+- Open in New Tab and Open in New Window, in the menus of folders, sidebar rows, and path bar crumbs. Middle-click, Cmd+double-click on a folder, and Cmd+click on a sidebar row open a new tab too.
+- Drag a Favorites row onto another to reorder them.
+- The empty-space menu has Select All, View, and Sort By.
+
+#### Indexing
+
+- After a scan, fff-search reads each file once to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). The sidebar footer says "Finishing index…" while that runs, and `GET /v1/status` reports it as `finishing`, for each location and overall.
 
 ### Fixed
 
-- The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
+- The search field ran off the right side of the window at larger text sizes and in narrow windows. The toolbar now measures the space it has and folds controls away as it runs out. The folder search button goes first, then the view buttons become one menu, then the Nushell and Sort menus move into the Actions menu.
+- The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name shrinks instead, down to its smallest size.
+- On disks that ignore case, as macOS and Windows disks do by default, renaming an item to change only the case of its name said the name was already taken.
+- Dragging items showed their names in black, which was hard to read on the dark theme's gray. Drag previews now use the theme's text color and font.
+- Icon view names cut off at two lines now end in an ellipsis.
+- After a window changed size in one step, such as being zoomed, the icon view kept its old column count until the mouse next moved, which could leave items off the right edge.
+- Settings could be lost. Each tab and window kept its own copy and saved all of it, so an older copy could write old values over newer ones, and so could a `--pick` or `--term` run. Now there's one copy, and each change writes only the fields it changed into the file. A change made just before quitting is saved too. If the settings file can't be read, for example because a hand edit left a typo, fffinder moves it to `settings.bad.json` instead of writing over it.
+- On macOS, the Dock and the window switcher showed a generic executable icon when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`. fffinder now sets its icon itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
 
 ## [0.2.0] - 2026-10-28
 
@@ -89,4 +136,5 @@ fffinder can now manage files as well as find them. Unless a line says otherwise
 - On Windows, `fffinder --term` clicks land on whole cells and emoji are one color. In Windows Terminal, which gets sixel images, frames are drawn at 10 by 20 pixels a character cell, so text looks softer than with kitty graphics, and images have at most 256 colors.
 - Connect to Server can't mount SFTP on macOS. On Linux it can't ask for a password, so put the user name in the address and keep the password in your keyring.
 
+[0.3.0]: https://github.com/fdncred/fffinder/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fdncred/fffinder/releases/tag/v0.2.0

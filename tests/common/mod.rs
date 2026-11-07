@@ -179,6 +179,8 @@ impl<'a> Ui<'a> {
                 },
                 Appearance::Light,
             );
+            // Tests in this process share a settings folder; stay out of it.
+            fffinder::settings::set_persist(false, cx);
             cx.set_global(Recorder::default());
             cx.set_global(fffinder::trash_bin::TrashOverride(std::sync::Arc::new(
                 fffinder::trash_bin::FolderBin::new(trash_dir(dir)),
@@ -222,7 +224,6 @@ impl<'a> Ui<'a> {
         };
         let root = dir.to_path_buf();
         view.update(cx, |f, cx| {
-            f.set_persist(false);
             // Settings shows these; the engine already indexes them.
             f.set_search_roots(vec![root], cx);
         });
@@ -435,6 +436,182 @@ impl<'a> Ui<'a> {
         self.settle();
     }
 
+    /// Rest the mouse on `id`, long enough for a tooltip to show.
+    pub fn hover(&mut self, id: impl Into<ElementId>) {
+        let position = self.snapshot(id).bounds().center();
+        self.hover_point(position);
+    }
+
+    /// Rest the mouse at `position`, long enough for a tooltip to show.
+    pub fn hover_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("hover {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Scroll with the mouse over `id`, by `delta` points.
+    pub fn scroll(&mut self, id: impl Into<ElementId>, delta: Point<Pixels>) {
+        let id = id.into();
+        let position = self.snapshot(id.clone()).bounds().center();
+        self.step(format!("scroll {id:?}"), |window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(delta),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                    source: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Drag `id` sideways by `dx` points.
+    pub fn drag_by(&mut self, id: impl Into<ElementId>, dx: f32) {
+        let start = self.snapshot(id).bounds().center();
+        self.drag_points(start, start + point(px(dx), px(0.)), Default::default());
+    }
+
+    /// Press the left button at `start`, drag to `end`, and let go.
+    pub fn drag_points(
+        &mut self,
+        start: Point<Pixels>,
+        end: Point<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
+        self.step(format!("drag from {start:?} to {end:?}"), |window, cx| {
+            press_and_move(window, cx, start, end, modifiers);
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: end,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
+    /// Press the left button at `start` and drag to `end` without letting go.
+    pub fn drag_and_hold(&mut self, start: Point<Pixels>, end: Point<Pixels>) {
+        self.drag_and_hold_with(start, end, Default::default());
+    }
+
+    /// The same, with `modifiers` held.
+    pub fn drag_and_hold_with(
+        &mut self,
+        start: Point<Pixels>,
+        end: Point<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
+        self.step(format!("hold from {start:?} to {end:?}"), |window, cx| {
+            press_and_move(window, cx, start, end, modifiers);
+        });
+    }
+
+    /// Move the mouse to `position` with the left button still down.
+    pub fn move_while_held(&mut self, position: Point<Pixels>, modifiers: gpui_kit::Modifiers) {
+        self.step(format!("hold at {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Make the window `width` by `height` points, with a new layout.
+    pub fn resize(&mut self, width: f32, height: f32) {
+        gpui_kit::VisualTestContext::from_window(self.handle, self.cx)
+            .simulate_resize(gpui_kit::size(px(width), px(height)));
+        self.settle();
+    }
+
+    /// Make the window the active one, as clicking it does. Focus events only
+    /// fire in an active window, and a test's window doesn't start out active.
+    pub fn activate(&mut self) {
+        self.window(|window, _| window.activate_window());
+        self.settle();
+    }
+
+    /// Make the window inactive, as going to another app does.
+    pub fn deactivate(&mut self) {
+        gpui_kit::VisualTestContext::from_window(self.handle, self.cx).deactivate_window();
+        self.settle();
+    }
+
+    /// How many notifications are showing.
+    pub fn notification_count(&mut self) -> usize {
+        self.window(|window, cx| window.notifications(cx).len())
+    }
+
+    /// Put `text` on the clipboard, as copying in another app or a text field does.
+    pub fn copy_text(&mut self, text: impl Into<String>) {
+        self.cx
+            .write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.into()));
+    }
+
+    /// Let go of the left button at `position`.
+    pub fn release(&mut self, position: Point<Pixels>) {
+        self.step(format!("let go at {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
+    /// Right-click at `position`.
+    pub fn right_click_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("right-click {position:?}"), |window, cx| {
+            click_point(window, position, MouseButton::Right, cx)
+        });
+    }
+
+    /// Double-click `id` with `modifiers` held.
+    pub fn double_click_with(&mut self, id: impl Into<ElementId>, modifiers: gpui_kit::Modifiers) {
+        let id = id.into();
+        self.step(format!("double-click {id:?}"), |window, cx| {
+            let options = gpui_kit::test::ClickOptions::new()
+                .with_count(2)
+                .with_modifiers(modifiers);
+            window.click_with_options(id, options, cx)
+        });
+    }
+
+    /// Click `button` on the middle of `id`.
+    pub fn click_with(&mut self, button: MouseButton, id: impl Into<ElementId>) {
+        let id = id.into();
+        let position = self.snapshot(id.clone()).bounds().center();
+        self.step(format!("click {id:?} with {button:?}"), |window, cx| {
+            click_point(window, position, button, cx)
+        });
+    }
+
     pub fn snapshot(&mut self, id: impl Into<ElementId>) -> ElementSnapshot {
         let id = id.into();
         self.window(|window, cx| {
@@ -597,6 +774,49 @@ fn click_point(window: &mut Window, position: Point<Pixels>, button: MouseButton
         .to_platform_input(),
         cx,
     );
+    window.render_frame(cx);
+}
+
+/// Move to `start`, press the left button, and drag to `end`, with a frame
+/// between each step so the window sees each one as a person would.
+fn press_and_move(
+    window: &mut Window,
+    cx: &mut App,
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    modifiers: gpui_kit::Modifiers,
+) {
+    let pressed = Some(MouseButton::Left);
+    let moves = [
+        (start, None),
+        (start + point(px(5.), px(0.)), pressed),
+        (end, pressed),
+    ];
+    for (ix, (position, pressed_button)) in moves.into_iter().enumerate() {
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position,
+                pressed_button,
+                modifiers,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        if ix == 0 {
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        }
+    }
     window.render_frame(cx);
 }
 

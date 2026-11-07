@@ -161,7 +161,7 @@ impl Finder {
             }
             None => self.config.use_groups = false,
         }
-        self.schedule_save(cx);
+        self.settings_changed(cx);
         if self.wants_last_opened() && !had_last_opened {
             // Last-opened dates are only read when something needs them.
             self.load_listing(Vec::new(), true, cx);
