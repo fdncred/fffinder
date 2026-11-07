@@ -59,7 +59,10 @@ impl Finder {
         let view = cx.entity();
 
         h_flex()
-            .h(ui(36.))
+            // A second line in a narrow pane keeps every control reachable.
+            .flex_wrap()
+            .min_h(ui(36.))
+            .py(ui(4.))
             .flex_shrink_0()
             .px(ui(16.))
             .gap(ui(10.))

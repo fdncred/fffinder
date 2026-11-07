@@ -7,6 +7,7 @@ use crate::theme::palette;
 use crate::theme::ui;
 use fffinder_core::{GroupKey, SortKey, ViewMode};
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
@@ -20,11 +21,58 @@ use std::cell::Cell;
 pub const TOOLBAR_HEIGHT: f32 = 52.;
 /// The narrowest the search field gets, in points.
 const SEARCH_MIN_WIDTH: f32 = 120.;
-/// What the toolbar needs with its title gone and the search field at its
-/// narrowest, in points. The sidebar and the window's smallest size leave it
-/// this much.
-pub const TOOLBAR_MIN_WIDTH: f32 = 620. + SEARCH_MIN_WIDTH;
-/// Room for the macOS traffic lights when they sit over this view.
+/// How far the search field narrows once nothing else can go.
+const SEARCH_LAST_WIDTH: f32 = 80.;
+/// What each of the toolbar's folding controls takes up, with the gap after
+/// it, in points: the folder search button, the view buttons beyond what a
+/// single menu button needs, the Nushell menu, and the Sort menu.
+const SCOPE_ROOM: f32 = 50.;
+const VIEWS_ROOM: f32 = 98.;
+const NUSHELL_ROOM: f32 = 66.;
+const SORT_ROOM: f32 = 66.;
+/// The room the toolbar needs with everything showing and the search field at
+/// its narrowest, in points.
+const TOOLBAR_FULL_WIDTH: f32 = 534. + SEARCH_MIN_WIDTH;
+/// The room it needs with everything that can fold folded, in points. The
+/// sidebar leaves it at least this much.
+pub const TOOLBAR_MIN_WIDTH: f32 =
+    TOOLBAR_FULL_WIDTH - SCOPE_ROOM - VIEWS_ROOM - NUSHELL_ROOM - SORT_ROOM;
+
+/// How much of the toolbar fits, from all of it down. Each step also folds
+/// what the ones before it folded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum ToolbarFit {
+    /// Sort is in the Actions menu.
+    SortInActions,
+    /// The Nushell menu is in the Actions menu.
+    NushellInActions,
+    /// The view buttons are one menu.
+    ViewsAsMenu,
+    /// The folder search button is gone; the scope bar has the same choice.
+    NoFolderSearch,
+    Everything,
+}
+
+impl ToolbarFit {
+    /// What fits in a toolbar `room` points wide, once its own extras are
+    /// taken off.
+    pub(super) fn for_room(room: f32) -> ToolbarFit {
+        let mut needed = TOOLBAR_FULL_WIDTH;
+        for (fit, saved) in [
+            (ToolbarFit::Everything, SCOPE_ROOM),
+            (ToolbarFit::NoFolderSearch, VIEWS_ROOM),
+            (ToolbarFit::ViewsAsMenu, NUSHELL_ROOM),
+            (ToolbarFit::NushellInActions, SORT_ROOM),
+        ] {
+            if room >= needed {
+                return fit;
+            }
+            needed -= saved;
+        }
+        ToolbarFit::SortInActions
+    }
+}
+
 pub const TRAFFIC_LIGHTS: f32 = 78.;
 
 /// A rounded group of toolbar buttons.
@@ -108,13 +156,17 @@ pub fn window_drag_area<E: InteractiveElement>(el: E) -> E {
     }
 }
 
+/// Whether fffinder draws the window's buttons, because nothing else does.
+fn window_controls_shown(window: &Window) -> bool {
+    !cfg!(any(target_os = "macos", target_os = "windows"))
+        && matches!(window.window_decorations(), Decorations::Client { .. })
+}
+
 /// Minimize, maximize, and close buttons for a Linux window whose title bar
 /// fffinder draws, because the window manager draws none. They're narrower
 /// than the pill buttons so the toolbar still fits the default window.
 fn window_controls(window: &Window, cx: &mut Context<Finder>) -> Option<Div> {
-    if cfg!(any(target_os = "macos", target_os = "windows"))
-        || !matches!(window.window_decorations(), Decorations::Client { .. })
-    {
+    if !window_controls_shown(window) {
         return None;
     }
     let supported = window.window_controls();
@@ -150,7 +202,56 @@ fn window_controls(window: &Window, cx: &mut Context<Finder>) -> Option<Div> {
     Some(controls)
 }
 
+/// The icon for a view of the files.
+fn view_icon(mode: ViewMode) -> Lucide {
+    match mode {
+        ViewMode::Icons => Lucide::LayoutGrid,
+        ViewMode::List => Lucide::List,
+        ViewMode::Columns => Lucide::Columns3,
+        ViewMode::Gallery => Lucide::GalleryHorizontalEnd,
+    }
+}
+
+/// "as Icons", "as List", and the rest, with `mode` checked.
+pub(super) fn view_mode_items(
+    view: &Entity<Finder>,
+    menu: PopupMenu,
+    mode: ViewMode,
+    window: &mut Window,
+) -> PopupMenu {
+    ViewMode::ALL.into_iter().fold(menu, |menu, option| {
+        menu.item(
+            PopupMenuItem::new(format!("as {}", option.title()))
+                .checked(option == mode)
+                .on_click(
+                    window.listener_for(view, move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                        this.set_view_mode(option, cx)
+                    }),
+                ),
+        )
+    })
+}
+
 impl Finder {
+    /// How much of the toolbar fits in the width it was last drawn at, after
+    /// what the toolbar has to show on this system.
+    fn toolbar_room(&self, traffic: bool, window: &Window) -> ToolbarFit {
+        let mut extras = 0.;
+        if !self.config.show_sidebar {
+            // The Show Sidebar button.
+            extras += 50.;
+        }
+        if traffic {
+            extras += TRAFFIC_LIGHTS - 12.;
+        }
+        if window_controls_shown(window) {
+            // Three of them, with the gaps around them.
+            extras += 96.;
+        }
+        let room = f32::from(self.toolbar_width) / crate::theme::ui_scale() - extras;
+        ToolbarFit::for_room(room)
+    }
+
     pub(super) fn render_toolbar(
         &mut self,
         window: &mut Window,
@@ -166,6 +267,8 @@ impl Finder {
             && !self.split_pane;
         let can_back = self.history.can_back();
         let can_forward = self.history.can_forward();
+        let fit = self.toolbar_room(traffic, window);
+        self.toolbar_fit = fit;
 
         let nav = pill(cx)
             .child(
@@ -226,6 +329,18 @@ impl Finder {
                 cx,
             ));
 
+        // In a narrow toolbar, one button with the current view's icon.
+        let views_menu = {
+            let view = view.clone();
+            pill(cx).child(
+                menu_button("view-menu", view_icon(mode), cx)
+                    .tooltip("View")
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, _| {
+                        view_mode_items(&view, menu, mode, window)
+                    }),
+            )
+        };
+
         let sort_view = view.clone();
         let sort = pill(cx).child(
             menu_button("sort", Lucide::ArrowUpDown, cx)
@@ -282,7 +397,11 @@ impl Finder {
         let search = h_flex()
             .w(ui(250.))
             // Narrows before the toolbar overflows the window.
-            .min_w(ui(SEARCH_MIN_WIDTH))
+            .min_w(ui(if fit == ToolbarFit::SortInActions {
+                SEARCH_LAST_WIDTH
+            } else {
+                SEARCH_MIN_WIDTH
+            }))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // Down arrow moves from the search field into the results.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -314,12 +433,23 @@ impl Finder {
             );
 
         let title = self.title();
+        let measured = cx.entity();
         window_drag_area(
             h_flex()
                 .id("toolbar")
                 .h(ui(TOOLBAR_HEIGHT))
                 .w_full()
                 .flex_shrink_0()
+                .overflow_hidden()
+                .on_prepaint(move |bounds, window, cx| {
+                    measured.update(cx, |this, cx| {
+                        this.toolbar_width = bounds.size.width;
+                        // Only a change in what fits needs another frame.
+                        if this.toolbar_room(traffic, window) != this.toolbar_fit {
+                            cx.notify();
+                        }
+                    });
+                })
                 // macOS draws the window buttons at a fixed size.
                 .pl(if traffic { px(TRAFFIC_LIGHTS) } else { ui(12.) })
                 .pr(ui(10.))
@@ -346,11 +476,14 @@ impl Finder {
                         .child(title),
                 )
                 .child(nav)
-                .child(views)
-                .child(sort)
-                .child(nushell)
+                .map(|this| match fit >= ToolbarFit::NoFolderSearch {
+                    true => this.child(views),
+                    false => this.child(views_menu),
+                })
+                .when(fit >= ToolbarFit::NushellInActions, |this| this.child(sort))
+                .when(fit >= ToolbarFit::ViewsAsMenu, |this| this.child(nushell))
                 .child(actions)
-                .child(scope)
+                .when(fit == ToolbarFit::Everything, |this| this.child(scope))
                 .child(search)
                 .children(window_controls(window, cx)),
         )
@@ -491,6 +624,30 @@ fn actions_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    // What a narrow toolbar has no room for comes first.
+    let fit = view.read(cx).toolbar_fit;
+    let menu = match fit >= ToolbarFit::NushellInActions {
+        true => menu,
+        false => {
+            let view = view.clone();
+            menu.submenu(
+                "Sort and View Options",
+                window,
+                cx,
+                move |menu, window, cx| sort_menu(&view, menu, window, cx),
+            )
+        }
+    };
+    let menu = match fit >= ToolbarFit::ViewsAsMenu {
+        true => menu,
+        false => {
+            let view = view.clone();
+            menu.submenu("Nushell", window, cx, move |menu, window, cx| {
+                nushell_menu(&view, menu, window, cx)
+            })
+            .separator()
+        }
+    };
     let finder = view.read(cx);
     let has_selection = !finder.selected_entries().is_empty();
     let in_folder = finder.current_folder().is_some();
@@ -610,4 +767,27 @@ fn actions_menu(
             .action(Box::new(ShowSettings)),
     )
     .min_w(ui(220.))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TOOLBAR_FULL_WIDTH, TOOLBAR_MIN_WIDTH, ToolbarFit};
+
+    #[test]
+    fn the_toolbar_folds_one_step_at_a_time() {
+        let full = TOOLBAR_FULL_WIDTH;
+
+        assert_eq!(ToolbarFit::for_room(full), ToolbarFit::Everything);
+        assert_eq!(ToolbarFit::for_room(full - 1.), ToolbarFit::NoFolderSearch);
+        assert_eq!(ToolbarFit::for_room(full - 50.), ToolbarFit::NoFolderSearch);
+        assert_eq!(ToolbarFit::for_room(full - 51.), ToolbarFit::ViewsAsMenu);
+        assert_eq!(
+            ToolbarFit::for_room(full - 149.),
+            ToolbarFit::NushellInActions
+        );
+        assert_eq!(
+            ToolbarFit::for_room(TOOLBAR_MIN_WIDTH - 200.),
+            ToolbarFit::SortInActions
+        );
+    }
 }

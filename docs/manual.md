@@ -99,7 +99,7 @@ From top to bottom, the window has:
 - The path bar.
 - The status bar, or the picker bar in `--pick` mode.
 
-The sidebar runs down the left side. Drag its right edge to make it wider or narrower, from 140 to 420 points. Double-click the edge to go back to the usual width. The width is saved. In a narrow window the sidebar gives up width so the toolbar still fits.
+The sidebar runs down the left side. Drag its right edge to make it wider or narrower, from 140 to 420 points. Double-click the edge to go back to the usual width. The width is saved. In a very narrow window the sidebar gives up width so the toolbar still fits.
 
 A new window opens where the last one was, at the same size, on the same display, and maximized if it was. If windows are already open, it opens a little down and to the right of that place. If the place is no longer on a display, the window opens at the usual size in the middle of the screen.
 
@@ -141,13 +141,20 @@ The status bar shows:
 
 **Opening a folder in a new tab.** Open in New Tab and Open in New Window are in the right-click menu of folders in the views, sidebar rows, and path bar crumbs. Middle-click a folder, sidebar row, or crumb to open it in a new tab. So does Cmd+double-click on a folder and Cmd+click on a sidebar row. The tab you were in stays as it was.
 
-**Split view.** Split View (Cmd+Backslash, or the Window menu) shows a second pane to the right of the current tab, starting at the same folder, without its own sidebar. It stays as you switch tabs, and Cmd+Backslash again (or Cmd+W in that pane) closes it. Each pane has its own toolbar. F5 (Window › Copy to Other Pane) copies the selected items into the other pane's folder and F6 (Move to Other Pane) moves them, as in Total Commander and Midnight Commander, with the same name-clash questions, progress, and Undo as any copy or move. The other pane must show a folder, not search results. Split view wants a wide window; in a narrow one the toolbars run out of room.
+**Split view.** Split View (Cmd+Backslash, or the Window menu) shows a second pane to the right of the current tab, starting at the same folder, without its own sidebar. It stays as you switch tabs, and Cmd+Backslash again (or Cmd+W in that pane) closes it. Each pane has its own toolbar. F5 (Window › Copy to Other Pane) copies the selected items into the other pane's folder and F6 (Move to Other Pane) moves them, as in Total Commander and Midnight Commander, with the same name-clash questions, progress, and Undo as any copy or move. The other pane must show a folder, not search results. In a narrow window each toolbar folds what doesn't fit (see [Toolbar](#toolbar)).
 
 When one tab or pane copies, moves, renames, or deletes files, the others in the window reload.
 
 ## Toolbar
 
-From left to right:
+The title goes first when the toolbar runs short of room, and the search field narrows. After that, controls fold away in this order, and come back as room returns:
+
+1. The Search Only in This Folder button. The scope bar has the same choice during a search.
+2. The four view buttons become one menu button showing the current view.
+3. The Nushell menu moves into the Actions (…) menu.
+4. The Sort and View Options menu moves into the Actions (…) menu.
+
+From left to right, with everything showing:
 
 | Control | What it does |
 | --- | --- |
@@ -429,7 +436,7 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
 | Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
-| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them and selects the next item. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
+| Move to Trash (Cmd+Backspace, Delete) | Moves the selected items to the Trash at once, and selects the next item. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
 | Delete Immediately… (Cmd+Alt+Backspace; Shift+Delete on Linux and Windows) | Asks, then deletes the selected items for good, without the Trash, and selects the next item. |
 | Get Info (Cmd+I; also Alt+Enter on Linux and Windows) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
 | Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo and Redo](#undo-and-redo). |
@@ -503,7 +510,7 @@ While an Undo or Redo runs, no other file operation starts: copying, moving, ren
 
 ## The Trash
 
-The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash at once, without the question.
+The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash.
 
 - **Put Back** (Cmd+Backspace, the item menu, or File › Put Back) moves the selected items back where they came from. It stops with a notification when the folder is gone or another item has the name.
 - **Delete Immediately…** (Cmd+Alt+Backspace, or the item menu) deletes the selected items for good.

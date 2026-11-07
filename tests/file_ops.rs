@@ -256,7 +256,10 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
     ui.click("view-list");
     ui.select("notes.txt");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
+    assert!(
+        !ui.dialog_open(),
+        "the Trash doesn't ask; Undo puts things back"
+    );
     assert!(!fx.path("notes.txt").exists());
 
     ui.click("trash");
@@ -283,7 +286,6 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
 
     ui.select("Roadmap.md");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
     ui.click("trash");
     ui.click("empty-trash");
     ui.click("ok");

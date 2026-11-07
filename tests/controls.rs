@@ -185,7 +185,6 @@ fn actions_menu_items(cx: &mut TestAppContext) {
 
     for (item, close) in [
         ("Rename…", "rename-cancel"),
-        ("Move to Trash", "cancel"),
         ("Go to Folder…", "goto-cancel"),
         ("Search Syntax…", "help-done"),
         ("Settings…", "settings-done"),
@@ -201,6 +200,11 @@ fn actions_menu_items(cx: &mut TestAppContext) {
         );
     }
     assert!(fx.path("Roadmap.md").exists(), "cancel kept the file");
+
+    ui.click("actions");
+    ui.click_menu_item("Move to Trash");
+    assert!(!ui.dialog_open(), "the Trash doesn't ask");
+    assert!(!fx.path("Roadmap.md").exists());
 
     ui.click("actions");
     ui.click_menu_item("New Folder");
@@ -955,22 +959,6 @@ fn rename_dialog(cx: &mut TestAppContext) {
     );
     ui.press("escape");
     assert!(fx.path("Plan.md").exists());
-}
-
-#[gpui_kit::test]
-fn trash_confirmation_cancel(cx: &mut TestAppContext) {
-    // Confirming is covered in file_ops.rs, with a stand-in for the Trash.
-    let fx = Fixture::new("trash");
-    let mut ui = Ui::open(cx, &fx.dir);
-    ui.select("notes.txt");
-    ui.press(&cmd("backspace"));
-    assert!(ui.dialog_open());
-    ui.click("cancel");
-    assert!(!ui.dialog_open());
-    ui.press(&cmd("backspace"));
-    ui.press("escape");
-    assert!(!ui.dialog_open());
-    assert!(fx.path("notes.txt").exists());
 }
 
 #[gpui_kit::test]

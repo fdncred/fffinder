@@ -285,6 +285,79 @@ fn the_current_folder_stays_in_a_long_path_bar(cx: &mut TestAppContext) {
     );
 }
 
+// ----- the toolbar ------------------------------------------------------------------
+
+#[gpui_kit::test]
+fn the_toolbar_folds_what_does_not_fit(cx: &mut TestAppContext) {
+    let fx = Fixture::new("toolbar-fold");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let width = |ui: &mut Ui, points: f32| {
+        let handle = ui.handle;
+        gpui_kit::VisualTestContext::from_window(handle, ui.cx)
+            .simulate_resize(gpui_kit::size(px(points), px(600.)));
+        ui.settle();
+        ui.frame();
+    };
+
+    width(&mut ui, 1400.);
+    assert!(ui.exists("search-scope"));
+    assert!(ui.exists("view-list"));
+    assert!(ui.exists("sort"));
+    assert!(ui.exists("nushell"));
+
+    // The sidebar takes 212 of these, and the rest isn't quite enough.
+    width(&mut ui, 850.);
+    assert!(!ui.exists("search-scope"), "the first to go");
+    assert!(ui.exists("view-list"));
+
+    width(&mut ui, 800.);
+    assert!(!ui.exists("view-list"), "the views become one menu");
+    assert!(ui.exists("view-menu"));
+    assert!(ui.exists("nushell"));
+
+    width(&mut ui, 700.);
+    assert!(!ui.exists("nushell"), "into the Actions menu");
+    assert!(ui.exists("sort"));
+    ui.click("actions");
+    assert!(ui.menu_labels().contains(&"Nushell".to_string()));
+    ui.press("escape");
+
+    width(&mut ui, 640.);
+    assert!(!ui.exists("sort"), "into the Actions menu too");
+    ui.click("actions");
+    assert!(
+        ui.menu_labels()
+            .contains(&"Sort and View Options".to_string())
+    );
+    ui.press("escape");
+
+    // The search field stays inside the window all the way down.
+    let search = ui.snapshot("search").bounds();
+    assert!(search.right() <= px(640.), "{:?}", search.right());
+
+    // And everything comes back.
+    width(&mut ui, 1400.);
+    assert!(ui.exists("search-scope"));
+    assert!(ui.exists("view-list"));
+}
+
+#[gpui_kit::test]
+fn the_scope_bar_wraps_rather_than_losing_its_controls(cx: &mut TestAppContext) {
+    let fx = Fixture::new("scope-wrap");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("search");
+    ui.type_text("notes");
+    ui.settle();
+    let handle = ui.handle;
+    gpui_kit::VisualTestContext::from_window(handle, ui.cx)
+        .simulate_resize(gpui_kit::size(px(640.), px(600.)));
+    ui.settle();
+
+    let kind = ui.snapshot("kind").bounds();
+
+    assert!(kind.right() <= px(640.), "{:?}", kind.right());
+}
+
 // ----- keys ----------------------------------------------------------------------------
 
 #[gpui_kit::test]
@@ -360,7 +433,6 @@ fn the_next_item_is_selected_after_moving_one_to_the_trash(cx: &mut TestAppConte
 
     ui.select("notes.txt");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
 
     assert_eq!(ui.selected(), [names[at_notes + 1].as_str()]);
 
@@ -369,7 +441,6 @@ fn the_next_item_is_selected_after_moving_one_to_the_trash(cx: &mut TestAppConte
     let before = ui.names()[ui.names().len() - 2].clone();
     ui.select(&last);
     ui.press(&cmd("backspace"));
-    ui.click("ok");
     assert_eq!(ui.selected(), [before.as_str()]);
 }
 

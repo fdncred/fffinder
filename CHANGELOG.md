@@ -6,6 +6,8 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ### Changed
 
+- Move to Trash no longer asks first, as in Finder and Explorer. Cmd+Z or Put Back restores the items. Delete Immediately and Empty Trash still ask, since neither can be undone.
+- In the list view, only the Name column drags a file. The other columns draw a selection box, as in Finder and Explorer.
 - On macOS, apps are no longer indexed. "This Computer" searches find them by reading `/Applications`, `/System/Applications`, `~/Applications`, and the folders directly inside them, so Calculator, Terminal, and the other apps in `/System/Applications` are found too. Leaving the files inside app bundles out of the index took memory once settled from 258 MB to 150 MB on the development Mac, and name searches from 65–100 ms to 25–35 ms. Existing settings drop `/Applications` from the search locations once; add it back with Add Folder… to search inside bundles. Settings › Search locations has an Applications switch to stop finding apps.
 - Apps in the app folders show their sizes in the list view, added up in the background the first time you open the folder.
 - Run from a terminal without a folder, fffinder opens the folder you ran it from on every system, as `--term` already did; before, it opened the last folder. When fffinder is already running, that window goes to the folder instead of only coming forward. Started from the Dock, Finder, Explorer, or a desktop menu, it still opens the last folder.
@@ -28,7 +30,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ### Fixed
 
-- The search field ran off the right side of the window at the default window size with Text Size at 1.2. The window title now gives way first, and the sidebar narrows if the toolbar still doesn't fit. The smallest window is 900 points wide instead of 850.
+- The search field ran off the right side of the window at larger text sizes and in narrow windows. The toolbar now measures its room and folds controls as it runs out: the folder search button goes first, then the view buttons become one menu, then the Nushell and Sort menus move into the Actions menu.
 - The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name gives way instead, down to its smallest size.
 - The next item is selected after Move to Trash and Delete Immediately, instead of nothing.
 - Icon view names cut off at two lines now end in an ellipsis.

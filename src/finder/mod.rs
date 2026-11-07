@@ -345,6 +345,10 @@ pub struct Finder {
     children: HashMap<PathBuf, Vec<FileEntry>>,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
+    /// How wide the toolbar was last drawn, which decides what fits in it.
+    toolbar_width: Pixels,
+    /// What the toolbar last showed.
+    toolbar_fit: toolbar::ToolbarFit,
     /// A box being dragged around items.
     marquee: Option<marquee::Marquee>,
     /// An edge being dragged: which, where the drag began, its width then.
@@ -537,6 +541,9 @@ impl Finder {
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
+            // Wide until it's measured, so a first frame doesn't fold anything.
+            toolbar_width: px(f32::MAX),
+            toolbar_fit: toolbar::ToolbarFit::Everything,
             marquee: None,
             resizing: None,
             name_column_shown: Pixels::ZERO,

@@ -300,7 +300,6 @@ fn the_trash_has_no_folder_sort(cx: &mut TestAppContext) {
     ui.click("view-list");
     ui.select("notes.txt");
     ui.press(&cmd("backspace"));
-    ui.click("ok");
     ui.click("trash");
     let sort = ui.read(|f| f.current_sort());
 

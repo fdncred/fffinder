@@ -7,7 +7,7 @@ use crate::theme::ui;
 use fffinder_core::terminals::{self, CUSTOM, Platform, Terminal};
 use fffinder_core::{Appearance, FileEntry, SearchCase, config};
 use gpui_kit::assets::IconName as Lucide;
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
@@ -871,37 +871,6 @@ impl Finder {
         self.add_smart_folder(folder, cx);
         window.push_notification(format!("Saved “{name}” in the sidebar"), cx);
         true
-    }
-
-    pub(super) fn confirm_trash(
-        &mut self,
-        entries: Vec<FileEntry>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_before_dialog(window, cx);
-        let count = entries.len();
-        let title = if count == 1 {
-            format!("Move “{}” to the Trash?", entries[0].name)
-        } else {
-            format!("Move {count} items to the Trash?")
-        };
-        let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
-        let view = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let paths = paths.clone();
-            let view = view.clone();
-            alert
-                .confirm()
-                .title(title.clone())
-                .description("You can restore items from the Trash.")
-                .ok_text("Move to Trash")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, window, cx| {
-                    view.update(cx, |this, cx| this.trash_now(paths.clone(), window, cx));
-                    true
-                })
-        });
     }
 
     pub(super) fn search_help(

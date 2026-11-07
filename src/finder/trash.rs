@@ -34,9 +34,13 @@ impl Finder {
             self.put_back(&PutBack, window, cx);
             return;
         }
-        let entries = self.selected_entries();
-        if !entries.is_empty() {
-            self.confirm_trash(entries, window, cx);
+        let paths: Vec<PathBuf> = self
+            .selected_entries()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        if !paths.is_empty() {
+            self.trash_now(paths, window, cx);
         }
     }
 

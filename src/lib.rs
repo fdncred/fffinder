@@ -400,7 +400,7 @@ pub fn window_options(title: SharedString, cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(window_bounds),
         display_id,
-        window_min_size: Some(size(px(900.), px(470.))),
+        window_min_size: Some(size(px(850.), px(470.))),
         titlebar: Some(TitlebarOptions {
             title: Some(title),
             appears_transparent: mac,

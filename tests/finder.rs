@@ -234,11 +234,6 @@ fn file_shortcuts(cx: &mut TestAppContext) {
     ui.press("f2");
     assert!(ui.dialog_open());
     ui.press("escape");
-    for key in [cmd("backspace"), "delete".to_string()] {
-        ui.press(&key);
-        assert!(ui.dialog_open(), "{key} asks before trashing");
-        ui.press("escape");
-    }
     ui.press("space");
     assert!(ui.read(|f| f.quick_look_is_open()));
     ui.press(&cmd("y"));

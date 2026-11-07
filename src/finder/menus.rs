@@ -4,7 +4,6 @@ use super::Finder;
 use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
-use fffinder_core::ViewMode;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IconName;
@@ -468,18 +467,7 @@ pub fn background_menu(
         })
         .item(PopupMenuItem::new("Select All").action(Box::new(SelectAll)));
     menu.submenu("View", window, cx, move |menu, window, _| {
-        ViewMode::ALL.into_iter().fold(menu, |menu, option| {
-            menu.item(
-                PopupMenuItem::new(format!("as {}", option.title()))
-                    .checked(option == mode)
-                    .on_click(window.listener_for(
-                        &view_as,
-                        move |this: &mut Finder, _: &ClickEvent, _, cx| {
-                            this.set_view_mode(option, cx)
-                        },
-                    )),
-            )
-        })
+        super::toolbar::view_mode_items(&view_as, menu, mode, window)
     })
     .submenu("Sort By", window, cx, move |menu, window, cx| {
         super::toolbar::sort_key_items(&sort_by, menu, window, cx)
