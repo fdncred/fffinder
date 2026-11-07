@@ -154,6 +154,14 @@ impl Selection {
         self.cursor = Some(ix);
     }
 
+    /// Select exactly `items`, leaving the cursor on the last one and the
+    /// anchor on the first, as a drag across them would.
+    pub fn select_items(&mut self, items: BTreeSet<usize>) {
+        self.anchor = items.first().copied();
+        self.cursor = items.last().copied();
+        self.items = items;
+    }
+
     pub fn select_all(&mut self, len: usize) {
         self.items = (0..len).collect();
         if len > 0 {
@@ -213,6 +221,23 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selecting_a_set_of_items_runs_from_the_first_to_the_last() {
+        let mut selection = Selection::default();
+
+        selection.select_items([2, 5, 7].into_iter().collect());
+
+        assert_eq!(selection.indices().collect::<Vec<_>>(), [2, 5, 7]);
+        assert_eq!(selection.cursor(), Some(7));
+        // Shift+click starts again from the first of them.
+        selection.extend_to(3);
+        assert_eq!(selection.indices().collect::<Vec<_>>(), [2, 3]);
+
+        selection.select_items(Default::default());
+        assert!(selection.is_empty());
+        assert_eq!(selection.cursor(), None);
+    }
 
     #[test]
     fn history_back_forward() {

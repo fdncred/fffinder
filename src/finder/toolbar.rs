@@ -18,6 +18,12 @@ use gpui_kit::*;
 use std::cell::Cell;
 
 pub const TOOLBAR_HEIGHT: f32 = 52.;
+/// The narrowest the search field gets, in points.
+const SEARCH_MIN_WIDTH: f32 = 120.;
+/// What the toolbar needs with its title gone and the search field at its
+/// narrowest, in points. The sidebar and the window's smallest size leave it
+/// this much.
+pub const TOOLBAR_MIN_WIDTH: f32 = 620. + SEARCH_MIN_WIDTH;
 /// Room for the macOS traffic lights when they sit over this view.
 pub const TRAFFIC_LIGHTS: f32 = 78.;
 
@@ -276,7 +282,7 @@ impl Finder {
         let search = h_flex()
             .w(ui(250.))
             // Narrows before the toolbar overflows the window.
-            .min_w(ui(160.))
+            .min_w(ui(SEARCH_MIN_WIDTH))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             // Down arrow moves from the search field into the results.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -332,7 +338,7 @@ impl Finder {
                 .child(
                     div()
                         .flex_1()
-                        .min_w(ui(60.))
+                        .min_w_0()
                         .pl(ui(4.))
                         .text_size(ui(15.))
                         .font_weight(FontWeight::BOLD)
@@ -351,23 +357,20 @@ impl Finder {
     }
 }
 
-fn sort_menu(
+/// The sort keys and the two directions, for a menu that lists them.
+pub(super) fn sort_key_items(
     view: &Entity<Finder>,
-    menu: PopupMenu,
+    mut menu: PopupMenu,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let finder = view.read(cx);
     let sort = finder.current_sort();
-    let searching = finder.is_searching();
-    let hidden = finder.config.show_hidden;
-    let folders_first = finder.config.folders_first;
     let mut keys: Vec<SortKey> = Vec::new();
-    if searching {
+    if finder.is_searching() {
         keys.push(SortKey::Relevance);
     }
     keys.extend(SortKey::BROWSE);
-    let mut menu = menu.label("Sort By");
     for key in keys {
         menu = menu.item(
             PopupMenuItem::new(key.label())
@@ -400,6 +403,18 @@ fn sort_menu(
                     }),
                 ),
         )
+}
+
+fn sort_menu(
+    view: &Entity<Finder>,
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let finder = view.read(cx);
+    let hidden = finder.config.show_hidden;
+    let folders_first = finder.config.folders_first;
+    sort_key_items(view, menu.label("Sort By"), window, cx)
         .separator()
         .item(
             PopupMenuItem::new("Keep Folders on Top")

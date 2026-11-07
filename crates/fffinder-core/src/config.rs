@@ -136,6 +136,18 @@ pub struct ColumnSetting {
 
 /// The narrowest a list column can be dragged.
 pub const MIN_COLUMN_WIDTH: f32 = 50.;
+/// The narrowest the list's Name column can be dragged.
+pub const MIN_NAME_WIDTH: f32 = 80.;
+/// The list's Folder column (Match, Original Folder) before the user drags it.
+pub const DEFAULT_PARENT_COLUMN_WIDTH: f32 = 220.;
+/// Each pane of the column view before the user drags one.
+pub const DEFAULT_COLUMN_VIEW_WIDTH: f32 = 235.;
+/// The narrowest and widest a pane of the column view can be dragged.
+pub const COLUMN_VIEW_WIDTH_RANGE: (f32, f32) = (120., 800.);
+/// The sidebar before the user drags it.
+pub const DEFAULT_SIDEBAR_WIDTH: f32 = 212.;
+/// The narrowest and widest the sidebar can be dragged.
+pub const SIDEBAR_WIDTH_RANGE: (f32, f32) = (140., 420.);
 
 pub fn default_list_columns() -> Vec<ColumnSetting> {
     [ListColumn::Modified, ListColumn::Size, ListColumn::Kind]
@@ -176,6 +188,15 @@ pub struct Config {
     pub group_by: GroupKey,
     /// The list view's columns after Name, in order, with their widths.
     pub list_columns: Vec<ColumnSetting>,
+    /// The list's Name column in points; `None` fills the room the other
+    /// columns leave, until the user drags its edge.
+    pub name_column_width: Option<f32>,
+    /// The list's Folder column in points, shown for search results.
+    pub parent_column_width: f32,
+    /// How wide a new pane of the column view opens, in points.
+    pub column_view_width: f32,
+    /// The sidebar's width in points.
+    pub sidebar_width: f32,
     /// Show folder sizes, added up from the index ("Calculate All Sizes").
     pub folder_sizes: bool,
     /// Servers connected to with Connect to Server, newest first.
@@ -232,6 +253,10 @@ impl Default for Config {
             use_groups: false,
             group_by: GroupKey::default(),
             list_columns: default_list_columns(),
+            name_column_width: None,
+            parent_column_width: DEFAULT_PARENT_COLUMN_WIDTH,
+            column_view_width: DEFAULT_COLUMN_VIEW_WIDTH,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             folder_sizes: true,
             recent_servers: Vec::new(),
             icon_size: 64.0,
@@ -402,6 +427,61 @@ pub fn config_path() -> PathBuf {
     config_dir().join("settings.json")
 }
 
+/// Write `text` to `path` and then rename it into place, so a crash never
+/// leaves a truncated file.
+fn write_file(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(tmp, path)
+}
+
+/// Where the last browser window was, so the next one opens there. It's kept
+/// apart from [`Config`] because every browser saves its own copy of that,
+/// and a window moves far more often than its settings change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowPlacement {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub maximized: bool,
+    /// The display it was on, by the name the system gives it for good.
+    pub display: Option<String>,
+}
+
+impl WindowPlacement {
+    /// The saved placement, or `None` if there is none yet or it can't be read.
+    pub fn load() -> Option<WindowPlacement> {
+        Self::load_from(&window_placement_path())
+    }
+
+    fn load_from(path: &Path) -> Option<WindowPlacement> {
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    /// Save the placement for the next window.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error if the file can't be written.
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&window_placement_path())
+    }
+
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        write_file(path, &text)
+    }
+}
+
+fn window_placement_path() -> PathBuf {
+    config_dir().join("window.json")
+}
+
 impl Config {
     /// Load settings; missing or malformed files fall back to defaults.
     pub fn load() -> Config {
@@ -476,6 +556,24 @@ impl Config {
         in_range(self.ui_scale, UI_SCALE_RANGE, 1.0)
     }
 
+    /// The sidebar's width, kept in range even if the file was edited by hand.
+    pub fn sidebar_width(&self) -> f32 {
+        in_range(
+            self.sidebar_width,
+            SIDEBAR_WIDTH_RANGE,
+            DEFAULT_SIDEBAR_WIDTH,
+        )
+    }
+
+    /// How wide a new pane of the column view opens, kept in range.
+    pub fn column_view_width(&self) -> f32 {
+        in_range(
+            self.column_view_width,
+            COLUMN_VIEW_WIDTH_RANGE,
+            DEFAULT_COLUMN_VIEW_WIDTH,
+        )
+    }
+
     /// This operating system's terminal setting.
     pub fn terminal_setting(&self) -> TerminalSetting {
         self.terminals
@@ -498,14 +596,8 @@ impl Config {
     }
 
     pub fn save_to(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        // Write then rename, so a crash never leaves a truncated file.
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text)?;
-        std::fs::rename(tmp, path)
+        write_file(path, &text)
     }
 }
 
@@ -540,6 +632,38 @@ mod tests {
         cfg.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path), cfg);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn window_placement_round_trips() {
+        let path = std::env::temp_dir().join(format!("fffinder-win-{}.json", std::process::id()));
+        let placement = WindowPlacement {
+            x: 40.,
+            y: 60.,
+            width: 1300.,
+            height: 800.,
+            maximized: false,
+            display: Some("a-display".into()),
+        };
+
+        placement.save_to(&path).unwrap();
+
+        assert_eq!(WindowPlacement::load_from(&path), Some(placement));
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(WindowPlacement::load_from(&path), None);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn widths_edited_by_hand_stay_in_range() {
+        let config = Config {
+            sidebar_width: 9000.,
+            column_view_width: f32::NAN,
+            ..Default::default()
+        };
+
+        assert_eq!(config.sidebar_width(), SIDEBAR_WIDTH_RANGE.1);
+        assert_eq!(config.column_view_width(), DEFAULT_COLUMN_VIEW_WIDTH);
     }
 
     #[test]

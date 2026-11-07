@@ -5,6 +5,7 @@
 
 use crate::finder::{Finder, PickerOptions};
 use crate::model::Location;
+use fffinder_core::config::WindowPlacement;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -14,6 +15,10 @@ pub struct Workspace {
     active: usize,
     /// The other pane, while split view is on.
     split: Option<Entity<Finder>>,
+    /// Remembers the window's place as it moves; a file chooser's doesn't count.
+    _bounds_watch: Option<Subscription>,
+    /// Saves the window's place once it stops moving.
+    placement_task: Task<()>,
 }
 
 /// What a new browser in this window starts with.
@@ -44,12 +49,49 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Workspace {
         let host = cx.entity().downgrade();
+        crate::register_window(window.window_handle(), host.clone(), cx);
         let first = new_finder(start, query, picker, host, window, cx);
+        let watches_bounds = picker.is_none() && !crate::term::active();
         Workspace {
             tabs: vec![first],
             active: 0,
             split: None,
+            _bounds_watch: watches_bounds
+                .then(|| cx.observe_window_bounds(window, Self::remember_placement)),
+            placement_task: Task::ready(()),
         }
+    }
+
+    /// The window moved or changed size: save that for the next window.
+    fn remember_placement(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.active().read(cx).persists() {
+            return;
+        }
+        let state = window.window_bounds();
+        let bounds = state.get_bounds();
+        let display = window
+            .display(cx)
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string());
+        let placement = WindowPlacement {
+            x: bounds.origin.x.into(),
+            y: bounds.origin.y.into(),
+            width: bounds.size.width.into(),
+            height: bounds.size.height.into(),
+            maximized: matches!(state, WindowBounds::Maximized(_)),
+            display,
+        };
+        self.placement_task = cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            cx.background_spawn(async move {
+                if let Err(err) = placement.save() {
+                    log::warn!("saving the window's place: {err}");
+                }
+            })
+            .await;
+        });
     }
 
     /// The browser the window shows in its main pane.

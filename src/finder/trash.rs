@@ -18,6 +18,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _, h_flex,
 };
 use gpui_kit::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 impl Finder {
@@ -52,8 +53,10 @@ impl Finder {
         let bin = trash_bin::bin(cx);
         let paths = ops::outermost(&paths);
         cx.spawn_in(window, async move |this, cx| {
+            let gone = paths.clone();
             let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
             this.update_in(cx, |this, window, cx| {
+                let next = item_after(&this.rows, &gone);
                 this.selection.clear();
                 // What went before a failure can still be put back.
                 let (trashed, failed) = match result {
@@ -70,7 +73,7 @@ impl Finder {
                         cx,
                     );
                 }
-                this.files_changed(Vec::new(), cx);
+                this.files_changed(next.into_iter().collect(), cx);
             })
             .ok();
         })
@@ -191,8 +194,10 @@ impl Finder {
                 if let Err(err) = result {
                     window.push_notification((NotificationType::Error, err.to_string()), cx);
                 }
+                let selected = this.selected_entries().into_iter().map(|e| e.path);
+                let next = item_after(&this.rows, &selected.collect::<Vec<_>>());
                 this.selection.clear();
-                this.files_changed(Vec::new(), cx);
+                this.files_changed(next.into_iter().collect(), cx);
             })
             .ok();
         })
@@ -302,10 +307,13 @@ impl Finder {
     /// Items changed on disk: reload the view, keep only search results
     /// that still exist, and select `select` where it shows.
     pub(super) fn files_changed(&mut self, select: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let here: Vec<PathBuf> = select
-            .into_iter()
-            .filter(|p| p.parent() == self.current_folder())
-            .collect();
+        // Search results come from anywhere, and so do open folders' items.
+        let shows = |path: &PathBuf| {
+            self.is_searching()
+                || path.parent() == self.current_folder()
+                || path.parent().is_some_and(|dir| self.expanded.contains(dir))
+        };
+        let here: Vec<PathBuf> = select.into_iter().filter(shows).collect();
         self.load_listing(here, true, cx);
         if self.is_searching() {
             self.results.retain(|r| r.entry.path.exists());
@@ -349,6 +357,20 @@ pub(super) fn trash_drop_target<E: InteractiveElement>(el: E, cx: &mut Context<F
         .on_drop(cx.listener(|this, files: &DraggedFiles, window, cx| {
             this.trash_now(files.0.clone(), window, cx)
         }))
+}
+
+/// The item to select once `gone` have left the list: the first after the
+/// last of them, or else the nearest before. An item inside a folder that's
+/// going goes with it.
+fn item_after(rows: &[super::Row], gone: &[PathBuf]) -> Option<PathBuf> {
+    let gone: HashSet<&Path> = gone.iter().map(PathBuf::as_path).collect();
+    let is_gone = |row: &super::Row| row.entry.path.ancestors().any(|dir| gone.contains(dir));
+    let last = rows.iter().rposition(is_gone)?;
+    rows[last + 1..]
+        .iter()
+        .chain(rows[..last].iter().rev())
+        .find(|row| !is_gone(row))
+        .map(|row| row.entry.path.clone())
 }
 
 /// The folder an item in the Trash came from, as the list shows it.

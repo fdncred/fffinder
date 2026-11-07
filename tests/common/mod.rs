@@ -435,6 +435,109 @@ impl<'a> Ui<'a> {
         self.settle();
     }
 
+    /// Rest the mouse on `id`, long enough for a tooltip to show.
+    pub fn hover(&mut self, id: impl Into<ElementId>) {
+        let position = self.snapshot(id).bounds().center();
+        self.hover_point(position);
+    }
+
+    /// Rest the mouse at `position`, long enough for a tooltip to show.
+    pub fn hover_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("hover {position:?}"), |window, cx| {
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Scroll with the mouse over `id`, by `delta` points.
+    pub fn scroll(&mut self, id: impl Into<ElementId>, delta: Point<Pixels>) {
+        let id = id.into();
+        let position = self.snapshot(id.clone()).bounds().center();
+        self.step(format!("scroll {id:?}"), |window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(delta),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                    source: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// Drag `id` sideways by `dx` points.
+    pub fn drag_by(&mut self, id: impl Into<ElementId>, dx: f32) {
+        let start = self.snapshot(id).bounds().center();
+        self.drag_points(start, start + point(px(dx), px(0.)), Default::default());
+    }
+
+    /// Press the left button at `start`, drag to `end`, and let go.
+    pub fn drag_points(
+        &mut self,
+        start: Point<Pixels>,
+        end: Point<Pixels>,
+        modifiers: gpui_kit::Modifiers,
+    ) {
+        self.step(format!("drag from {start:?} to {end:?}"), |window, cx| {
+            press_and_move(window, cx, start, end, modifiers);
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: end,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
+    /// Press the left button at `start` and drag to `end` without letting go.
+    pub fn drag_and_hold(&mut self, start: Point<Pixels>, end: Point<Pixels>) {
+        self.step(format!("hold from {start:?} to {end:?}"), |window, cx| {
+            press_and_move(window, cx, start, end, Default::default());
+        });
+    }
+
+    /// Right-click at `position`.
+    pub fn right_click_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("right-click {position:?}"), |window, cx| {
+            click_point(window, position, MouseButton::Right, cx)
+        });
+    }
+
+    /// Double-click `id` with `modifiers` held.
+    pub fn double_click_with(&mut self, id: impl Into<ElementId>, modifiers: gpui_kit::Modifiers) {
+        let id = id.into();
+        self.step(format!("double-click {id:?}"), |window, cx| {
+            let options = gpui_kit::test::ClickOptions::new()
+                .with_count(2)
+                .with_modifiers(modifiers);
+            window.click_with_options(id, options, cx)
+        });
+    }
+
+    /// Click `button` on the middle of `id`.
+    pub fn click_with(&mut self, button: MouseButton, id: impl Into<ElementId>) {
+        let id = id.into();
+        let position = self.snapshot(id.clone()).bounds().center();
+        self.step(format!("click {id:?} with {button:?}"), |window, cx| {
+            click_point(window, position, button, cx)
+        });
+    }
+
     pub fn snapshot(&mut self, id: impl Into<ElementId>) -> ElementSnapshot {
         let id = id.into();
         self.window(|window, cx| {
@@ -597,6 +700,49 @@ fn click_point(window: &mut Window, position: Point<Pixels>, button: MouseButton
         .to_platform_input(),
         cx,
     );
+    window.render_frame(cx);
+}
+
+/// Move to `start`, press the left button, and drag to `end`, with a frame
+/// between each step so the window sees each one as a person would.
+fn press_and_move(
+    window: &mut Window,
+    cx: &mut App,
+    start: Point<Pixels>,
+    end: Point<Pixels>,
+    modifiers: gpui_kit::Modifiers,
+) {
+    let pressed = Some(MouseButton::Left);
+    let moves = [
+        (start, None),
+        (start + point(px(5.), px(0.)), pressed),
+        (end, pressed),
+    ];
+    for (ix, (position, pressed_button)) in moves.into_iter().enumerate() {
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseMoveEvent {
+                position,
+                pressed_button,
+                modifiers,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        if ix == 0 {
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        }
+    }
     window.render_frame(cx);
 }
 

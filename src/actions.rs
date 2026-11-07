@@ -52,6 +52,10 @@ actions!(
         ExtendRight,
         MoveHome,
         MoveEnd,
+        ExtendHome,
+        ExtendEnd,
+        ExtendPageUp,
+        ExtendPageDown,
         CopyPath,
         CopyAsNuon,
         MoveItemsHere,
@@ -90,6 +94,9 @@ pub const FINDER: &str = "Finder";
 /// Key context of the file views; arrows, Space and Return only apply here
 /// so they keep working normally in text fields.
 pub const FILES: &str = "FinderFiles";
+/// [`FILES`], in a window with no second pane, where F5 refreshes as it does
+/// in other file managers instead of copying across.
+pub const FILES_ONE_PANE: &str = "FinderFiles OnePane";
 /// Key context of the Quick Look preview, so Space closes it and the arrows
 /// move through the items.
 pub const QUICK_LOOK: &str = "QuickLook";
@@ -98,6 +105,7 @@ pub fn bind_keys(cx: &mut App) {
     let finder = context(FINDER);
     let files = context(FILES);
     let quick_look = context(QUICK_LOOK);
+    let one_pane = context("FinderFiles && OnePane");
     let bindings = [
         key("secondary-q", Quit, &None, cx),
         key("secondary-,", ShowSettings, &None, cx),
@@ -114,6 +122,8 @@ pub fn bind_keys(cx: &mut App) {
         key("secondary-]", GoForward, &finder, cx),
         key("alt-left", GoBack, &finder, cx),
         key("alt-right", GoForward, &finder, cx),
+        // The menu bar shows an action's last binding, so these two go first.
+        key("alt-up", GoUp, &finder, cx),
         key("secondary-up", GoUp, &finder, cx),
         key("secondary-shift-h", GoHome, &finder, cx),
         key("secondary-shift-f", GoRecents, &finder, cx),
@@ -124,6 +134,8 @@ pub fn bind_keys(cx: &mut App) {
         key("secondary-3", ViewColumns, &finder, cx),
         key("secondary-4", ViewGallery, &finder, cx),
         key("secondary-shift-.", ToggleHidden, &finder, cx),
+        key("f5", CopyToOtherPane, &files, cx),
+        key("f5", Refresh, &one_pane, cx),
         key("secondary-r", Refresh, &finder, cx),
         key("secondary-alt-s", ToggleSidebar, &finder, cx),
         key("secondary-shift-n", NewFolder, &finder, cx),
@@ -148,6 +160,10 @@ pub fn bind_keys(cx: &mut App) {
         key("shift-right", ExtendRight, &files, cx),
         key("home", MoveHome, &files, cx),
         key("end", MoveEnd, &files, cx),
+        key("shift-home", ExtendHome, &files, cx),
+        key("shift-end", ExtendEnd, &files, cx),
+        key("shift-pageup", ExtendPageUp, &files, cx),
+        key("shift-pagedown", ExtendPageDown, &files, cx),
         key("enter", OpenSelected, &files, cx),
         key("secondary-down", OpenSelected, &files, cx),
         key("secondary-o", OpenSelected, &files, cx),
@@ -181,7 +197,6 @@ pub fn bind_keys(cx: &mut App) {
         key("secondary-alt-v", MoveItemsHere, &files, cx),
         key("f2", Rename, &files, cx),
         key("secondary-d", Duplicate, &files, cx),
-        key("f5", CopyToOtherPane, &files, cx),
         key("f6", MoveToOtherPane, &files, cx),
         key("secondary-backspace", MoveToTrash, &files, cx),
         key("secondary-alt-backspace", DeleteImmediately, &files, cx),
@@ -201,6 +216,14 @@ pub fn bind_keys(cx: &mut App) {
     };
     cx.bind_keys(bindings);
     cx.bind_keys(aliases);
+    // What Explorer and the Linux file managers use for these.
+    if !cfg!(target_os = "macos") {
+        cx.bind_keys([
+            key("ctrl-l", GoToFolder, &finder, cx),
+            key("alt-enter", GetInfo, &finder, cx),
+            key("shift-delete", DeleteImmediately, &files, cx),
+        ]);
+    }
 }
 
 /// A key context's predicate, parsed once for all of its bindings.

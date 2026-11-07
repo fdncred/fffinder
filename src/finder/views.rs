@@ -1,8 +1,11 @@
 //! The four file views (icons, list, columns, gallery), loading skeletons,
 //! file icons, and dragging files out to other apps.
 
+use super::fit::cut_off_tooltip;
+use super::list::ResizeEdge;
 use super::{Finder, Row};
 use crate::macos::IconLookup;
+use crate::model::Location;
 use crate::theme::{Palette, palette, ui};
 use fffinder_core::{FileEntry, FileKind, ListColumn, SortKey, ViewMode};
 use gpui_kit::TestSupportExt as _;
@@ -22,8 +25,20 @@ use std::rc::Rc;
 
 pub const LIST_ROW: f32 = 24.;
 pub const COLUMN_ROW: f32 = 22.;
-pub const COLUMN_WIDTH: f32 = 235.;
-const GRID_PADDING: f32 = 18.;
+pub(super) const GRID_PADDING: f32 = 18.;
+/// The room around an icon in the icon view, for its selection highlight.
+pub(super) const ICON_PADDING: f32 = 8.;
+/// The list's header, above its rows.
+const LIST_HEADER: f32 = 28.;
+/// The narrowest Name goes while it fills the room other columns leave. The
+/// list scrolls sideways past that.
+const MIN_FILLING_NAME: f32 = 160.;
+/// How far a list column's resize handle reaches into the next column, whose
+/// header stays clear of it so a press there can't also drag or sort that one.
+const HANDLE_REACH: f32 = 4.;
+/// The strip at the right of a column view pane that drags it, which keeps
+/// the pane's scrollbar and the handle out of each other's way.
+pub(super) const PANE_EDGE: f32 = 5.;
 
 /// Files dragged from a view: dropped on the sidebar or exported to other apps.
 #[derive(Clone)]
@@ -50,6 +65,12 @@ impl Render for DragPreview {
             .child(img(self.icon).size(ui(18.)))
             .child(self.label.clone())
     }
+}
+
+/// How wide and tall each item in the icon view is, in points, for icons
+/// `icon_size` points big.
+pub(super) fn tile_size(icon_size: f32) -> (f32, f32) {
+    ((icon_size + 52.).max(96.), icon_size + 58.)
 }
 
 pub fn path_id(path: &std::path::Path) -> usize {
@@ -158,13 +179,24 @@ pub fn redraw_soon() -> impl IntoElement {
     .size_0()
 }
 
+/// Keep to one line, cutting out the middle of a name so its start and its
+/// extension both show, as Finder does.
+pub(super) fn one_line_name<E: Styled>(el: E) -> E {
+    el.overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis_middle()
+}
+
 /// The file name with search matches emphasized.
 fn name_text(row: &Row, selected: bool, pal: &Palette) -> AnyElement {
     let style = row.name_style.as_ref().filter(|_| !selected);
     let match_bg = (!selected).then_some(pal.highlight);
-    div()
-        .truncate()
-        .child(styled_name(&row.name, style, &row.highlights, match_bg))
+    let name = styled_name(&row.name, style, &row.highlights, match_bg);
+    let tooltip = cut_off_tooltip(&name, row.name.clone());
+    one_line_name(div().id("name"))
+        .child(name)
+        .tooltip(tooltip)
+        .test_support()
         .into_any_element()
 }
 
@@ -203,16 +235,9 @@ pub fn styled_name(
 }
 
 impl Finder {
-    /// Shared mouse handling for an item in the icon, list, or gallery views.
-    /// `wrapper` hosts the context menu so the item itself stays observable
-    /// in UI tests.
-    fn item_interactions(
-        &self,
-        el: Stateful<Div>,
-        ix: usize,
-        wrapper: Div,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// Dragging `el` drags item `ix`, with the rest of the selection if it's
+    /// selected, within fffinder and out to other apps.
+    fn item_drag(&self, el: Stateful<Div>, ix: usize) -> Stateful<Div> {
         let row = &self.rows[ix];
         let selected = self.selection.contains(ix);
         let drag_paths: Vec<PathBuf> = if selected {
@@ -229,9 +254,39 @@ impl Finder {
             row.name.clone()
         };
         let icon = row.entry.kind.icon_asset();
+        el.on_drag(DraggedFiles(drag_paths), move |_, _, _, cx| {
+            cx.new(|_| DragPreview {
+                label: label.clone(),
+                icon,
+            })
+        })
+        .external_drag_payload(|files: &DraggedFiles, _, _| {
+            Some(ExternalDragPayload::Files(FileDragPaths::new(
+                files.0.iter().map(|p| (p.clone(), p.is_dir())),
+            )))
+        })
+    }
+
+    /// Shared mouse handling for an item in the icon, list, or gallery views.
+    /// `wrapper` hosts the context menu so the item itself stays observable
+    /// in UI tests.
+    fn item_interactions(
+        &self,
+        el: Stateful<Div>,
+        ix: usize,
+        wrapper: Div,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let row = &self.rows[ix];
         let view = cx.entity();
         let el = if row.entry.is_navigable() {
-            super::transfer::folder_drop_target(el, row.entry.path.clone(), cx)
+            let folder = Location::Folder(row.entry.path.clone());
+            super::transfer::folder_drop_target(el, row.entry.path.clone(), cx).on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    this.open_in_new_tabs(vec![folder.clone()], window, cx)
+                }),
+            )
         } else {
             el
         };
@@ -268,17 +323,6 @@ impl Finder {
                     this.right_click_row(ix, window, cx)
                 }),
             )
-            .on_drag(DraggedFiles(drag_paths), move |_, _, _, cx| {
-                cx.new(|_| DragPreview {
-                    label: label.clone(),
-                    icon,
-                })
-            })
-            .external_drag_payload(|files: &DraggedFiles, _, _| {
-                Some(ExternalDragPayload::Files(FileDragPaths::new(
-                    files.0.iter().map(|p| (p.clone(), p.is_dir())),
-                )))
-            })
             .test_support();
         wrapper
             .id(("item", path_id(&self.rows[ix].entry.path)))
@@ -294,9 +338,7 @@ impl Finder {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let icon = self.config.icon_size;
-        let tile_w = (icon + 52.).max(96.);
-        let tile_h = icon + 58.;
+        let (tile_w, tile_h) = tile_size(self.config.icon_size);
         let sizes = self.icon_layout(tile_h, GRID_PADDING / 2.).sizes.clone();
         let view = cx.entity();
         div()
@@ -329,12 +371,12 @@ impl Finder {
                 .size_full()
                 .track_scroll(&self.grid_scroll),
             )
+            .children(self.render_marquee(cx))
             .vertical_scrollbar(&self.grid_scroll)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    this.focus_files(window, cx);
-                    this.clear_selection(cx);
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.press_in_empty_space(event, window, cx)
                 }),
             )
             .context_menu({
@@ -390,6 +432,13 @@ impl Finder {
         let selected = self.selection.contains(ix);
         let focused_selection = selected;
         let icon = ui(self.config.icon_size);
+        let name = styled_name(
+            &row.name,
+            row.name_style.as_ref().filter(|_| !selected),
+            &[],
+            None,
+        );
+        let tooltip = cut_off_tooltip(&name, row.name.clone());
         let el = v_flex()
             .id(("tile", super::views::path_id(&row.entry.path)))
             .w(ui(tile_w))
@@ -399,7 +448,7 @@ impl Finder {
             .gap(ui(4.))
             .child(
                 div()
-                    .p(ui(4.))
+                    .p(ui(ICON_PADDING / 2.))
                     .rounded(ui(6.))
                     .when(selected, |this| this.bg(pal.tile_selected))
                     .child(file_icon(&row.entry, icon, true, &pal)),
@@ -413,21 +462,18 @@ impl Finder {
                     .text_size(ui(12.))
                     .text_center()
                     .line_clamp(2)
+                    .text_ellipsis()
                     .when(focused_selection, |this| {
                         this.bg(pal.selection).text_color(pal.selection_text)
                     })
                     .when(!selected && row.entry.hidden, |this| {
                         this.text_color(theme.muted_foreground)
                     })
-                    .child(styled_name(
-                        &row.name,
-                        row.name_style.as_ref().filter(|_| !selected),
-                        &[],
-                        None,
-                    )),
+                    .child(name),
             )
+            .tooltip(tooltip)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-        self.item_interactions(el, ix, div(), cx)
+        self.item_interactions(self.item_drag(el, ix), ix, div(), cx)
     }
 
     // ----- list --------------------------------------------------------------
@@ -447,17 +493,13 @@ impl Finder {
         let visible = (f32::from(self.content_height) / row).ceil() as usize;
         let filler = visible.saturating_sub(len + 1);
         let active = self.files_focused(window);
-        let parent_title = if self.search_contents && self.is_searching() {
-            "Match"
-        } else if self.in_trash() {
-            "Original Folder"
-        } else {
-            "Folder"
-        };
+        let parent_title = self.parent_column_title();
+        let parent_sort = self.parent_column_sort();
+        let view = cx.entity();
 
         let header = h_flex()
             .id("list-header")
-            .h(ui(28.))
+            .h(ui(LIST_HEADER))
             .flex_shrink_0()
             .px(ui(10.))
             .border_b_1()
@@ -466,13 +508,27 @@ impl Finder {
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(header_color)
             .child(
-                div().flex_1().min_w(ui(160.)).h_full().child(
-                    self.header_cell("Name", Some(SortKey::Name), false, sort, cx)
-                        .test_support(),
-                ),
+                self.column_header(
+                    ResizeEdge::Name,
+                    "Name",
+                    Some(SortKey::Name),
+                    false,
+                    sort,
+                    cx,
+                )
+                .on_prepaint(move |bounds, _, cx| {
+                    view.update(cx, |this, _| this.name_column_shown = bounds.size.width);
+                }),
             )
             .when(searching, |this| {
-                this.child(div().w(ui(220.)).px(ui(6.)).child(parent_title))
+                this.child(self.column_header(
+                    ResizeEdge::Parent,
+                    parent_title,
+                    parent_sort,
+                    false,
+                    sort,
+                    cx,
+                ))
             })
             .children(
                 self.config
@@ -480,20 +536,24 @@ impl Finder {
                     .clone()
                     .into_iter()
                     .enumerate()
-                    .map(|(ix, setting)| self.column_header(ix, setting, sort, cx)),
+                    .map(|(ix, setting)| {
+                        let column = setting.column;
+                        self.column_header(
+                            ResizeEdge::Column(ix),
+                            column.title(),
+                            column.sort_key(),
+                            column == ListColumn::Size,
+                            sort,
+                            cx,
+                        )
+                    }),
             )
-            .on_drag_move(cx.listener(
-                |this, event: &DragMoveEvent<super::list::ColumnResize>, _, cx| {
-                    let ix = event.drag(cx).0;
-                    this.resize_column(ix, event.event.position.x, cx);
-                },
-            ))
             .context_menu({
                 let view = cx.entity();
                 move |menu, window, cx| super::list::header_menu(&view, menu, window, cx)
             });
 
-        let body = uniform_list(
+        let mut body = uniform_list(
             "list",
             len + filler,
             cx.processor(move |this: &mut Self, range: Range<usize>, _, cx| {
@@ -513,30 +573,89 @@ impl Finder {
         .flex_1()
         .size_full()
         .track_scroll(&self.list_scroll);
+        // A sideways swipe moves the scroller around this, not this.
+        body.style().restrict_scroll_to_axis = Some(true);
 
-        v_flex().size_full().child(header).child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .relative()
-                .child(body)
-                .vertical_scrollbar(&self.list_scroll)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                        this.focus_files(window, cx);
-                        this.clear_selection(cx);
+        // The header and rows scroll sideways together when the columns are
+        // wider than the view. The rows scroll up and down inside that.
+        let columns = v_flex()
+            .h_full()
+            .min_w_full()
+            .w(ui(self.list_columns_width(searching)))
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(body)
+                    .children(self.render_marquee(cx))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.press_in_empty_space(event, window, cx)
+                        }),
+                    )
+                    .context_menu({
+                        let view = cx.entity();
+                        move |menu, window, cx| {
+                            super::menus::background_menu(&view, menu, window, cx)
+                        }
                     }),
-                )
-                .context_menu({
-                    let view = cx.entity();
-                    move |menu, window, cx| super::menus::background_menu(&view, menu, window, cx)
-                }),
-        )
+            );
+        div()
+            .size_full()
+            .relative()
+            .child(
+                div()
+                    .id("list-columns")
+                    .size_full()
+                    .overflow_x_scroll()
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&self.list_sideways)
+                    .child(columns)
+                    .test_support(),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(ui(LIST_HEADER))
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .vertical_scrollbar(&self.list_scroll),
+            )
+            .horizontal_scrollbar(&self.list_sideways)
+    }
+
+    /// The room the list's columns need, in points; past the view's width,
+    /// it scrolls sideways.
+    fn list_columns_width(&self, searching: bool) -> f32 {
+        let name = self
+            .edge_width(ResizeEdge::Name)
+            .unwrap_or(MIN_FILLING_NAME);
+        let parent = if searching {
+            self.config.parent_column_width
+        } else {
+            0.
+        };
+        let columns: f32 = self.config.list_columns.iter().map(|c| c.width).sum();
+        // The rows' padding on each side.
+        name + parent + columns + 20.
+    }
+
+    /// A column's place in a row: its width, or for Name until it's been
+    /// dragged, the room the other columns leave.
+    fn column_frame<E: Styled>(&self, edge: ResizeEdge, el: E) -> E {
+        match self.edge_width(edge) {
+            Some(width) => el.w(ui(width)).flex_shrink_0(),
+            None => el.flex_1().min_w(ui(MIN_FILLING_NAME)),
+        }
     }
 
     /// A header label that sorts by `key` when clicked, with an arrow when
-    /// the list is sorted by it.
+    /// the list is sorted by it, and all of its title in a tooltip when it's
+    /// cut off.
     fn header_cell(
         &self,
         label: &'static str,
@@ -546,14 +665,18 @@ impl Finder {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let sorted = key == Some(sort.key);
+        let title = StyledText::new(label);
+        let tooltip = cut_off_tooltip(&title, label.into());
         h_flex()
             .id(label)
             .size_full()
-            .px(ui(6.))
+            .pl(ui(6. - HANDLE_REACH))
+            .pr(ui(6.))
             .gap(ui(4.))
             .when(right, |this| this.justify_end())
             .hover(|s| s.bg(cx.theme().list_hover))
-            .child(div().truncate().child(label))
+            .child(div().truncate().child(title))
+            .tooltip(tooltip)
             .when(sorted, |this| {
                 this.child(
                     Icon::new(if sort.ascending {
@@ -571,64 +694,57 @@ impl Finder {
             })
     }
 
-    /// One column's header: drag it onto another to move it, or drag its
-    /// right edge to resize it.
+    /// One column's header, with a line at its right edge to drag or to
+    /// double-click. Drag the other columns' headers onto each other to move
+    /// them; Name stays first, and Folder stays beside it.
     fn column_header(
         &self,
-        ix: usize,
-        setting: fffinder_core::ColumnSetting,
+        edge: ResizeEdge,
+        title: &'static str,
+        key: Option<SortKey>,
+        right: bool,
         sort: fffinder_core::SortOrder,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let column = setting.column;
-        let title = column.title();
-        let highlight = cx.theme().drop_target;
-        let cell = self
-            .header_cell(
-                title,
-                column.sort_key(),
-                column == ListColumn::Size,
-                sort,
-                cx,
-            )
-            .on_drag(super::list::ColumnMove(ix), move |_, _, _, cx| {
-                cx.new(|_| super::list::ColumnPreview(title.into()))
-            })
-            .drag_over::<super::list::ColumnMove>(move |style, _, _, _| style.bg(highlight))
-            .on_drop(
-                cx.listener(move |this, moved: &super::list::ColumnMove, _, cx| {
-                    this.move_column(moved.0, ix, cx)
-                }),
-            )
-            .test_support();
-        let handle = div()
-            .id(SharedString::from(format!("resize-{title}")))
+    ) -> Div {
+        let theme = cx.theme();
+        let (highlight, line) = (theme.drop_target, theme.border);
+        let cell = self.header_cell(title, key, right, sort, cx);
+        let cell = match edge {
+            ResizeEdge::Column(ix) => cell
+                .on_drag(super::list::ColumnMove(ix), move |_, _, _, cx| {
+                    cx.new(|_| super::list::ColumnPreview(title.into()))
+                })
+                .drag_over::<super::list::ColumnMove>(move |style, _, _, _| style.bg(highlight))
+                .on_drop(
+                    cx.listener(move |this, moved: &super::list::ColumnMove, _, cx| {
+                        this.move_column(moved.0, ix, cx)
+                    }),
+                ),
+            _ => cell,
+        };
+        let handle = self
+            .resize_handle(SharedString::from(format!("resize-{title}")), edge, cx)
             .absolute()
             .top_0()
-            .right_0()
             .h_full()
-            .w(ui(6.))
-            .cursor(CursorStyle::ResizeLeftRight)
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.start_column_resize(ix, event.position.x);
-                }),
-            )
-            .on_drag(super::list::ColumnResize(ix), |_, _, _, cx| {
-                cx.new(|_| EmptyView)
-            })
+            .right(ui(-HANDLE_REACH))
+            .w(ui(HANDLE_REACH * 2.))
             .test_support();
-        div()
+        self.column_frame(edge, div())
             .relative()
-            .w(ui(setting.width))
             .h_full()
-            .flex_shrink_0()
-            .child(cell)
+            .pl(ui(HANDLE_REACH))
+            .child(cell.test_support())
+            .child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top(ui(6.))
+                    .bottom(ui(6.))
+                    .w(px(1.))
+                    .bg(line),
+            )
             .child(handle)
-            .into_any_element()
     }
 
     /// A list row's frame: rounded, and striped every other row.
@@ -649,6 +765,21 @@ impl Finder {
             .px(ui(8.))
             .child(Self::list_row_base(line % 2 == 1, cx).id(("filler", line)))
             .into_any_element()
+    }
+
+    /// A list cell that cuts its text short to fit, with all of it in a
+    /// tooltip when it does.
+    fn list_cell(id: impl Into<ElementId>, text: SharedString, width: f32) -> Stateful<Div> {
+        let shown = StyledText::new(text.clone());
+        let tooltip = cut_off_tooltip(&shown, text);
+        div()
+            .id(id)
+            .w(ui(width))
+            .flex_shrink_0()
+            .px(ui(6.))
+            .truncate()
+            .child(shown)
+            .tooltip(tooltip)
     }
 
     fn render_list_row(
@@ -699,30 +830,24 @@ impl Finder {
                 .test_support()
                 .into_any_element()
         });
-        let cells = self.config.list_columns.iter().map(|setting| {
-            let text = match setting.column {
-                ListColumn::Modified => row.date.clone(),
-                ListColumn::Created => row.created(),
-                ListColumn::LastOpened => row.opened(),
-                ListColumn::Size => row.size.clone(),
-                ListColumn::Kind => row.kind.clone(),
-                ListColumn::Permissions => row.permissions(),
-                ListColumn::Git => row.git.clone(),
-            };
-            div()
-                .w(ui(setting.width))
-                .flex_shrink_0()
-                .px(ui(6.))
-                .truncate()
+        let cells = self
+            .config
+            .list_columns
+            .iter()
+            .enumerate()
+            .map(|(cell, setting)| {
+                Self::list_cell(
+                    ("cell", cell),
+                    row.column_text(setting.column),
+                    setting.width,
+                )
                 .text_color(muted)
-                .when(setting.column == ListColumn::Size, |this| {
-                    this.flex().justify_end()
-                })
+                .when(setting.column == ListColumn::Size, |this| this.text_right())
                 .when(setting.column == ListColumn::Permissions, |this| {
                     this.font_family(theme.mono_font_family.clone())
                 })
-                .child(text)
-        });
+                .test_support()
+            });
         let el = base
             .id(("row", super::views::path_id(&row.entry.path)))
             .text_color(fg)
@@ -733,29 +858,53 @@ impl Finder {
                     pal.selection_inactive
                 })
             })
+            // Name drags the item. The rest of the row starts a box, as
+            // Finder's and Explorer's do; it's how to start one in a full list.
+            .child(
+                self.item_drag(
+                    self.column_frame(ResizeEdge::Name, h_flex())
+                        .id(("name-cell", path_id(&row.entry.path))),
+                    ix,
+                )
+                .gap(ui(6.))
+                .pl(ui(6. + 16. * row.depth as f32))
+                .pr(ui(6.))
+                .overflow_hidden()
+                .children(disclosure)
+                .child(file_icon(&row.entry, ui(16.), false, &pal))
+                .child(name_text(row, selected, &pal))
+                .test_support(),
+            )
             .child(
                 h_flex()
-                    .flex_1()
-                    .min_w(ui(160.))
-                    .gap(ui(6.))
-                    .pl(ui(6. + 16. * row.depth as f32))
-                    .pr(ui(6.))
-                    .overflow_hidden()
-                    .children(disclosure)
-                    .child(file_icon(&row.entry, ui(16.), false, &pal))
-                    .child(name_text(row, selected, &pal)),
+                    .h_full()
+                    .flex_shrink_0()
+                    .when(self.config.name_column_width.is_some(), |this| {
+                        this.flex_1()
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.begin_marquee(event, cx)
+                        }),
+                    )
+                    .when(searching, |this| {
+                        // A folder's two ends say the most; a matching line
+                        // reads from its start.
+                        let contents = self.parent_column_shows_match();
+                        this.child(
+                            Self::list_cell(
+                                "parent",
+                                row.detail.clone(),
+                                self.config.parent_column_width,
+                            )
+                            .text_color(muted)
+                            .when(!contents, |this| this.text_ellipsis_middle())
+                            .test_support(),
+                        )
+                    })
+                    .children(cells),
             )
-            .when(searching, |this| {
-                this.child(
-                    div()
-                        .w(ui(220.))
-                        .px(ui(6.))
-                        .truncate()
-                        .text_color(muted)
-                        .child(row.detail.clone()),
-                )
-            })
-            .children(cells)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         self.item_interactions(el, ix, div().w_full().px(ui(8.)), cx)
     }
@@ -791,18 +940,35 @@ impl Finder {
             )
             .size_full()
             .track_scroll(&self.columns[col].scroll);
-            let pane = div()
+            let pane = h_flex()
                 .id(("column-pane", col))
-                .w(ui(COLUMN_WIDTH))
+                .w(ui(self.columns[col].width))
                 .h_full()
                 .flex_shrink_0()
-                .relative()
-                .border_r_1()
-                .border_color(border)
-                .py(ui(4.))
-                .child(list)
-                .vertical_scrollbar(&self.columns[col].scroll);
-            panes.push(super::transfer::folder_drop_target(pane, dir, cx).into_any_element());
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .relative()
+                        .py(ui(4.))
+                        .child(list)
+                        .vertical_scrollbar(&self.columns[col].scroll),
+                )
+                .child(
+                    self.resize_handle(("resize-pane", col), ResizeEdge::Pane(col), cx)
+                        .w(ui(PANE_EDGE))
+                        .h_full()
+                        .flex_shrink_0()
+                        .border_r_1()
+                        .border_color(border)
+                        .test_support(),
+                );
+            panes.push(
+                super::transfer::folder_drop_target(pane, dir, cx)
+                    .test_support()
+                    .into_any_element(),
+            );
         }
         if let Some(entry) = leaf {
             panes.push(
@@ -853,6 +1019,18 @@ impl Finder {
         };
         let view = cx.entity();
         let menu_entry = entry.clone();
+        let full_name = SharedString::from(entry.name.clone());
+        let name = styled_name(
+            &full_name,
+            self.ls_colors
+                .as_ref()
+                .filter(|_| !(selected && current))
+                .and_then(|colors| crate::nu_env::name_style(colors, entry))
+                .as_ref(),
+            &[],
+            None,
+        );
+        let tooltip = cut_off_tooltip(&name, full_name);
         let row = h_flex()
             .id(("crow", path_id(&entry.path)))
             .h(ui(COLUMN_ROW))
@@ -871,16 +1049,9 @@ impl Finder {
             })
             .child(file_icon(entry, ui(16.), false, &pal))
             .child(
-                div().flex_1().truncate().child(styled_name(
-                    &SharedString::from(entry.name.clone()),
-                    self.ls_colors
-                        .as_ref()
-                        .filter(|_| !(selected && current))
-                        .and_then(|colors| crate::nu_env::name_style(colors, entry))
-                        .as_ref(),
-                    &[],
-                    None,
-                )),
+                one_line_name(div().id("name").flex_1())
+                    .child(name)
+                    .tooltip(tooltip),
             )
             .when(entry.is_navigable(), |this| {
                 this.child(
@@ -903,6 +1074,9 @@ impl Finder {
                     {
                         if this.picker.is_some() && !entry.is_navigable() {
                             this.choose(&crate::actions::Choose, window, cx);
+                        } else if entry.is_navigable() && event.modifiers.secondary(cx) {
+                            let folder = Location::Folder(entry.path);
+                            this.open_in_new_tabs(vec![folder], window, cx);
                         } else {
                             this.open_entries(vec![entry], window, cx);
                         }
@@ -923,7 +1097,13 @@ impl Finder {
                 }),
             )
             .when(entry.is_navigable(), |row| {
-                super::transfer::folder_drop_target(row, entry.path.clone(), cx)
+                let folder = Location::Folder(entry.path.clone());
+                super::transfer::folder_drop_target(row, entry.path.clone(), cx).on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        this.open_in_new_tabs(vec![folder.clone()], window, cx)
+                    }),
+                )
             })
             .on_drag(DraggedFiles(vec![entry.path.clone()]), {
                 let label: SharedString = entry.name.clone().into();
@@ -1016,6 +1196,13 @@ impl Finder {
             return div().into_any_element();
         };
         let selected = self.selection.contains(ix);
+        let name = styled_name(
+            &row.name,
+            row.name_style.as_ref().filter(|_| !selected),
+            &[],
+            None,
+        );
+        let tooltip = cut_off_tooltip(&name, row.name.clone());
         let el = v_flex()
             .id(("strip", path_id(&row.entry.path)))
             .w(ui(96.))
@@ -1031,23 +1218,18 @@ impl Finder {
                     .child(file_icon(&row.entry, ui(64.), true, &pal)),
             )
             .child(
-                div()
+                one_line_name(div())
                     .max_w(ui(90.))
                     .px(ui(4.))
                     .rounded(ui(4.))
                     .text_size(ui(11.))
-                    .truncate()
                     .when(selected, |this| {
                         this.bg(pal.selection).text_color(pal.selection_text)
                     })
-                    .child(styled_name(
-                        &row.name,
-                        row.name_style.as_ref().filter(|_| !selected),
-                        &[],
-                        None,
-                    )),
-            );
-        self.item_interactions(el, ix, div(), cx)
+                    .child(name),
+            )
+            .tooltip(tooltip);
+        self.item_interactions(self.item_drag(el, ix), ix, div(), cx)
     }
 
     // ----- skeleton ----------------------------------------------------------------

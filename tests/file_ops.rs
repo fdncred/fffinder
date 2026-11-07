@@ -113,7 +113,7 @@ fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
     ui.click("view-list");
     let projects = item_id("row", &fx.path("Projects"));
     ui.drag(
-        item_id("row", &fx.path("notes.txt")),
+        item_id("name-cell", &fx.path("notes.txt")),
         projects.clone(),
         Modifiers::none(),
     );
@@ -129,7 +129,7 @@ fn dragging_onto_a_folder_moves_or_copies(cx: &mut TestAppContext) {
         control: !cfg!(target_os = "macos"),
         ..Modifiers::none()
     };
-    ui.drag(item_id("row", &fx.path("Budget.csv")), projects, copy);
+    ui.drag(item_id("name-cell", &fx.path("Budget.csv")), projects, copy);
     assert!(fx.path("Projects/Budget.csv").exists());
     assert!(fx.path("Budget.csv").exists(), "the copy key copies");
 }
@@ -273,7 +273,7 @@ fn trash_puts_back_and_empties(cx: &mut TestAppContext) {
     // Trash by dragging onto the sidebar, then Cmd+Z puts it back.
     ui.go_to(&fx.dir);
     ui.drag(
-        item_id("row", &fx.path("Budget.csv")),
+        item_id("name-cell", &fx.path("Budget.csv")),
         "trash",
         Modifiers::none(),
     );

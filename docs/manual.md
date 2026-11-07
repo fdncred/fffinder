@@ -99,7 +99,11 @@ From top to bottom, the window has:
 - The path bar.
 - The status bar, or the picker bar in `--pick` mode.
 
-The sidebar runs down the left side.
+The sidebar runs down the left side. Drag its right edge to make it wider or narrower, from 140 to 420 points. Double-click the edge to go back to the usual width. The width is saved. In a narrow window the sidebar gives up width so the toolbar still fits.
+
+A new window opens where the last one was, at the same size, on the same display, and maximized if it was. If windows are already open, it opens a little down and to the right of that place. If the place is no longer on a display, the window opens at the usual size in the middle of the screen.
+
+Text that doesn't fit is cut short with an ellipsis. Rest the mouse on it to see all of it in a tooltip. This works for names and every other cell in the list, list headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. File names and folder paths lose their middle, so the start and the extension both stay visible.
 
 The file area shows a message when there is nothing to list:
 
@@ -117,6 +121,8 @@ Open folders refresh on their own. fffinder checks the folder every two seconds 
 
 The path bar shows the current folder as a row of crumbs, from the volume down. Click a crumb to go to that folder. While searching, in Recents, or when showing results sent from Nushell, the path bar shows the selected item's path instead. Clicking the item's own crumb opens its folder with the item selected.
 
+Folder crumbs also work like folders in a view. Drop items on one to move them there, which is the quick way to move something up a level. Middle-click one to open it in a new tab. Right-click one for Open in New Tab, Open in New Window, and Copy Path. On a long path the other crumbs narrow, so the current folder always shows.
+
 ### Status bar
 
 The status bar shows:
@@ -133,6 +139,8 @@ The status bar shows:
 
 **Tabs.** New Tab (Cmd+T, or File › New Tab) opens a tab at the folder the window shows. Each tab is a whole browser with its own history, search, filter, and selection. With two or more tabs, a tab bar appears under the toolbar: click a tab to show it, click its × to close it, drag it onto another tab to move it there, or click + for another tab. Ctrl+Tab and Cmd+Shift+] show the next tab, Ctrl+Shift+Tab and Cmd+Shift+[ the previous one, both wrapping around. Cmd+W closes the tab, and the window only when it's the last tab. Right-click a tab, or use Window › Move Tab to New Window, to give it a window of its own at the same folder and search; its back and forward history stays behind.
 
+**Opening a folder in a new tab.** Open in New Tab and Open in New Window are in the right-click menu of folders in the views, sidebar rows, and path bar crumbs. Middle-click a folder, sidebar row, or crumb to open it in a new tab. So does Cmd+double-click on a folder and Cmd+click on a sidebar row. The tab you were in stays as it was.
+
 **Split view.** Split View (Cmd+Backslash, or the Window menu) shows a second pane to the right of the current tab, starting at the same folder, without its own sidebar. It stays as you switch tabs, and Cmd+Backslash again (or Cmd+W in that pane) closes it. Each pane has its own toolbar. F5 (Window › Copy to Other Pane) copies the selected items into the other pane's folder and F6 (Move to Other Pane) moves them, as in Total Commander and Midnight Commander, with the same name-clash questions, progress, and Undo as any copy or move. The other pane must show a folder, not search results. Split view wants a wide window; in a narrow one the toolbars run out of room.
 
 When one tab or pane copies, moves, renames, or deletes files, the others in the window reload.
@@ -145,7 +153,7 @@ From left to right:
 | --- | --- |
 | Show Sidebar | Appears only when the sidebar is hidden. Shows it again. |
 | Title | The folder's name, or `Searching "text"` during a search. On macOS and Linux, drag empty toolbar space to move the window, and double-click it to zoom (maximize on Linux). |
-| Back, Forward | Move through the window's history. |
+| Back, Forward | Move through the window's history. The back and forward buttons on a mouse do the same. |
 | as Icons, as List, as Columns, as Gallery | Switch the view. |
 | Sort and View Options | The sort menu. See [Sorting and hidden files](#sorting-and-hidden-files). |
 | Nushell | The Nushell menu. See [Menus](#menus). |
@@ -163,10 +171,11 @@ The sidebar has four sections:
 - **Smart Folders** lists saved searches. It appears once you save one. See [Filters and Smart Folders](#filters-and-smart-folders).
 - **Locations** lists your home folder, iCloud Drive or other cloud drives, mounted volumes and servers, and ends with the **Trash**. Removable disks and servers have an eject button. See [Volumes and servers](#volumes-and-servers) and [The Trash](#the-trash).
 
-Click a row to open it. The current folder's row is highlighted.
+Click a row to open it. Cmd+click or middle-click a row to open it in a new tab. The current folder's row is highlighted.
 
 Right-click a Favorites or Locations row for:
 
+- **Open in New Tab** and **Open in New Window**.
 - **Open Nushell Here**: open `nu` in that folder in your terminal.
 - **Show in Finder** (Show in Explorer on Windows, Show in File Manager on Linux).
 - **Eject**: removable disks and servers.
@@ -181,8 +190,8 @@ The footer shows "N files indexed", or "Indexing… N" with a spinner while scan
 Switch views with the toolbar, the View menu, or Cmd+1 to Cmd+4. The choice is saved.
 
 - **Icons** (Cmd+1) shows a grid. Image files show thumbnails, and other documents show their icon with an extension badge. Change the icon size with the slider in the status bar.
-- **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. See [The list view](#the-list-view).
-- **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns. Selecting a folder opens it in a new column to the right. Selecting a file shows a preview card with its kind, size, modification date, and location in the last column. Search results and Recents always use the list in this view, as Finder does.
+- **List** (Cmd+2) shows Name, then Date Modified, Size, and Kind unless you choose other columns. Click a header to sort by it, and click it again to reverse. Search results add a Folder column, or a Match column showing the matching line for a contents search. Rows alternate in color, as in Finder. Columns can be dragged wider or narrower, and the list scrolls sideways when they don't all fit. See [The list view](#the-list-view).
+- **Columns** (Cmd+3) shows the folder hierarchy as side-by-side columns. Selecting a folder opens it in a new column to the right. Selecting a file shows a preview card with its kind, size, modification date, and location in the last column. Drag the line at a column's right edge to resize that column, and new columns open at that width. Double-click the line to fit the column to its longest name. Search results and Recents always use the list in this view, as Finder does.
 - **Gallery** (Cmd+4) shows a large preview of the selected item above a strip of everything in the folder. Left and Right arrows move along the strip. The gallery always shows an item, so it selects the first one when nothing is selected.
 
 Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB, and on macOS PDFs, videos, and documents (see [Thumbnails](#thumbnails)).
@@ -203,7 +212,11 @@ Thumbnails cover PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, and SVG files up to 40 MB
 | Permissions | The Unix permission bits, as `rwxr-xr-x`. On Windows, `read-only` or `read-write` for files. |
 | Git | The git status the index last saw for a file: `modified`, `untracked`, `staged`, and so on. Clean files are blank. Search results show it too. |
 
-Drag a header onto another header to move it there. Drag the right edge of a header to make the column wider or narrower. **Reset Columns** in the header menu goes back to Date Modified, Size, and Kind. Columns, their order, and their widths are saved.
+Drag a header onto another header to move it there. Name stays first, and in search results the Folder column stays next to it.
+
+**Column widths.** Every column has a line at the right edge of its header, including Name and Folder (or Match, or Original Folder). Drag the line to make the column wider or narrower. Double-click it to fit the column to its longest text, up to 800 points. Name fills whatever room the other columns leave until you drag or fit it, and after that it keeps its width. When the columns are wider than the window, the list scrolls sideways, header and rows together. **Reset Columns** in the header menu goes back to Date Modified, Size, and Kind at their usual widths, with Name filling the room again. Columns, their order, and their widths are saved, and every tab and window shows the same ones.
+
+**Dragging in a row.** Drag from a row's Name column to move the item. Drag from any other column, or from the empty space under the rows, to select with a box. See [Selecting items](#selecting-items).
 
 **Calculate All Sizes** (in the header menu, on by default) shows each folder's size: everything the index holds under it, added up without reading the disk. Folders the index skips, such as `node_modules` and caches (see [What the index skips](#what-the-index-skips)), and folders outside the search locations show `--`. Apps in the app folders are the exception: their sizes are added up from the disk in the background the first time you open the folder, and again only for an app that changed. Sorting by Size sorts folders by these sizes too.
 
@@ -219,9 +232,14 @@ Drag a header onto another header to move it there. Drag the right edge of a hea
 | Click one item of a multiple selection | Narrow the selection to it. |
 | Double-click | Open the item. |
 | Right-click | Select the item, unless it is already selected, and show its menu. |
+| Drag in empty space | Select everything the box touches. In the list view, drag from any column but Name. Past the top or bottom of the view, the view scrolls. |
+| Cmd+drag or Shift+drag in empty space | Add what the box touches to the selection. |
 | Arrow keys | Move the selection. In icon view, all four arrows move in the grid. In columns, Left and Right move between columns. |
 | Shift+arrow keys | Extend the selection. |
 | Home, End | Go to the first or last item. |
+| Shift+Home, Shift+End | Extend the selection to the first or last item. |
+| Page Up, Page Down | Move the selection a screenful. In the gallery, go to the previous or next page of a PDF. |
+| Shift+Page Up, Shift+Page Down | Extend the selection a screenful. |
 | Cmd+A | Select all. |
 | Escape | Clear the selection. With nothing selected, end the search. In `--pick` mode, cancel. |
 
@@ -233,7 +251,7 @@ As in Finder, typing letters while the files have focus selects the first item w
 
 The Sort and View Options menu has:
 
-- **Sort By**: Relevance (only while searching), Name, Date Modified, Date Created, Size, and Kind. Choosing the current key again reverses the order. The list view's Date Last Opened header sorts by that date too.
+- **Sort By**: Relevance (only while searching), Name, Date Modified, Date Created, Size, and Kind. Choosing the current key again reverses the order. The list view's Date Last Opened header sorts by that date too, and in search results and Recents, the Folder header sorts by folder.
 - **Ascending** and **Descending**. Both are disabled for Relevance.
 - **Keep Folders on Top**. See [The list view](#the-list-view).
 - **Show Hidden Files**.
@@ -411,9 +429,9 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Compress | Puts the selected items in a zip beside them: "name.zip" for one item, "Archive.zip" for several, numbered when the name is taken. Links are stored as links, and permissions and dates are kept. |
 | Extract | Unpacks the selected zip, `.tar`, `.tar.gz`, or `.tgz` archives beside themselves. An archive with one item at the top unpacks as that item; one with several unpacks into a folder named after the archive. Names are numbered when taken. Entries that would land outside that folder are skipped. |
 | Rename… (F2) | Renames one item in a dialog. Names can't be empty or contain `/` (or `\` and the other characters Windows forbids). With several items selected, opens [batch rename](#renaming-several-items). |
-| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
-| Delete Immediately… (Cmd+Alt+Backspace) | Asks, then deletes the selected items for good, without the Trash. |
-| Get Info (Cmd+I) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
+| Move to Trash (Cmd+Backspace, Delete) | Asks "Move "name" to the Trash?" or "Move N items to the Trash?", then moves them and selects the next item. Undo or Put Back restores them. In the Trash, Cmd+Backspace is Put Back. |
+| Delete Immediately… (Cmd+Alt+Backspace; Shift+Delete on Linux and Windows) | Asks, then deletes the selected items for good, without the Trash, and selects the next item. |
+| Get Info (Cmd+I; also Alt+Enter on Linux and Windows) | Shows everything about the selected items, or the folder shown when nothing is selected. See [Get Info](#get-info). |
 | Undo (Cmd+Z in the files) | Reverses the latest rename, move, copy, new folder, or move to the Trash. See [Undo and Redo](#undo-and-redo). |
 | Redo (Cmd+Shift+Z in the files) | Reverses the latest Undo. |
 | Copy (Cmd+C in the files) | Copies the selected items, to paste with Cmd+V. See [Copying and moving](#copying-and-moving). |
@@ -421,10 +439,10 @@ The apps come from Launch Services on macOS, and on Linux from the `.desktop` en
 | Move Items Here (Cmd+Alt+V) | Moves the items on the clipboard into the folder shown. |
 | Copy Path (Cmd+Alt+C) | Copies the selected paths, one per line. |
 | Copy as Nushell List (Cmd+Shift+C) | Copies the selection as NUON: a quoted string for one path, a list for several. |
-| Go to Folder… (Cmd+Shift+G) | Type a path. `~` is your home folder, and relative paths start from the current folder. A folder opens; a file opens its folder with the file selected. |
+| Go to Folder… (Cmd+Shift+G; also Ctrl+L on Linux and Windows) | Type a path. `~` is your home folder, and relative paths start from the current folder. A folder opens; a file opens its folder with the file selected. |
 | Add to Sidebar | Adds a selected folder to Favorites. |
 | Add Folder to Sidebar | Adds the current folder to Favorites. |
-| Refresh (Cmd+R) | Reloads the folder, columns, and previews, and re-runs the search. |
+| Refresh (Cmd+R; F5 outside split view) | Reloads the folder, columns, and previews, and re-runs the search. |
 | Rescan Index | Rebuilds the search index from scratch. |
 
 ## Copying and moving
@@ -509,7 +527,7 @@ On macOS, fffinder moves items to the Trash itself, as most Mac apps do, so macO
 
 ## Dragging and dropping
 
-- Drag items onto a folder in any view, a column, or a place in the sidebar (Favorites and Locations) to move them there. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder, even when only some of the items are on another volume.
+- Drag items onto a folder in any view, a column, a place in the sidebar (Favorites and Locations), or a crumb in the path bar to move them there. In the list view, drag them by the Name column; the other columns select with a box. Hold Option (macOS) or Ctrl (Linux and Windows) when you let go to copy them instead. Dragging to another volume copies, as in Finder, even when only some of the items are on another volume.
 - Drag items onto empty space in a folder to move them into the folder shown.
 - Drop files from other apps on a folder, a column, a sidebar place, or the file area to copy them in.
 - Name clashes ask first, and long transfers show progress. See [Copying and moving](#copying-and-moving).
@@ -704,6 +722,7 @@ Right-click one or more items:
 
 - Choose, or Choose Items (only in `--pick` mode)
 - Open
+- Open in New Tab and Open in New Window (folders)
 - Open With and Always Open With (files only; see [Opening files](#opening-files))
 - Quick Look
 - Get Info
@@ -737,6 +756,9 @@ Right-click empty space in a view:
 - Run Nushell Pipeline…
 - Get Info (in a folder)
 - Add Folder to Sidebar (when the folder isn't a favorite)
+- Select All
+- View: as Icons, as List, as Columns, as Gallery
+- Sort By: Relevance (only while searching), Name, Date Modified, Date Created, Size, Kind, Ascending, Descending
 - Show Hidden Files
 - Refresh
 
@@ -779,17 +801,17 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+/ | Search syntax |
 | Cmd+[, Alt+Left | Back |
 | Cmd+], Alt+Right | Forward |
-| Cmd+Up | Enclosing folder |
+| Cmd+Up, Alt+Up | Enclosing folder |
 | Cmd+Shift+H | Home |
 | Cmd+Shift+F | Recents |
-| Cmd+Shift+G | Go to folder |
+| Cmd+Shift+G | Go to folder (also Ctrl+L on Linux and Windows) |
 | Cmd+K | Connect to server |
 | Cmd+1, Cmd+2, Cmd+3, Cmd+4 | Icons, list, columns, gallery |
 | Cmd+Shift+. | Show hidden files |
-| Cmd+R | Refresh |
+| Cmd+R | Refresh (F5 too, outside split view) |
 | Cmd+Alt+S | Toggle the sidebar |
 | Cmd+Shift+N | New folder |
-| Cmd+I | Get Info |
+| Cmd+I | Get Info (also Alt+Enter on Linux and Windows) |
 | Cmd+Alt+N | New file |
 | Cmd+Shift+Backspace | Empty the Trash |
 | Cmd+Alt+C | Copy path |
@@ -805,6 +827,9 @@ Cmd on macOS, Ctrl elsewhere.
 | Up, Down, Left, Right | Move the selection |
 | Shift+Up, Shift+Down, Shift+Left, Shift+Right | Extend the selection |
 | Home, End | First or last item |
+| Shift+Home, Shift+End | Extend the selection to the first or last item |
+| Page Up, Page Down | Move the selection a screenful; in the gallery, the previous or next page of a PDF |
+| Shift+Page Up, Shift+Page Down | Extend the selection a screenful |
 | Return, Cmd+Down, Cmd+O | Open |
 | Space, Cmd+Y | Quick Look |
 | Right, Left | In the list view, open or close the selected folder in place |
@@ -815,13 +840,12 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Alt+V | Move the copied items into the folder |
 | F2 | Rename (several items: batch rename) |
 | Cmd+D | Duplicate |
-| F5 | In split view, copy the selection to the other pane |
+| F5 | In split view, copy the selection to the other pane; otherwise refresh |
 | F6 | In split view, move the selection to the other pane |
 | Cmd+Backspace, Delete | Move to Trash (in the Trash: Put Back) |
-| Cmd+Alt+Backspace | Delete immediately |
+| Cmd+Alt+Backspace | Delete immediately (also Shift+Delete on Linux and Windows) |
 | Cmd+Z | Undo the latest file operation |
 | Cmd+Shift+Z | Redo the latest Undo |
-| Page Up, Page Down | In the gallery, the previous or next page of a PDF |
 | Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit the width, or change the size of text previews |
 | Letters | Type to select |
 
@@ -909,11 +933,15 @@ Settings live in `settings.json` in the settings folder (see [Files, folders, an
 | `favorites` | The standard folders that exist | Sidebar Favorites, in order. |
 | `show_hidden` | `false` | Show hidden files in folders. |
 | `view_mode` | `"icons"` | `icons`, `list`, `columns`, or `gallery`. |
-| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `created`, `last_opened`, `size`, `kind`. |
+| `sort` | `{"key": "name", "ascending": true}` | The folder sort. Keys: `name`, `modified`, `created`, `last_opened`, `size`, `kind`, `folder`. |
 | `folders_first` | `false` | Keep Folders on Top. |
 | `use_groups` | `false` | Show the list and icon views in groups. |
 | `group_by` | `"kind"` | What groups are by: `name`, `kind`, `modified`, `created`, `last_opened`, or `size`. |
 | `list_columns` | Date Modified 170, Size 90, Kind 160 | The list view's columns after Name, in order: `column` (`modified`, `created`, `last_opened`, `size`, `kind`, `permissions`, `git`) and `width` in points, at least 50. |
+| `name_column_width` | none | The list's Name column in points, at least 80. None fills the room the other columns leave. |
+| `parent_column_width` | `220` | The list's Folder, Match, or Original Folder column in points, at least 50. |
+| `column_view_width` | `235` | How wide a new pane of the column view opens, 120 to 800 points. |
+| `sidebar_width` | `212` | The sidebar's width, 140 to 420 points. |
 | `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
 | `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |
@@ -1013,7 +1041,7 @@ http get --unix-socket $sock 'http://localhost/v1/find?query=readme&limit=5'
 | Settings | `~/Library/Application Support/fffinder` | `~/.config/fffinder` | `%APPDATA%\fffinder` |
 | Data | `~/Library/Application Support/fffinder` | `$XDG_DATA_HOME/fffinder`, else `~/.local/share/fffinder` | `%LOCALAPPDATA%\fffinder` |
 
-The settings folder holds `settings.json` and `actions.nu`. The data folder holds:
+The settings folder holds `settings.json`, `actions.nu`, and `window.json`, which records where the last window was. The data folder holds:
 
 - `run/`: the socket and `server.json`, removed on a normal quit.
 - `gui/`: the frecency and search-history databases that rank Recents and repeat searches.
@@ -1129,6 +1157,8 @@ The UI tests open the real window headlessly and use it with mouse clicks and ke
 
 - `tests/controls.rs` clicks every control and checks what each click changed: toolbar buttons and menus, the search field and scope bar, the filter bar, sidebar rows and Smart Folders, the path bar, the icon-size slider, list headers, items in all four views, context menus and Nushell actions, every button and field in every dialog (batch rename included), the Nushell panel, and the picker bar.
 - `tests/finder.rs` presses every keyboard shortcut except Quit and New Window, which belong to the app rather than the window, and types to select.
+- `tests/columns.rs` drags column, pane, and sidebar edges, scrolls the list sideways, and rests the mouse on text to check its tooltip.
+- `tests/basics.rs` draws selection boxes, presses the mouse's other buttons, opens folders in new tabs, and pages through a long list.
 - `tests/server.rs` talks to the socket server, and `tests/nu_module.rs` runs `fff.nu` in a real `nu` against it.
 
 A step that runs longer than 20 seconds fails the run and names the step, so a hang shows up as a failure instead of a `cargo test` that never ends. Opening a file or showing it in Finder is recorded instead of performed, and nothing is moved to the Trash.

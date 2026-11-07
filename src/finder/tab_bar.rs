@@ -101,6 +101,40 @@ impl Finder {
             .unwrap_or(Location::Recents)
     }
 
+    /// Open each of `locations` in a tab after this one and show the last.
+    /// Without tabs, each opens in a window; a file chooser opens neither.
+    pub(super) fn open_in_new_tabs(
+        &mut self,
+        locations: Vec<Location>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.picker.is_some() {
+            return;
+        }
+        if self.host.is_none() {
+            self.open_in_new_windows(locations, cx);
+            return;
+        }
+        self.with_host(window, cx, move |w, window, cx| {
+            for location in locations {
+                w.new_tab(location, window, cx);
+            }
+        });
+    }
+
+    /// Open each of `locations` in a window of its own.
+    pub(super) fn open_in_new_windows(&mut self, locations: Vec<Location>, cx: &mut Context<Self>) {
+        if self.picker.is_some() {
+            return;
+        }
+        cx.defer(move |cx| {
+            for location in locations {
+                crate::open_window(location, None, None, cx);
+            }
+        });
+    }
+
     /// Cmd+T. Without tabs (a picker), a new window instead.
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.picker.is_some() {
@@ -280,6 +314,8 @@ impl Finder {
             let (select, close, menu_host) = (weak.clone(), weak.clone(), weak.clone());
             let drop_host = weak;
             let label: SharedString = title.clone().into();
+            let shown = StyledText::new(label.clone());
+            let tooltip = super::fit::cut_off_tooltip(&shown, label.clone());
             h_flex()
                 .id(("tab", ix))
                 .flex_1()
@@ -294,7 +330,8 @@ impl Finder {
                     this.bg(selected_bg).border_1().border_color(border)
                 })
                 .when(!on, |this| this.text_color(muted).hover(|s| s.bg(hover)))
-                .child(div().flex_1().min_w_0().truncate().child(label.clone()))
+                .child(div().flex_1().min_w_0().truncate().child(shown))
+                .tooltip(tooltip)
                 .child(
                     div()
                         .id(("close-tab", ix))
@@ -306,6 +343,10 @@ impl Finder {
                                 .with_size(ui(11.))
                                 .text_color(muted),
                         )
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Close Tab")
+                                .build(window, cx)
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();

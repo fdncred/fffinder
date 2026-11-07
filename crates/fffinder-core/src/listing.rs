@@ -43,6 +43,8 @@ pub enum SortKey {
     Created,
     #[serde(rename = "last_opened")]
     LastOpened,
+    /// The folder an item is in, for lists that span folders.
+    Folder,
 }
 
 impl SortKey {
@@ -63,6 +65,7 @@ impl SortKey {
             SortKey::Kind => "Kind",
             SortKey::Created => "Date Created",
             SortKey::LastOpened => "Date Last Opened",
+            SortKey::Folder => "Folder",
         }
     }
 }
@@ -164,6 +167,7 @@ pub fn compare(a: &FileEntry, b: &FileEntry, order: SortOrder) -> Ordering {
                 .then_with(|| natural_cmp(&a.name, &b.name)),
             SortKey::Created => a.created.cmp(&b.created),
             SortKey::LastOpened => a.last_opened.cmp(&b.last_opened),
+            SortKey::Folder => a.parent().cmp(&b.parent()),
         };
         let ord = ord.then_with(|| natural_cmp(&a.name, &b.name));
         if order.ascending { ord } else { ord.reverse() }

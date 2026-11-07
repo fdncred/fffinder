@@ -9,7 +9,7 @@ use fffinder_core::{KindFilter, ViewMode, places};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{
@@ -144,6 +144,10 @@ impl Finder {
                             .with_size(ui(14.))
                             .text_color(muted),
                     )
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new("Search Syntax")
+                            .build(window, cx)
+                    })
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                         this.search_help(&SearchHelp, window, cx)
                     }))
@@ -220,35 +224,77 @@ impl Finder {
                     Icon::new(IconName::Folder)
                 };
                 let is_last = ix == last;
-                crumbs = crumbs.child(
-                    h_flex()
-                        .id(("crumb", ix))
-                        .gap(ui(4.))
-                        .px(ui(3.))
-                        .rounded(ui(4.))
-                        .flex_shrink(if is_last { 0. } else { 1. })
-                        .min_w(ui(20.))
-                        .hover(|s| s.bg(hover))
-                        .child(icon.with_size(ui(12.)).text_color(if ix == 0 {
-                            muted
+                let menu_path = path.clone();
+                let name = SharedString::from(name);
+                let shown = StyledText::new(name.clone());
+                let tooltip = super::fit::cut_off_tooltip(&shown, name);
+                // Every crumb but the current one narrows on a long path.
+                let shrink = if is_last { 0. } else { 1. };
+                let crumb = h_flex()
+                    .id(("crumb", ix))
+                    .gap(ui(4.))
+                    .px(ui(3.))
+                    .rounded(ui(4.))
+                    .flex_shrink(shrink)
+                    .min_w(ui(20.))
+                    .hover(|s| s.bg(hover))
+                    .child(icon.with_size(ui(12.)).text_color(if ix == 0 {
+                        muted
+                    } else {
+                        pal.sidebar_icon
+                    }))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(if is_last { fg } else { muted })
+                            .child(shown),
+                    )
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        let path = path.clone();
+                        if is_last && is_file {
+                            this.reveal_in_place(&path, window, cx);
                         } else {
-                            pal.sidebar_icon
-                        }))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_color(if is_last { fg } else { muted })
-                                .child(name),
-                        )
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            let path = path.clone();
-                            if is_last && is_file {
-                                this.reveal_in_place(&path, window, cx);
-                            } else {
-                                this.navigate(Location::Folder(path), window, cx);
-                            }
-                        }))
-                        .test_support(),
+                            this.navigate(Location::Folder(path), window, cx);
+                        }
+                    }));
+                // A file's own crumb is the file; the others are folders to
+                // drop items on and to open elsewhere.
+                if is_last && is_file {
+                    crumbs = crumbs.child(crumb.test_support());
+                    continue;
+                }
+                let folder = Location::Folder(menu_path.clone());
+                let crumb = super::transfer::folder_drop_target(crumb, menu_path.clone(), cx)
+                    .on_mouse_down(MouseButton::Middle, {
+                        let folder = folder.clone();
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.open_in_new_tabs(vec![folder.clone()], window, cx)
+                        })
+                    });
+                let view = cx.entity();
+                crumbs = crumbs.child(
+                    // The menu lives on a wrapper so the crumb stays observable.
+                    h_flex()
+                        .id(("crumb-menu", ix))
+                        .flex_shrink(shrink)
+                        .min_w(ui(20.))
+                        .child(crumb.test_support())
+                        .context_menu(move |menu, window, _| {
+                            let shown = menu_path.display().to_string();
+                            super::menus::open_elsewhere_items(
+                                &view,
+                                menu,
+                                vec![folder.clone()],
+                                window,
+                            )
+                            .separator()
+                            .item(
+                                PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(shown.clone()))
+                                }),
+                            )
+                        }),
                 );
             }
         }

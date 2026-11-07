@@ -2,7 +2,9 @@
 
 use super::Finder;
 use crate::actions::*;
+use crate::model::Location;
 use crate::theme::ui;
+use fffinder_core::ViewMode;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::IconName;
@@ -92,6 +94,32 @@ fn nu_item(id: impl Into<ElementId>, label: impl Into<SharedString>, size: f32) 
     })
 }
 
+/// "Open in New Tab" and "Open in New Window", for `folders`.
+pub(super) fn open_elsewhere_items(
+    view: &Entity<Finder>,
+    menu: PopupMenu,
+    folders: Vec<Location>,
+    window: &mut Window,
+) -> PopupMenu {
+    let tabs = folders.clone();
+    menu.item(
+        PopupMenuItem::new("Open in New Tab").on_click(window.listener_for(
+            view,
+            move |this: &mut Finder, _: &ClickEvent, window, cx| {
+                this.open_in_new_tabs(tabs.clone(), window, cx)
+            },
+        )),
+    )
+    .item(
+        PopupMenuItem::new("Open in New Window").on_click(window.listener_for(
+            view,
+            move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                this.open_in_new_windows(folders.clone(), cx)
+            },
+        )),
+    )
+}
+
 /// Right-click on one or more selected items.
 pub fn item_menu(
     view: &Entity<Finder>,
@@ -121,6 +149,11 @@ pub fn item_menu(
     let nu_dir = folder_for_nu.clone();
     let favorite = first.path.clone();
     let opens_files = !picker && entries.iter().all(|e| !e.is_dir);
+    let folders: Vec<Location> = finder
+        .selected_folders()
+        .into_iter()
+        .map(Location::Folder)
+        .collect();
 
     let menu = menu
         .when(picker, |menu| {
@@ -135,6 +168,11 @@ pub fn item_menu(
                 .icon(IconName::FolderOpen)
                 .action(Box::new(OpenSelected)),
         );
+    let menu = if picker || folders.is_empty() {
+        menu
+    } else {
+        open_elsewhere_items(view, menu, folders, window)
+    };
     let menu = if opens_files {
         super::open_with::open_with_submenus(view, &entries, menu, window, cx)
     } else {
@@ -363,66 +401,88 @@ pub fn background_menu(
         1 => "Item".to_string(),
         n => format!("{n} Items"),
     };
-    menu.when(folder.is_some(), |menu| {
-        menu.item(
-            PopupMenuItem::new("New Folder")
-                .icon(Lucide::FolderPlus)
-                .action(Box::new(NewFolder)),
-        )
+    let mode = finder.config.view_mode;
+    let view_as = view.clone();
+    let sort_by = view.clone();
+    let menu = menu
+        .when(folder.is_some(), |menu| {
+            menu.item(
+                PopupMenuItem::new("New Folder")
+                    .icon(Lucide::FolderPlus)
+                    .action(Box::new(NewFolder)),
+            )
+            .item(
+                PopupMenuItem::new("New File…")
+                    .icon(Lucide::FilePlus)
+                    .action(Box::new(NewFile)),
+            )
+        })
+        .when(pasteable > 0, |menu| {
+            menu.item(
+                PopupMenuItem::new(format!("Paste {}", items(pasteable)))
+                    .icon(Lucide::ClipboardPaste)
+                    .action(Box::new(input::Paste)),
+            )
+            .item(
+                PopupMenuItem::new(format!("Move {} Here", items(pasteable)))
+                    .icon(Lucide::FolderInput)
+                    .action(Box::new(MoveItemsHere)),
+            )
+        })
+        .when_some(nu_folder, |menu, dir| {
+            menu.item(
+                PopupMenuItem::new("Open Nushell Here")
+                    .icon(IconName::SquareTerminal)
+                    .on_click(window.listener_for(
+                        view,
+                        move |this: &mut Finder, _: &ClickEvent, window, cx| {
+                            this.open_terminal_at(&dir, window, cx)
+                        },
+                    )),
+            )
+        })
         .item(
-            PopupMenuItem::new("New File…")
-                .icon(Lucide::FilePlus)
-                .action(Box::new(NewFile)),
+            PopupMenuItem::new("Run Nushell Pipeline…")
+                .icon(Lucide::Terminal)
+                .action(Box::new(ToggleNuPanel)),
         )
+        .when(folder.is_some(), |menu| {
+            menu.item(
+                PopupMenuItem::new("Get Info")
+                    .icon(IconName::Info)
+                    .action(Box::new(GetInfo)),
+            )
+        })
+        .separator()
+        .when_some(folder.clone().filter(|_| !is_favorite), |menu, folder| {
+            menu.item(
+                PopupMenuItem::new("Add Folder to Sidebar")
+                    .icon(IconName::Star)
+                    .on_click(window.listener_for(
+                        view,
+                        move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                            this.add_favorite(folder.clone(), cx)
+                        },
+                    )),
+            )
+        })
+        .item(PopupMenuItem::new("Select All").action(Box::new(SelectAll)));
+    menu.submenu("View", window, cx, move |menu, window, _| {
+        ViewMode::ALL.into_iter().fold(menu, |menu, option| {
+            menu.item(
+                PopupMenuItem::new(format!("as {}", option.title()))
+                    .checked(option == mode)
+                    .on_click(window.listener_for(
+                        &view_as,
+                        move |this: &mut Finder, _: &ClickEvent, _, cx| {
+                            this.set_view_mode(option, cx)
+                        },
+                    )),
+            )
+        })
     })
-    .when(pasteable > 0, |menu| {
-        menu.item(
-            PopupMenuItem::new(format!("Paste {}", items(pasteable)))
-                .icon(Lucide::ClipboardPaste)
-                .action(Box::new(input::Paste)),
-        )
-        .item(
-            PopupMenuItem::new(format!("Move {} Here", items(pasteable)))
-                .icon(Lucide::FolderInput)
-                .action(Box::new(MoveItemsHere)),
-        )
-    })
-    .when_some(nu_folder, |menu, dir| {
-        menu.item(
-            PopupMenuItem::new("Open Nushell Here")
-                .icon(IconName::SquareTerminal)
-                .on_click(window.listener_for(
-                    view,
-                    move |this: &mut Finder, _: &ClickEvent, window, cx| {
-                        this.open_terminal_at(&dir, window, cx)
-                    },
-                )),
-        )
-    })
-    .item(
-        PopupMenuItem::new("Run Nushell Pipeline…")
-            .icon(Lucide::Terminal)
-            .action(Box::new(ToggleNuPanel)),
-    )
-    .when(folder.is_some(), |menu| {
-        menu.item(
-            PopupMenuItem::new("Get Info")
-                .icon(IconName::Info)
-                .action(Box::new(GetInfo)),
-        )
-    })
-    .separator()
-    .when_some(folder.filter(|_| !is_favorite), |menu, folder| {
-        menu.item(
-            PopupMenuItem::new("Add Folder to Sidebar")
-                .icon(IconName::Star)
-                .on_click(window.listener_for(
-                    view,
-                    move |this: &mut Finder, _: &ClickEvent, _, cx| {
-                        this.add_favorite(folder.clone(), cx)
-                    },
-                )),
-        )
+    .submenu("Sort By", window, cx, move |menu, window, cx| {
+        super::toolbar::sort_key_items(&sort_by, menu, window, cx)
     })
     .item(
         PopupMenuItem::new("Show Hidden Files")

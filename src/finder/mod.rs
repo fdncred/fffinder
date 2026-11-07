@@ -6,11 +6,13 @@ mod batch_rename;
 mod dialogs;
 mod editor;
 mod filter;
+mod fit;
 mod fps;
 mod groups;
 mod info;
 mod list;
 mod make;
+mod marquee;
 mod menus;
 mod nu_panel;
 mod open_with;
@@ -32,8 +34,8 @@ use crate::theme::ui;
 use fffinder_core::places::{self, Place};
 use fffinder_core::terminals::{self, CUSTOM, Terminal, TerminalSetting};
 use fffinder_core::{
-    Config, Engine, FileEntry, GrepRequest, KindFilter, RootStatus, SearchRequest, SortKey,
-    SortOrder, ViewMode, format, listing,
+    Config, Engine, FileEntry, GrepRequest, KindFilter, ListColumn, RootStatus, SearchRequest,
+    SortKey, SortOrder, ViewMode, format, listing,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -123,6 +125,19 @@ impl Row {
         }
     }
 
+    /// What the list view's `column` shows for this item.
+    pub fn column_text(&self, column: ListColumn) -> SharedString {
+        match column {
+            ListColumn::Modified => self.date.clone(),
+            ListColumn::Created => self.created(),
+            ListColumn::LastOpened => self.opened(),
+            ListColumn::Size => self.size.clone(),
+            ListColumn::Kind => self.kind.clone(),
+            ListColumn::Permissions => self.permissions(),
+            ListColumn::Git => self.git.clone(),
+        }
+    }
+
     /// When the item was made, for the list view's column. This and the
     /// next two are only made for rows drawn with those columns showing.
     pub fn created(&self) -> SharedString {
@@ -173,6 +188,8 @@ pub struct ColumnPane {
     pub entries: Vec<FileEntry>,
     pub selected: Option<usize>,
     pub scroll: UniformListScrollHandle,
+    /// The pane's width in points.
+    pub width: f32,
 }
 
 /// What the index is doing, for the sidebar footer and the status bar.
@@ -242,6 +259,8 @@ pub struct Finder {
     result_sort: SortOrder,
     grid_cols: usize,
     list_scroll: UniformListScrollHandle,
+    /// The list's columns, when they're wider than the view.
+    list_sideways: ScrollHandle,
     grid_scroll: gpui_kit::component::VirtualListScrollHandle,
     /// The icon view's lines, kept between frames.
     icon_layout: Option<groups::IconLayout>,
@@ -326,8 +345,12 @@ pub struct Finder {
     children: HashMap<PathBuf, Vec<FileEntry>>,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
-    /// A list column being resized: which, where the drag began, its width then.
-    column_resize: Option<(usize, Pixels, f32)>,
+    /// A box being dragged around items.
+    marquee: Option<marquee::Marquee>,
+    /// An edge being dragged: which, where the drag began, its width then.
+    resizing: Option<(list::ResizeEdge, Pixels, f32)>,
+    /// How wide the list's Name column was last drawn.
+    name_column_shown: Pixels,
     /// Space left on the current folder's volume.
     free_space: Option<u64>,
     /// The window's tabs, when this browser is one of them.
@@ -451,6 +474,7 @@ impl Finder {
             },
             grid_cols: 1,
             list_scroll: UniformListScrollHandle::new(),
+            list_sideways: ScrollHandle::new(),
             grid_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
             icon_layout: None,
             strip_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
@@ -513,7 +537,9 @@ impl Finder {
             expanded: HashSet::new(),
             children: HashMap::new(),
             folder_stats: HashMap::new(),
-            column_resize: None,
+            marquee: None,
+            resizing: None,
+            name_column_shown: Pixels::ZERO,
             trashed: Vec::new(),
             transfers: Vec::new(),
             transfers_task: Task::ready(()),
@@ -729,10 +755,22 @@ impl Finder {
 
     fn sort_order(&self) -> SortOrder {
         if self.is_searching() {
-            self.result_sort
-        } else {
-            self.config.sort
+            return self.result_sort;
         }
+        let sort = self.config.sort;
+        // Everything in a folder is in the one folder, so a sort by folder
+        // chosen in Recents means nothing there.
+        let spans_folders = matches!(
+            self.history.current(),
+            Location::Recents | Location::Results { .. }
+        );
+        if sort.key == SortKey::Folder && !spans_folders {
+            return SortOrder {
+                key: SortKey::Name,
+                ..sort
+            };
+        }
+        sort
     }
 
     // ----- navigation --------------------------------------------------------
@@ -751,6 +789,7 @@ impl Finder {
         cx: &mut Context<Self>,
     ) {
         self.selection.clear();
+        self.marquee = None;
         self.columns.clear();
         self.active_column = 0;
         self.expanded.clear();
@@ -1383,7 +1422,15 @@ impl Finder {
         self.focus_files(window, cx);
         if click_count >= 2 {
             self.selection.select_only(ix);
-            self.open_rows(vec![ix], window, cx);
+            let folder = self.rows.get(ix).filter(|row| row.entry.is_navigable());
+            match folder {
+                // Cmd+double-click opens a folder in a tab of its own.
+                Some(row) if modifiers.secondary(cx) => {
+                    let location = Location::Folder(row.entry.path.clone());
+                    self.open_in_new_tabs(vec![location], window, cx);
+                }
+                _ => self.open_rows(vec![ix], window, cx),
+            }
             return;
         }
         if modifiers.secondary(cx) {
@@ -1413,6 +1460,21 @@ impl Finder {
         self.item_menu_at.take() == Some(position)
     }
 
+    /// A press in the empty part of a view: start a box, and unless Cmd or
+    /// Shift is held to add to what's selected, clear the selection.
+    pub(super) fn press_in_empty_space(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_files(window, cx);
+        self.begin_marquee(event, cx);
+        if !event.modifiers.secondary(cx) && !event.modifiers.shift {
+            self.clear_selection(cx);
+        }
+    }
+
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selection.clear();
         self.selection_changed(cx);
@@ -1429,6 +1491,15 @@ impl Finder {
                 self.ensure_pdf(&entry, cx);
             }
         }
+    }
+
+    /// The selected folders, in display order.
+    pub(super) fn selected_folders(&self) -> Vec<PathBuf> {
+        self.selected_entries()
+            .into_iter()
+            .filter(FileEntry::is_navigable)
+            .map(|entry| entry.path)
+            .collect()
     }
 
     /// Selected entries, in display order.
@@ -1486,6 +1557,67 @@ impl Finder {
             return;
         }
         self.selection.move_by(delta, extend, self.rows.len());
+        if let Some(ix) = self.selection.cursor() {
+            self.scroll_to(ix);
+        }
+        self.selection_changed(cx);
+        cx.notify();
+    }
+
+    /// Home and End: go to the first or last item, or extend the selection
+    /// to it. In columns, the same within the active column.
+    fn move_to_end(
+        &mut self,
+        last: bool,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.effective_view() == ViewMode::Columns {
+            // Far enough to stop at the column's end, without overflowing.
+            let far = if last { isize::MAX / 2 } else { isize::MIN / 2 };
+            self.move_in_columns(0, far, window, cx);
+            return;
+        }
+        let Some(end) = self.rows.len().checked_sub(1) else {
+            return;
+        };
+        let ix = if last { end } else { 0 };
+        if extend {
+            self.selection.extend_to(ix);
+        } else {
+            self.selection.select_only(ix);
+        }
+        self.scroll_to(ix);
+        self.selection_changed(cx);
+        cx.notify();
+    }
+
+    /// Page Up and Page Down: move the selection a screenful of items, or
+    /// extend it that far. The gallery's strip has no pages to speak of.
+    pub(super) fn move_by_page(
+        &mut self,
+        direction: isize,
+        extend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let height = f32::from(self.content_height) / crate::theme::ui_scale();
+        let lines = |line: f32| ((height / line).floor() as isize).max(1);
+        let delta = match self.effective_view() {
+            ViewMode::Gallery => return,
+            ViewMode::Columns => {
+                self.move_in_columns(0, direction * lines(views::COLUMN_ROW), window, cx);
+                return;
+            }
+            ViewMode::List => lines(views::LIST_ROW),
+            ViewMode::Icons => {
+                let (_, tile_height) = views::tile_size(self.config.icon_size);
+                lines(tile_height) * self.grid_cols.max(1) as isize
+            }
+        };
+        self.selection
+            .move_by(direction * delta, extend, self.rows.len());
         if let Some(ix) = self.selection.cursor() {
             self.scroll_to(ix);
         }
@@ -2169,6 +2301,11 @@ impl Finder {
     }
 
     /// Stop writing settings to disk; used by the screenshot tool.
+    /// Whether this browser writes what changes to the settings file.
+    pub fn persists(&self) -> bool {
+        self.persist
+    }
+
     pub fn set_persist(&mut self, persist: bool) {
         self.persist = persist;
     }
@@ -2289,6 +2426,7 @@ impl Finder {
                     entries,
                     selected: None,
                     scroll: UniformListScrollHandle::new(),
+                    width: self.config.column_view_width(),
                 }];
                 self.active_column = 0;
             }
@@ -2323,11 +2461,13 @@ impl Finder {
             self.selection.select_only(ix);
         }
         if entry.is_navigable() {
+            let width = self.config.column_view_width();
             self.columns.push(ColumnPane {
                 dir: entry.path.clone(),
                 entries: Vec::new(),
                 selected: None,
                 scroll: UniformListScrollHandle::new(),
+                width,
             });
             self.load_column(col + 1, entry.path.clone(), cx);
         } else {
@@ -2556,6 +2696,26 @@ impl Render for Finder {
                     this.set_view_mode(ViewMode::Gallery, cx)
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.go_back(&GoBack, window, cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.go_forward(&GoForward, window, cx)
+                }),
+            )
+            // Watched from here so a drag goes on wherever the mouse wanders.
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<list::ResizeDrag>, _, cx| {
+                    let edge = event.drag(cx).0;
+                    this.resize_edge(edge, event.event.position.x, cx);
+                }),
+            )
+            .relative()
             .child(
                 h_flex()
                     .size_full()
@@ -2590,6 +2750,12 @@ impl Render for Finder {
                             .child(self.render_status_bar(window, cx)),
                     ),
             )
+            .when(show_sidebar, |this| {
+                this.child(self.sidebar_handle(window, cx).test_support())
+            })
+            .when(self.marquee.is_some(), |this| {
+                this.child(self.marquee_capture(cx))
+            })
     }
 }
 
@@ -2648,7 +2814,11 @@ impl Finder {
         div()
             .id("content")
             .test_support()
-            .key_context(FILES)
+            .key_context(if self.has_split_view(cx) {
+                FILES
+            } else {
+                FILES_ONE_PANE
+            })
             .track_focus(&self.files_focus)
             .flex_1()
             .min_h_0()
@@ -2679,21 +2849,23 @@ impl Finder {
             .on_action(cx.listener(|this, _: &ExtendRight, window, cx| {
                 this.move_selection(1, 0, true, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &MoveHome, _, cx| {
-                if !this.rows.is_empty() {
-                    this.selection.select_only(0);
-                    this.scroll_to(0);
-                    this.selection_changed(cx);
-                    cx.notify();
-                }
+            .on_action(cx.listener(|this, _: &MoveHome, window, cx| {
+                this.move_to_end(false, false, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &MoveEnd, _, cx| {
-                if let Some(last) = this.rows.len().checked_sub(1) {
-                    this.selection.select_only(last);
-                    this.scroll_to(last);
-                    this.selection_changed(cx);
-                    cx.notify();
-                }
+            .on_action(cx.listener(|this, _: &MoveEnd, window, cx| {
+                this.move_to_end(true, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendHome, window, cx| {
+                this.move_to_end(false, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendEnd, window, cx| {
+                this.move_to_end(true, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendPageUp, window, cx| {
+                this.move_by_page(-1, true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExtendPageDown, window, cx| {
+                this.move_by_page(1, true, window, cx)
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let keys = &event.keystroke;

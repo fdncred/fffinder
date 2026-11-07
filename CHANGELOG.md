@@ -13,9 +13,26 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 ### Added
 
 - The sidebar footer says "Finishing index…" while fff-search reads each file once after a scan to flag binaries, which takes minutes for a large folder and keeps the CPU busy (issue #3). `GET /v1/status` reports it as `finishing`, for each location and overall.
+- Every list column can be resized now, including Name and the Folder column in search results, and each header shows a line to grab. Double-click the line to fit the column to its longest text. When columns are wider than the window, the list scrolls sideways.
+- Text that's cut off shows in full in a tooltip when you rest the mouse on it: list cells and headers, names in the other views, sidebar rows, path bar crumbs, and tab titles. File names and folder paths are cut in the middle, so the extension stays visible.
+- Search results and Recents can sort by folder: click the Folder header.
+- The column view's panes and the sidebar can be resized by dragging their edges, and their widths are saved.
+- Windows reopen at the place and size they last had.
+- Drag in empty space to select with a box in the icon and list views. In the list, drag from any column but Name. The view scrolls when the mouse goes past its edge, and Cmd or Shift adds to the selection.
+- Open in New Tab and Open in New Window, in the menus of folders, sidebar rows, and path bar crumbs. Middle-click, Cmd+double-click on a folder, and Cmd+click on a sidebar row open a new tab too.
+- The back and forward buttons on a mouse go back and forward.
+- Page Up and Page Down move through the list, icon, and column views. Shift extends the selection with them and with Home and End.
+- Drop items on a path bar crumb to move them there, and right-click a crumb for its menu.
+- The empty-space menu has Select All, View, and Sort By.
+- F5 refreshes outside split view, and Alt+Up goes to the enclosing folder. On Linux and Windows, Ctrl+L is Go to Folder, Alt+Enter is Get Info, and Shift+Delete is Delete Immediately.
 
 ### Fixed
 
+- The search field ran off the right side of the window at the default window size with Text Size at 1.2. The window title now gives way first, and the sidebar narrows if the toolbar still doesn't fit. The smallest window is 900 points wide instead of 850.
+- The Folder column in search results could shrink to half its width to make room for the other columns, which cut paths to a few characters. It keeps its width now, and Name gives way instead, down to its smallest size.
+- The next item is selected after Move to Trash and Delete Immediately, instead of nothing.
+- Icon view names cut off at two lines now end in an ellipsis.
+- A tab's copy of the settings could write old column widths back over new ones made in another tab or window. Tabs and windows now share column and sidebar widths as they change.
 - The app icon was missing from the Dock and the window switcher on macOS when fffinder ran outside `fffinder.app`, as after `cargo install` or `scripts/install.nu`, which showed a generic executable instead. fffinder now sets it itself. X11 windows get the icon too, and on Linux `scripts/install.nu` installs the desktop entry and icon, which Wayland needs.
 
 ## [0.2.0] - 2026-10-28
