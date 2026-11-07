@@ -94,7 +94,7 @@ From top to bottom, the window has:
 - The toolbar, with the window title, navigation, view and menu buttons, and the search field.
 - The scope bar, only while a search is active.
 - The filter bar, while a Nushell filter is open.
-- The file area, showing the current view.
+- The file area, showing the current view, with the preview pane beside it when it's open.
 - The Nushell panel, while it is open.
 - The path bar.
 - The status bar, or the picker bar in `--pick` mode.
@@ -117,6 +117,10 @@ The file area shows a message when there is nothing to list:
 
 Open folders refresh on their own. fffinder checks the folder every two seconds and reloads it quietly when it changed on disk.
 
+### Preview pane
+
+Preview Pane (Cmd+Shift+P, View › Toggle Preview Pane, or the Actions menu) opens a pane at the right of the list and icon views. It shows a preview of the selected item with its kind, size, date, and location, or how many items are selected and what they add up to. Drag its left edge to resize it, and double-click the edge to go back to the usual width. The gallery and column views have previews of their own, so they don't show it. Each tab and pane keeps it open or closed for itself. See [Previews and Quick Look](#previews-and-quick-look) for what a preview shows.
+
 ### Path bar
 
 The path bar shows the current folder as a row of crumbs, from the volume down. Click a crumb to go to that folder. While searching, in Recents, or when showing results sent from Nushell, the path bar shows the selected item's path instead. Clicking the item's own crumb opens its folder with the item selected.
@@ -127,7 +131,7 @@ Folder crumbs also work like folders in a view. Drop items on one to move them t
 
 The status bar shows:
 
-- How many items are shown, or "N of M selected", and in a folder how much space is left on its volume: "12 items, 214 GB available".
+- How many items are shown, or "N of M selected" with what they add up to, and in a folder how much space is left on its volume: "12 items, 214 GB available", or "2 of 12 selected (1.4 MB), 214 GB available". Folders count when their sizes are known.
 - With a filter on, "N of M items pass the filter".
 - A `+` after the count when a search stopped at the result limit.
 - The time the search took, in milliseconds.
@@ -718,7 +722,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut, Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
-| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
+| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Toggle Preview Pane, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
@@ -783,7 +787,7 @@ Your actions, then **Edit Actions…** and **Reload Actions**. See [Nushell acti
 - **Sort and View Options**: Sort By (Relevance, Name, Date Modified, Date Created, Size, Kind), Ascending, Descending, Keep Folders on Top, Show Hidden Files, Group By.
 - **List header** (right-click a column header in the list view): the columns, Keep Folders on Top, Calculate All Sizes, Reset Columns.
 - **Nushell**: Open Nushell Here, Run a Pipeline… (or Hide Pipeline Panel when it is open), Nushell Actions, Copy as Nushell List.
-- **Actions** (…): New Folder, New File…, New Tab, Split View, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Redo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
+- **Actions** (…): New Folder, New File…, New Tab, Split View, Preview Pane, Quick Look, Get Info, Rename…, Copy Path, Show in Finder, Add Folder to Sidebar, Move to Trash, Delete Immediately…, Undo, Redo, Filter with Nushell…, Go to Folder…, Connect to Server…, Search Syntax…, Settings…. On Linux and Windows, where GPUI shows no menu bar, this menu, the context menus, and the keyboard shortcuts reach the menu bar's commands.
 
 ## Keyboard shortcuts
 
@@ -820,6 +824,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+Shift+. | Show hidden files |
 | Cmd+R | Refresh (F5 too, outside split view) |
 | Cmd+Alt+S | Toggle the sidebar |
+| Cmd+Shift+P | Toggle the preview pane |
 | Cmd+Shift+N | New folder |
 | Cmd+I | Get Info (also Alt+Enter on Linux and Windows) |
 | Cmd+Alt+N | New file |
@@ -937,7 +942,7 @@ The Nushell text size setting has a small "A" button and a large "A" button that
 
 Settings live in `settings.json` in the settings folder (see [Files, folders, and environment variables](#files-folders-and-environment-variables)). fffinder writes it shortly after each change and when it quits, through a temporary file so a crash never leaves it half written. Each write changes only the fields that changed, so a `--pick` or `--term` run can't undo what another fffinder saved. Missing fields use their defaults, and a file that can't be read falls back to defaults.
 
-Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, and `kind_filter`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved.
+Every tab and window shows a change to a setting at once, with these exceptions, which each tab or pane keeps for itself: `view_mode`, `sort`, `use_groups`, `group_by`, `icon_size`, `kind_filter`, and `show_preview_pane`. The file holds the latest of those, which is what the next tab or window starts with. What split view's second pane chooses for them isn't saved.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -955,6 +960,8 @@ Every tab and window shows a change to a setting at once, with these exceptions,
 | `parent_column_width` | `220` | The list's Folder, Match, or Original Folder column in points, at least 50. |
 | `column_view_width` | `235` | How wide a new pane of the column view opens, 120 to 800 points. |
 | `sidebar_width` | `212` | The sidebar's width, 140 to 420 points. |
+| `show_preview_pane` | `false` | Show the preview pane beside the list and icon views. |
+| `preview_pane_width` | `280` | The preview pane's width, 180 to 640 points. |
 | `folder_sizes` | `true` | Calculate All Sizes: folder sizes from the index. |
 | `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |

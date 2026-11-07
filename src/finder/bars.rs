@@ -331,7 +331,11 @@ impl Finder {
         let capped = self.is_searching() && before >= self.search_limit.max(1);
         let plus = if capped { "+" } else { "" };
         let text = if selected > 0 {
-            format!("{selected} of {} selected", group_digits(count))
+            let of = format!("{selected} of {} selected", group_digits(count));
+            match self.selected_size() {
+                Some(size) => format!("{of} ({})", fffinder_core::format::human_size(size)),
+                None => of,
+            }
         } else if filtered {
             format!(
                 "{} of {}{plus} items pass the filter",

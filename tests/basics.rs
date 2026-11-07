@@ -507,6 +507,73 @@ fn a_new_folder_is_named_in_place(cx: &mut TestAppContext) {
     assert_eq!(ui.selected(), ["Archive"]);
 }
 
+// ----- the preview pane -----------------------------------------------------------------
+
+#[gpui_kit::test]
+fn the_preview_pane_follows_the_selection(cx: &mut TestAppContext) {
+    let fx = Fixture::new("pane");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    assert!(!ui.exists("preview-pane"));
+
+    ui.press(&cmd("shift-p"));
+    assert!(ui.exists("preview-pane"));
+    assert!(ui.exists("preview-pane-empty"), "nothing's selected yet");
+
+    ui.select("Roadmap.md");
+    assert!(!ui.exists("preview-pane-empty"));
+    assert!(ui.read(|f| f.has_preview_for_test(&fx.path("Roadmap.md"))));
+
+    ui.select_also("notes.txt");
+    assert_eq!(ui.snapshot("preview-pane-many").label(), Some("2 items"));
+
+    // It's for the views without a preview of their own.
+    ui.click("view-gallery");
+    assert!(!ui.exists("preview-pane"));
+    ui.click("view-columns");
+    assert!(!ui.exists("preview-pane"));
+    ui.click("view-icons");
+    assert!(ui.exists("preview-pane"));
+
+    ui.press(&cmd("shift-p"));
+    assert!(!ui.exists("preview-pane"));
+}
+
+#[gpui_kit::test]
+fn the_preview_pane_resizes_from_its_left_edge(cx: &mut TestAppContext) {
+    let fx = Fixture::new("pane-width");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.press(&cmd("shift-p"));
+    let width = |ui: &Ui| ui.read(|f| f.config().preview_pane_width);
+    let start = width(&ui);
+
+    ui.drag_by("resize-preview", -40.);
+    assert_eq!(width(&ui), start + 40., "dragging left widens it");
+
+    ui.double_click("resize-preview");
+    assert_eq!(width(&ui), start);
+}
+
+// ----- the status bar ---------------------------------------------------------------------
+
+#[gpui_kit::test]
+fn the_status_bar_adds_up_the_selection(cx: &mut TestAppContext) {
+    let fx = Fixture::new("status-size");
+    std::fs::write(fx.path("one.txt"), vec![b'x'; 2000]).unwrap();
+    std::fs::write(fx.path("two.txt"), vec![b'x'; 3000]).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+
+    ui.select("one.txt");
+    ui.select_also("two.txt");
+
+    let status = ui.snapshot("status-text");
+    let text = status.label().unwrap();
+    assert!(text.contains("2 of"), "{text}");
+    assert!(text.contains("(5.0 KB)"), "{text}");
+}
+
 // ----- keys ----------------------------------------------------------------------------
 
 #[gpui_kit::test]

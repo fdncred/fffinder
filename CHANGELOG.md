@@ -21,6 +21,8 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 - Rename edits the name in place in the list, icon, and column views, with the part before the extension selected. Return or clicking elsewhere keeps it, and Escape cancels. New Folder names the folder the same way. The gallery still asks in a dialog.
 - Cmd+X cuts the selected items, on Linux and Windows Ctrl+X, and Cmd+V then moves them. They look faint until they're pasted, and Escape cancels. Edit › Cut and the item menu have it too.
 - Drag a Favorites row onto another to reorder them.
+- A preview pane beside the list and icon views (Cmd+Shift+P, or View › Toggle Preview Pane). It follows the selection and resizes from its left edge.
+- The status bar adds up the selected items: "2 of 12 selected (1.4 MB)".
 - Search results and Recents can sort by folder: click the Folder header.
 - The column view's panes and the sidebar can be resized by dragging their edges, and their widths are saved.
 - Windows reopen at the place and size they last had.

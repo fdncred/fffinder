@@ -148,6 +148,10 @@ pub const COLUMN_VIEW_WIDTH_RANGE: (f32, f32) = (120., 800.);
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 212.;
 /// The narrowest and widest the sidebar can be dragged.
 pub const SIDEBAR_WIDTH_RANGE: (f32, f32) = (140., 420.);
+/// The preview pane before the user drags it.
+pub const DEFAULT_PREVIEW_PANE_WIDTH: f32 = 280.;
+/// The narrowest and widest the preview pane can be dragged.
+pub const PREVIEW_PANE_WIDTH_RANGE: (f32, f32) = (180., 640.);
 
 pub fn default_list_columns() -> Vec<ColumnSetting> {
     [ListColumn::Modified, ListColumn::Size, ListColumn::Kind]
@@ -197,6 +201,10 @@ pub struct Config {
     pub column_view_width: f32,
     /// The sidebar's width in points.
     pub sidebar_width: f32,
+    /// Show the preview pane beside the list and icon views.
+    pub show_preview_pane: bool,
+    /// The preview pane's width in points.
+    pub preview_pane_width: f32,
     /// Show folder sizes, added up from the index ("Calculate All Sizes").
     pub folder_sizes: bool,
     /// Servers connected to with Connect to Server, newest first.
@@ -257,6 +265,8 @@ impl Default for Config {
             parent_column_width: DEFAULT_PARENT_COLUMN_WIDTH,
             column_view_width: DEFAULT_COLUMN_VIEW_WIDTH,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            show_preview_pane: false,
+            preview_pane_width: DEFAULT_PREVIEW_PANE_WIDTH,
             folder_sizes: true,
             recent_servers: Vec::new(),
             icon_size: 64.0,
@@ -521,13 +531,15 @@ macro_rules! settings_by_scope {
 
 settings_by_scope! {
     shared: search_roots, search_apps, favorites, show_hidden, folders_first, list_columns,
-        name_column_width, parent_column_width, column_view_width, sidebar_width, folder_sizes,
+        name_column_width, parent_column_width, column_view_width, sidebar_width,
+        preview_pane_width, folder_sizes,
         recent_servers, show_sidebar, appearance, result_limit, terminals, smart_folders,
         use_nu_environment, preview_font_size, nu_font_size, ui_scale, search, terminal, nu_path,
         settings_version;
     // Each tab or pane has its own of these; the last one changed is what
     // the next one starts with.
     own: view_mode, sort, use_groups, group_by, icon_size, kind_filter, last_folder,
+        show_preview_pane,
 }
 
 impl Config {
@@ -610,6 +622,15 @@ impl Config {
             self.sidebar_width,
             SIDEBAR_WIDTH_RANGE,
             DEFAULT_SIDEBAR_WIDTH,
+        )
+    }
+
+    /// The preview pane's width, kept in range even if the file was edited by hand.
+    pub fn preview_pane_width(&self) -> f32 {
+        in_range(
+            self.preview_pane_width,
+            PREVIEW_PANE_WIDTH_RANGE,
+            DEFAULT_PREVIEW_PANE_WIDTH,
         )
     }
 

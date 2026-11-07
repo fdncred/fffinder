@@ -683,6 +683,12 @@ fn actions_menu(
             .action(Box::new(ToggleSplitView)),
     )
     .item(
+        PopupMenuItem::new("Preview Pane")
+            .icon(Lucide::PanelRight)
+            .checked(finder.config.show_preview_pane)
+            .action(Box::new(TogglePreviewPane)),
+    )
+    .item(
         PopupMenuItem::new("Quick Look")
             .icon(IconName::Eye)
             .disabled(!has_selection)

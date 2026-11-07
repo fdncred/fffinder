@@ -8,8 +8,9 @@ use crate::actions::ToggleFoldersFirst;
 use crate::model::Location;
 use crate::theme::ui;
 use fffinder_core::config::{
-    COLUMN_VIEW_WIDTH_RANGE, DEFAULT_PARENT_COLUMN_WIDTH, DEFAULT_SIDEBAR_WIDTH, MIN_COLUMN_WIDTH,
-    MIN_NAME_WIDTH, SIDEBAR_WIDTH_RANGE, default_list_columns,
+    COLUMN_VIEW_WIDTH_RANGE, DEFAULT_PARENT_COLUMN_WIDTH, DEFAULT_PREVIEW_PANE_WIDTH,
+    DEFAULT_SIDEBAR_WIDTH, MIN_COLUMN_WIDTH, MIN_NAME_WIDTH, PREVIEW_PANE_WIDTH_RANGE,
+    SIDEBAR_WIDTH_RANGE, default_list_columns,
 };
 use fffinder_core::{ColumnSetting, FileEntry, ListColumn, SortKey, ViewMode, listing};
 use gpui_kit::component::ActiveTheme as _;
@@ -36,6 +37,8 @@ pub(super) enum ResizeEdge {
     Pane(usize),
     /// The sidebar.
     Sidebar,
+    /// The preview pane, whose edge to drag is on its left.
+    PreviewPane,
 }
 
 /// Dragged to resize `.0`.
@@ -274,6 +277,7 @@ impl Finder {
             ResizeEdge::Column(ix) => self.config.list_columns.get(ix).map(|c| c.width),
             ResizeEdge::Pane(col) => self.columns.get(col).map(|pane| pane.width),
             ResizeEdge::Sidebar => Some(self.config.sidebar_width()),
+            ResizeEdge::PreviewPane => Some(self.config.preview_pane_width()),
         }
     }
 
@@ -300,6 +304,10 @@ impl Finder {
                 let (min, max) = SIDEBAR_WIDTH_RANGE;
                 self.config.sidebar_width = width.clamp(min, max);
             }
+            ResizeEdge::PreviewPane => {
+                let (min, max) = PREVIEW_PANE_WIDTH_RANGE;
+                self.config.preview_pane_width = width.clamp(min, max);
+            }
         }
     }
 
@@ -318,6 +326,11 @@ impl Finder {
             return;
         };
         let moved = f32::from(x - start) / crate::theme::ui_scale();
+        // Its edge is on the left, so moving right makes it narrower.
+        let moved = match resizing {
+            ResizeEdge::PreviewPane => -moved,
+            _ => moved,
+        };
         self.set_edge_width(resizing, width + moved);
         self.widths_changed(cx);
     }
@@ -332,6 +345,7 @@ impl Finder {
     ) {
         let width = match edge {
             ResizeEdge::Sidebar => DEFAULT_SIDEBAR_WIDTH,
+            ResizeEdge::PreviewPane => DEFAULT_PREVIEW_PANE_WIDTH,
             _ => self.fitting_width(edge, window, cx),
         };
         self.set_edge_width(edge, width);
@@ -391,7 +405,9 @@ impl Finder {
                     .map(|entry| (SharedString::from(entry.name.clone()), extra));
                 (rows.collect(), theme.font_family.clone())
             }
-            ResizeEdge::Sidebar => (Vec::new(), theme.font_family.clone()),
+            ResizeEdge::Sidebar | ResizeEdge::PreviewPane => {
+                (Vec::new(), theme.font_family.clone())
+            }
         };
         let font = font(family);
         super::fit::widest_points(texts, &font, ui(12.), window).min(MAX_FIT_WIDTH)

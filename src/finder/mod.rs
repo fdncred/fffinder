@@ -19,6 +19,7 @@ mod nu_panel;
 mod open_with;
 mod pdf;
 mod preview;
+mod preview_pane;
 mod quick_look;
 mod sidebar;
 mod tab_bar;
@@ -1502,7 +1503,8 @@ impl Finder {
 
     fn selection_changed(&mut self, cx: &mut Context<Self>) {
         let wants_preview = matches!(self.effective_view(), ViewMode::Gallery | ViewMode::Columns)
-            || self.quick_look_open;
+            || self.quick_look_open
+            || self.shows_preview_pane();
         if wants_preview && let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
             // Quick Look's window follows clicks in the browser.
@@ -1510,6 +1512,18 @@ impl Finder {
                 self.ensure_pdf(&entry, cx);
             }
         }
+    }
+
+    /// How much the selected items add up to, as far as their sizes are known.
+    /// `None` when none of them has a known size.
+    pub(super) fn selected_size(&self) -> Option<u64> {
+        if self.effective_view() == ViewMode::Columns {
+            return self.column_selection().and_then(|entry| entry.size);
+        }
+        self.selection
+            .indices()
+            .filter_map(|ix| self.rows.get(ix)?.entry.size)
+            .reduce(u64::saturating_add)
     }
 
     /// The selected folders, in display order.
@@ -2726,6 +2740,7 @@ impl Render for Finder {
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(Self::toggle_hidden))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::toggle_preview_pane))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
             .on_action(cx.listener(Self::cut_files))
@@ -2993,7 +3008,15 @@ impl Finder {
             .on_prepaint(move |bounds, _, cx| {
                 entity.update(cx, |this, _| this.content_height = bounds.size.height);
             })
-            .child(body)
+            .map(|this| match self.render_preview_pane(cx) {
+                Some(pane) => this.child(
+                    h_flex()
+                        .size_full()
+                        .child(div().flex_1().min_w_0().h_full().child(body))
+                        .child(pane),
+                ),
+                None => this.child(body),
+            })
     }
 
     /// The folder that files dropped on the view go into: the one shown,
