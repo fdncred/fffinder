@@ -2,7 +2,9 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-08
+
+This release adds a tree mode to the sidebar, which works the way Explorer's navigation pane does, and on macOS a check at startup for Full Disk Access.
 
 ### Added
 
@@ -146,5 +148,6 @@ fffinder can now manage files as well as find them. Unless a line says otherwise
 - On Windows, `fffinder --term` clicks land on whole cells and emoji are one color. In Windows Terminal, which gets sixel images, frames are drawn at 10 by 20 pixels a character cell, so text looks softer than with kitty graphics, and images have at most 256 colors.
 - Connect to Server can't mount SFTP on macOS. On Linux it can't ask for a password, so put the user name in the address and keep the password in your keyring.
 
+[0.4.0]: https://github.com/fdncred/fffinder/releases/tag/v0.4.0
 [0.3.0]: https://github.com/fdncred/fffinder/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fdncred/fffinder/releases/tag/v0.2.0

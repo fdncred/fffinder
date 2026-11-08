@@ -44,7 +44,7 @@ Paths are always absolute; clients compute relative paths themselves. `size` is 
 
 ```json
 {
-  "app": "fffinder", "version": "0.3.0", "protocol": 1, "pid": 4242,
+  "app": "fffinder", "version": "0.4.0", "protocol": 1, "pid": 4242,
   "watch": true, "scanning": false, "finishing": false, "files": 672643, "dirs": 91420,
   "roots": [
     {"path": "/Users/me", "scanning": false, "finishing": false, "files": 264824, "dirs": 40122, "git_repo": false}
