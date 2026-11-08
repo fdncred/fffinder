@@ -42,13 +42,30 @@ const HANDLE_REACH: f32 = 4.;
 /// the pane's scrollbar and the handle out of each other's way.
 pub(super) const PANE_EDGE: f32 = 5.;
 
-/// Files dragged from a view: dropped on the sidebar or exported to other apps.
+/// Files dragged from a view or the sidebar's folder tree: dropped on a
+/// folder or the sidebar, or exported to other apps.
 #[derive(Clone)]
-pub struct DraggedFiles(pub Vec<PathBuf>);
+pub struct DraggedFiles(pub Vec<PathBuf>, pub DragSource);
+
+/// Where a drag of files started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragSource {
+    /// A folder's items, or search results.
+    Items,
+    /// The sidebar's folder tree, whose folders are in the sidebar already.
+    Tree,
+}
 
 pub struct DragPreview {
     label: SharedString,
     icon: &'static str,
+}
+
+impl DragPreview {
+    /// What follows the mouse while `label` is dragged, with `icon` beside it.
+    pub(super) fn new(label: SharedString, icon: &'static str) -> DragPreview {
+        DragPreview { label, icon }
+    }
 }
 
 impl Render for DragPreview {
@@ -276,12 +293,15 @@ impl Finder {
             row.name.clone()
         };
         let icon = row.entry.kind.icon_asset();
-        el.on_drag(DraggedFiles(drag_paths), move |_, _, _, cx| {
-            cx.new(|_| DragPreview {
-                label: label.clone(),
-                icon,
-            })
-        })
+        el.on_drag(
+            DraggedFiles(drag_paths, DragSource::Items),
+            move |_, _, _, cx| {
+                cx.new(|_| DragPreview {
+                    label: label.clone(),
+                    icon,
+                })
+            },
+        )
         .external_drag_payload(|files: &DraggedFiles, _, _| {
             Some(ExternalDragPayload::Files(FileDragPaths::new(
                 files.0.iter().map(|p| (p.clone(), p.is_dir())),
@@ -453,7 +473,7 @@ impl Finder {
         tile_h: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let renaming = self.rename_field(&self.rows[ix].entry.path, cx);
+        let renaming = self.rename_field(&self.rows[ix].entry.path, false, cx);
         let pal = palette(cx);
         let theme = cx.theme();
         let row = &self.rows[ix];
@@ -833,7 +853,7 @@ impl Finder {
         active: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let renaming = self.rename_field(&self.rows[ix].entry.path, cx);
+        let renaming = self.rename_field(&self.rows[ix].entry.path, false, cx);
         let pal = palette(cx);
         let theme = cx.theme();
         let base = Self::list_row_base(stripe, cx);
@@ -1053,7 +1073,7 @@ impl Finder {
             .columns
             .get(col)
             .and_then(|pane| pane.entries.get(ix))
-            .and_then(|entry| self.rename_field(&entry.path, cx));
+            .and_then(|entry| self.rename_field(&entry.path, false, cx));
         let pal = palette(cx);
         let theme = cx.theme();
         let Some(pane) = self.columns.get(col) else {
@@ -1167,7 +1187,7 @@ impl Finder {
                     }),
                 )
             })
-            .on_drag(DraggedFiles(vec![entry.path.clone()]), {
+            .on_drag(DraggedFiles(vec![entry.path.clone()], DragSource::Items), {
                 let label: SharedString = entry.name.clone().into();
                 let icon = entry.kind.icon_asset();
                 move |_, _, _, cx| {

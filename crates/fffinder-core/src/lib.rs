@@ -1,6 +1,6 @@
 //! Core of fffinder: search engine wrapper around `fff-search`, the app list,
-//! file model, folder listing, copying and moving, sidebar places, settings, terminals,
-//! and formatting.
+//! file model, folder listing, the folders for the sidebar's tree, copying and
+//! moving, sidebar places, settings, terminals, and formatting.
 
 pub mod app_list;
 pub mod archive;
@@ -19,12 +19,13 @@ pub mod ops;
 pub mod pdf;
 pub mod places;
 pub mod servers;
+pub mod subfolders;
 pub mod terminals;
 pub mod thumbnailers;
 
 pub use config::{
-    Appearance, ColumnSetting, Config, ListColumn, SearchCase, SearchSettings, SmartFolder,
-    ViewMode,
+    Appearance, ColumnSetting, Config, ListColumn, SearchCase, SearchSettings, SidebarMode,
+    SmartFolder, ViewMode,
 };
 pub use engine::{
     Engine, EngineOptions, FolderStats, GrepHit, GrepModeKind, GrepRequest, GrepResponse,

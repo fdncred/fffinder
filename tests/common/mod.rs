@@ -8,7 +8,7 @@ use fffinder::finder::{AppState, Finder, PickerOptions};
 use fffinder::model::Location;
 use fffinder::system::{Recorder, SystemCall};
 use fffinder_core::terminals::Terminal;
-use fffinder_core::{Appearance, Engine, EngineOptions};
+use fffinder_core::{Appearance, Engine, EngineOptions, SidebarMode};
 use gpui_kit::base::test_support::{self, ElementSnapshot};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -226,6 +226,10 @@ impl<'a> Ui<'a> {
         view.update(cx, |f, cx| {
             // Settings shows these; the engine already indexes them.
             f.set_search_roots(vec![root], cx);
+            // Windows starts the sidebar as a tree, which opens down to the
+            // fixture and can push rows like the Trash out of view. Every
+            // test starts from the list; tree tests switch to the tree.
+            f.set_sidebar_mode(SidebarMode::List, cx);
         });
         let mut ui = Ui {
             cx,
@@ -582,6 +586,13 @@ impl<'a> Ui<'a> {
                 cx,
             );
             window.render_frame(cx);
+        });
+    }
+
+    /// Click at `position`, whatever is there.
+    pub fn click_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("click {position:?}"), |window, cx| {
+            click_point(window, position, MouseButton::Left, cx)
         });
     }
 

@@ -8,6 +8,7 @@ pub mod app_icon;
 pub mod apps;
 pub mod args;
 pub mod assets;
+pub mod disk_access;
 pub mod finder;
 pub mod graphics;
 pub mod highlight;
@@ -128,7 +129,34 @@ pub fn run(args: args::Args) {
         });
         open_window(start, args.query.clone(), picker, cx);
         cx.activate(true);
+        // A file picker or a window in a terminal is there for a moment, and
+        // in a terminal it's the terminal that macOS grants access to.
+        if cfg!(target_os = "macos") && picker.is_none() && !args.term {
+            check_disk_access(cx);
+        }
     });
+}
+
+/// Look for Full Disk Access once the first window is up, and when it's
+/// missing, ask for it in the window in front, unless asking is turned off.
+fn check_disk_access(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        let access = cx.background_spawn(async { disk_access::check() }).await;
+        cx.update(|cx| {
+            cx.set_global(disk_access::Checked(access));
+            if access != disk_access::Access::Denied
+                || !settings::current(cx).ask_for_full_disk_access
+            {
+                return;
+            }
+            if let Some((handle, view)) = frontmost(cx) {
+                let _ = handle.update(cx, |_, window, cx| {
+                    view.update(cx, |f, cx| f.ask_for_full_disk_access(window, cx))
+                });
+            }
+        });
+    })
+    .detach();
 }
 
 /// Browser windows, oldest first, for requests that need "the window".

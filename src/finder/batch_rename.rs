@@ -215,11 +215,12 @@ impl Finder {
         };
         match rename::apply(&planned) {
             Ok(moved) => {
-                let pairs = planned
+                let pairs: Vec<(PathBuf, PathBuf)> = planned
                     .iter()
                     .filter(|p| p.outcome == rename::Outcome::Rename)
                     .map(|p| (p.from.clone(), p.to()))
                     .collect();
+                self.follow_moves(&pairs, window, cx);
                 crate::undo::record("Rename", crate::undo::Change::Moved(pairs), cx);
                 window.close_dialog(cx);
                 for (from, _) in planned.iter().map(|p| (&p.from, ())) {

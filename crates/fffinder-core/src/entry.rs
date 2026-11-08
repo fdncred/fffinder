@@ -107,6 +107,32 @@ pub fn display_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
+/// Whether an item found while listing a folder is hidden, from what the
+/// listing already read: its name, and on Windows its attributes, which come
+/// with the listing there.
+///
+/// # Arguments
+///
+/// * `child` - The item, as the listing gave it
+/// * `path` - Its path
+///
+/// # Returns
+///
+/// `true` for a dotfile, or an item Windows marks hidden
+pub fn listed_item_hidden(child: &std::fs::DirEntry, path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        child
+            .metadata()
+            .map_or_else(|_| dotfile(path), |meta| is_hidden(path, &meta))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child;
+        dotfile(path)
+    }
+}
+
 #[cfg(windows)]
 fn is_hidden(path: &Path, meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;

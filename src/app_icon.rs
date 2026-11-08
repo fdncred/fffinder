@@ -31,11 +31,7 @@ pub fn set_dock_icon() {
 
     // A bundle's icon is in the Dock before the app starts, drawn in the
     // system's style.
-    let bundled = std::env::current_exe().is_ok_and(|exe| {
-        exe.ancestors()
-            .any(|dir| dir.extension().is_some_and(|ext| ext == "app"))
-    });
-    let Some(mtm) = MainThreadMarker::new().filter(|_| !bundled) else {
+    let Some(mtm) = MainThreadMarker::new().filter(|_| !crate::disk_access::in_app_bundle()) else {
         return;
     };
     // 512 pixels covers the largest Dock on a Retina screen.

@@ -2,6 +2,18 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-11-08
+
+This release adds a tree mode to the sidebar, which works the way Explorer's navigation pane does, and on macOS a check at startup for Full Disk Access.
+
+### Added
+
+- The sidebar has two modes, list and tree. List mode is the sidebar as it was. Tree mode shows folders as a tree, the way Explorer's navigation pane does. Choose with View > Sidebar as List and Sidebar as Tree, or with List and Tree in Settings > Sidebar, saved as `sidebar_mode`. Windows starts in tree mode, and macOS and Linux in list mode. Each Favorites and Locations row gets a triangle that opens it in place to show the folders inside, and those open the same way. Clicking a folder shows it in the window, and the tree opens down to whatever folder the window shows, which Settings > Sidebar can turn off.
+- In tree mode, clicking a sidebar row gives it the keyboard. The arrows, Page Up and Down, Home and End, and typed letters move through it, Right and Left open and close folders, Return goes to the window's items, and F2, Cut, Copy, Paste, Delete, and Cmd+I act on the selected folder.
+- Folders in the tree take dropped items, drag out like items in the window, and open after a moment when a drag waits over them. Their right-click menu has New Folder, Paste Into, Rename, Get Info, Move to Trash, and the rest of a folder's commands. Renaming, moving, or trashing the folder the window shows takes the window along, and Undo brings it back. Back and Forward follow a renamed or moved folder too.
+- The tree reads a folder only when it opens, reading several at once in parallel. It shows a folder's triangle only when there are folders inside, and a lock on a folder it can't read. Every two seconds it reads again any open folder that changed, and looks again inside any folder without a triangle that changed. Closing a folder closes the folders open inside it, so what's out of sight isn't kept up to date.
+- On macOS, fffinder checks for Full Disk Access when it starts. Without it, fffinder opens System Settings at Privacy & Security > Full Disk Access and says in a dialog what to turn on there: fffinder itself, or the terminal it was started from. Don't Ask Again turns the check off. Settings > Privacy shows what the check found, has a button to the System Settings pane, and turns the check back on. The Trash, when it can't be read for lack of Full Disk Access, has the same button.
+
 ## [0.3.0] - 2026-11-07
 
 This release adds file manager basics that were missing: resizable columns, box selection, renaming in place, cut and paste, and windows that reopen where they were. Unless a line says otherwise, each feature works on macOS, Linux, and Windows. Shortcuts are written as on macOS; on Linux and Windows, Cmd is Ctrl.
@@ -136,5 +148,6 @@ fffinder can now manage files as well as find them. Unless a line says otherwise
 - On Windows, `fffinder --term` clicks land on whole cells and emoji are one color. In Windows Terminal, which gets sixel images, frames are drawn at 10 by 20 pixels a character cell, so text looks softer than with kitty graphics, and images have at most 256 colors.
 - Connect to Server can't mount SFTP on macOS. On Linux it can't ask for a password, so put the user name in the address and keep the password in your keyring.
 
+[0.4.0]: https://github.com/fdncred/fffinder/releases/tag/v0.4.0
 [0.3.0]: https://github.com/fdncred/fffinder/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fdncred/fffinder/releases/tag/v0.2.0
