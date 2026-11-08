@@ -8,7 +8,7 @@ use std::borrow::Cow;
 icon_assets!(pub ExtraIcons, [
     AppWindow, ArrowUpDown, ClipboardCopy, Clock, Cloud, Code, Columns3, Download, Film,
     FolderCog, FolderPlus, FolderSearch, Funnel, GalleryHorizontalEnd, House, Image, Laptop,
-    LayoutGrid, List, Monitor, Music, Pencil, Play, ReplaceAll, ScanSearch, SlidersHorizontal,
+    LayoutGrid, List, Lock, Monitor, Music, Pencil, Play, ReplaceAll, ScanSearch, SlidersHorizontal,
     SquarePen, Tag, Terminal, TextSearch, Trash, Usb, X, Zap,
 ]);
 

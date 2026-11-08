@@ -76,6 +76,22 @@ impl Finder {
         if paths.is_empty() {
             paths.extend(self.current_folder().map(Path::to_path_buf));
         }
+        self.show_info(paths, window, cx);
+    }
+
+    /// Show Get Info for the items at `paths`.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - The items; none does nothing
+    /// * `window` - The window the panel opens in
+    /// * `cx` - The browser's context
+    pub(super) fn show_info(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if paths.is_empty() {
             return;
         }

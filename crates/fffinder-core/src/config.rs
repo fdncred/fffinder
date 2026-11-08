@@ -188,6 +188,18 @@ pub enum Appearance {
     Dark,
 }
 
+/// How the sidebar shows Favorites and Locations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarMode {
+    /// One row for each place, as Finder's sidebar has them.
+    #[default]
+    List,
+    /// Each place opens in place to show the folders inside it, as
+    /// Explorer's navigation pane does.
+    Tree,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -229,6 +241,13 @@ pub struct Config {
     pub recent_servers: Vec<String>,
     pub icon_size: f32,
     pub show_sidebar: bool,
+    /// A list of places, or a tree of folders.
+    pub sidebar_mode: SidebarMode,
+    /// The folder tree opens down to whatever folder the window shows.
+    pub expand_to_open_folder: bool,
+    /// At startup on macOS, open System Settings at Full Disk Access when
+    /// fffinder doesn't have it.
+    pub ask_for_full_disk_access: bool,
     pub appearance: Appearance,
     pub kind_filter: KindFilter,
     /// Maximum results shown for a search.
@@ -290,6 +309,13 @@ impl Default for Config {
             recent_servers: Vec::new(),
             icon_size: 64.0,
             show_sidebar: true,
+            sidebar_mode: if cfg!(windows) {
+                SidebarMode::Tree
+            } else {
+                SidebarMode::List
+            },
+            expand_to_open_folder: true,
+            ask_for_full_disk_access: true,
             appearance: Appearance::System,
             kind_filter: KindFilter::Any,
             result_limit: 500,
@@ -580,7 +606,8 @@ settings_by_scope! {
     shared: search_roots, search_apps, favorites, show_hidden, folders_first, list_columns,
         name_column_width, parent_column_width, column_view_width, sidebar_width,
         preview_pane_width, remember_folder_views, folder_sizes,
-        recent_servers, show_sidebar, appearance, result_limit, terminals, smart_folders,
+        recent_servers, show_sidebar, sidebar_mode, expand_to_open_folder, ask_for_full_disk_access,
+        appearance, result_limit, terminals, smart_folders,
         use_nu_environment, preview_font_size, nu_font_size, ui_scale, search, terminal, nu_path,
         settings_version;
     // Each tab or pane has its own of these; the last one changed is what

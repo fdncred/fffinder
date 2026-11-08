@@ -77,6 +77,8 @@ pub enum SystemCall {
     Eject(PathBuf),
     /// Connected to a server (Connect to Server), by the address typed.
     Connect(String),
+    /// Opened a web or system address, such as a pane of System Settings.
+    OpenUrl(String),
 }
 
 /// When set as a global, calls are recorded here and not performed.
@@ -126,6 +128,18 @@ pub fn open(path: &Path, cx: &mut App) {
     match cx.try_global::<Recorder>() {
         Some(recorder) => recorder.record(SystemCall::Open(path.into())),
         None => cx.open_with_system(path),
+    }
+}
+
+/// Open an address with the app the system has for it.
+///
+/// # Arguments
+///
+/// * `url` - The address, such as `https://…` or a System Settings link
+pub fn open_url(url: &str, cx: &mut App) {
+    match cx.try_global::<Recorder>() {
+        Some(recorder) => recorder.record(SystemCall::OpenUrl(url.into())),
+        None => cx.open_url(url),
     }
 }
 

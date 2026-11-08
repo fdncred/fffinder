@@ -585,6 +585,13 @@ impl<'a> Ui<'a> {
         });
     }
 
+    /// Click at `position`, whatever is there.
+    pub fn click_point(&mut self, position: Point<Pixels>) {
+        self.step(format!("click {position:?}"), |window, cx| {
+            click_point(window, position, MouseButton::Left, cx)
+        });
+    }
+
     /// Right-click at `position`.
     pub fn right_click_point(&mut self, position: Point<Pixels>) {
         self.step(format!("right-click {position:?}"), |window, cx| {

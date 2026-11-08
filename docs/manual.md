@@ -85,6 +85,14 @@ Indexing starts as soon as the app starts. The first scan has to finish before "
 
 macOS asks before an app reads Desktop, Documents, or Downloads. To index those and other protected folders without prompts, give fffinder Full Disk Access in System Settings > Privacy & Security, then reopen it.
 
+### Full Disk Access on macOS
+
+Without Full Disk Access, macOS keeps fffinder out of the Trash, Mail, Safari, and other apps' data, so those folders look empty and searches miss what's in them. When fffinder starts, it tries to read two of those places, `~/.Trash` and the system's privacy database. If macOS refuses, fffinder opens System Settings at Privacy & Security > Full Disk Access and shows a dialog saying what to turn on there. The check never makes macOS ask for anything.
+
+macOS gives the permission to the app that started fffinder. Opened as `fffinder.app`, that's fffinder, so turn on fffinder, adding it with the + button if it isn't in the list. Started from a terminal, that's the terminal, and the dialog says to turn on the terminal instead. Either way, quit and reopen what you turned on, since macOS applies the change only to apps that start after it.
+
+The dialog stays up until you press one of its three buttons, its X, or Escape, so the click that brings fffinder back in front of System Settings can't close it. **OK** closes it. **Open System Settings** opens the pane again. **Don't Ask Again** turns the check off, which [Settings > Privacy](#privacy) can turn back on. `--pick` and `--term` windows skip the check, and Linux and Windows have no such permission.
+
 On Linux the index watches folders with inotify, one watch per folder, and a big home folder can exceed the default limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
 
 ## The window
@@ -193,6 +201,23 @@ Right-click a Favorites or Locations row for:
 - **Remove from Sidebar**: Favorites only.
 
 Right-click a Smart Folder for **Remove from Sidebar**.
+
+### Folder tree
+
+The sidebar has two modes. In list mode it shows one row for each place, as Finder's does, and everything above describes it. In tree mode it's a tree of folders, the way Explorer's navigation pane works. Choose with View > Sidebar as List and View > Sidebar as Tree, or with List and Tree in Settings > Sidebar. The mode is saved as `sidebar_mode`. Windows starts in tree mode, and macOS and Linux start in list mode.
+
+In tree mode, every Favorites and Locations row has a triangle. Click it to open the row in place and show the folders inside, indented under it, and click it again to close it and the folders open inside it. Files never show in the tree. A folder's triangle shows only when it has folders inside, and a folder fffinder can't read shows a lock instead. On macOS without Full Disk Access, every folder has a triangle until you open it, since looking inside Desktop, Documents, or Downloads would make macOS ask for permission. Hidden folders show when hidden files do, and a hidden folder on the way to the folder the window shows always shows.
+
+- Click a folder to show it in the window. Double-click it to open or close it.
+- Cmd+click or middle-click a folder to open it in a new tab.
+- The tree follows the window. Go anywhere, by the path bar, Back, Go to Folder, or double-clicking a folder in the window, and the tree opens down to that folder, selects it, and scrolls to it. It stays under the sidebar row you were browsing when it can, and otherwise uses the row whose folder holds the new one most closely. Settings > Sidebar > "Open the tree to the folder shown" turns this off. The tree then selects the folder only where it already shows.
+- The same folder can show under several rows, like your home folder under Favorites and under the disk in Locations. Each opens and closes on its own.
+- Clicking a row gives the sidebar the keyboard. See [In the folder tree](#in-the-folder-tree) for the keys.
+- Drag items onto a folder in the tree to move them into it, or hold Option (macOS) or Ctrl (Linux and Windows) to copy. Hold a drag over a closed folder for a moment and it opens, so you can go on down into it. The window stays where it is.
+- Drag a folder out of the tree to move it, as you would from the window. Let go anywhere in the sidebar but on a folder or the Trash and nothing happens. Add to Sidebar in its right-click menu makes it a favorite.
+- The tree keeps up with changes. fffinder reads a folder when it opens, then checks every two seconds whether an open folder changed and reads it again if so. A folder without a triangle that gets a folder inside gets its triangle by the same check. What you do in fffinder shows at once.
+
+Right-click a folder in the tree for Open in New Tab, Open in New Window, Expand or Collapse, **New Folder** (made inside it and named in place), **Paste Into** the folder, Get Info, Open Nushell Here, Show in Finder, Cut, Copy, Copy Path, **Rename…** (in place), Add to Sidebar, and Move to Trash. Moving to the Trash the folder the window shows, or a folder that holds it, takes the window to the folder above it. Renaming or moving that folder, from the tree or the window, by dragging, Cut and Paste, or Undo, takes the window to where it went, and what was open inside it stays open. Back and Forward go to the new place too, not the old one. In tree mode, Favorites and Locations rows also have Expand or Collapse, New Folder, Paste Into, and Get Info.
 
 The footer shows "N files indexed", or "Indexing… N" with a spinner while scanning. After a scan, "Finishing index…" means fff-search is still reading each file once to flag binaries, which can take a few minutes for a large folder and keeps the CPU busy. Searches find everything by then. Its gear button opens Settings. The Hide Sidebar button, or Cmd+Alt+S, hides the sidebar.
 
@@ -516,7 +541,7 @@ While an Undo or Redo runs, no other file operation starts: copying, moving, ren
 
 ## The Trash
 
-The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash.
+The Trash row at the end of the sidebar's Locations shows what is in the Trash, with the folder each item came from in the Folder column. Drop items on the Trash row to move them to the Trash. On macOS without Full Disk Access, the view says so and has an **Open System Settings** button that opens the Full Disk Access pane.
 
 - **Put Back** (Cmd+Backspace, the item menu, or File › Put Back) moves the selected items back where they came from. It stops with a notification when the folder is gone or another item has the name.
 - **Delete Immediately…** (Cmd+Alt+Backspace, or the item menu) deletes the selected items for good.
@@ -723,7 +748,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
 | File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut, Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
-| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Toggle Preview Pane, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
+| View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Sidebar as List, Sidebar as Tree, Toggle Preview Pane, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
 | Window | Show Previous Tab, Show Next Tab, Move Tab to New Window, Split View (Cmd+Backslash), Copy to Other Pane (F5), Move to Other Pane (F6) |
 | Nushell | Pipeline Panel, Open in Nushell, Copy as Nushell List |
@@ -866,6 +891,29 @@ Cmd on macOS, Ctrl elsewhere.
 | Cmd+=, Cmd+-, Cmd+0 | In the gallery, zoom a PDF in, out, or to fit the width, or change the size of text previews |
 | Letters | Type to select |
 
+### In the folder tree
+
+These work once you click a row in the sidebar in [tree mode](#folder-tree). Each acts on the selected folder, which is the one the window shows.
+
+| Keys | Action |
+| --- | --- |
+| Up, Down | The row above or below, shown in the window |
+| Page Up, Page Down | A sidebarful up or down |
+| Home, End | The first or last row |
+| Right | Open the folder, or go to the first folder inside when it's open |
+| Left | Close the folder, or go to the folder that holds it when it's closed |
+| Return | Give the keyboard to the window's items |
+| Letters | Go to the next row whose name starts with them |
+| F2 | Rename the folder in place |
+| Cmd+X, Cmd+C | Cut or copy the folder |
+| Cmd+V, Cmd+Alt+V | Paste into the folder, or move the copied items into it |
+| Cmd+Backspace, Delete | Move the folder to the Trash |
+| Cmd+I | Get Info |
+| Cmd+Alt+C | Copy the folder's path |
+| Cmd+Z, Cmd+Shift+Z | Undo, Redo |
+
+F2, Cut, Copy, and the Trash leave Favorites and Locations rows alone, so a key can't rename, move, copy, or trash a favorite folder or a disk.
+
 ### In Quick Look
 
 | Keys | Action |
@@ -935,6 +983,18 @@ Changing one of the five switches rebuilds every index, so the file counts under
 - **Nushell text size**. See below.
 - The path of the settings file.
 
+### Sidebar
+
+- **List** and **Tree**: the sidebar's mode, a list of places or a [tree of folders](#folder-tree). Saved as `sidebar_mode`.
+- **Open the tree to the folder shown**: in tree mode, the tree follows the window. Saved as `expand_to_open_folder`.
+
+### Privacy
+
+On macOS only.
+
+- **Full Disk Access**, with what the check at startup found: On, Off, or nothing when it couldn't tell. **Open System Settings…** opens the Full Disk Access pane. See [Full Disk Access on macOS](#full-disk-access-on-macos).
+- **Ask at startup when it's off**. Saved as `ask_for_full_disk_access`.
+
 ### Nushell text size
 
 The Nushell text size setting has a small "A" button and a large "A" button that change it by one point, and a size label such as "12 pt" that resets it. It sizes the [Nushell panel](#the-nushell-panel) (the pipeline field, the examples, text results, errors, and tables), so the results of [Nushell actions](#nushell-actions) use it too. It also sizes the action names in the Nushell Actions submenu. It ranges from 8 to 32 points, defaults to 12, and is saved as `nu_font_size`.
@@ -972,6 +1032,9 @@ Every tab and window shows a change to a setting at once, with these exceptions,
 | `recent_servers` | `[]` | Connect to Server's recent addresses, newest first, up to ten. |
 | `icon_size` | `64` | Icon view size, 32 to 128. |
 | `show_sidebar` | `true` | Show the sidebar. |
+| `sidebar_mode` | `"tree"` on Windows, `"list"` elsewhere | `list`: one row for each place. `tree`: Favorites and Locations open in place to show their folders. See [Folder tree](#folder-tree). |
+| `expand_to_open_folder` | `true` | The folder tree opens down to the folder the window shows. |
+| `ask_for_full_disk_access` | `true` | On macOS, open System Settings at Full Disk Access when fffinder starts without it. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |
 | `kind_filter` | `"any"` | The search Kind menu: `any`, `folder`, `document`, `image`, `movie`, `audio`, `code`, `archive`. |
 | `result_limit` | `500` | Maximum results shown for a search. |

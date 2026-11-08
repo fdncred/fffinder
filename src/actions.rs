@@ -32,6 +32,8 @@ actions!(
         QuickLook,
         GetInfo,
         ToggleSidebar,
+        SidebarAsList,
+        SidebarAsTree,
         TogglePreviewPane,
         ViewIcons,
         ViewList,
@@ -57,6 +59,8 @@ actions!(
         ExtendEnd,
         ExtendPageUp,
         ExtendPageDown,
+        PageUp,
+        PageDown,
         CopyPath,
         CopyAsNuon,
         MoveItemsHere,
@@ -103,11 +107,17 @@ pub const FILES_RENAMING: &str = "FinderFilesRenaming";
 /// Key context of the Quick Look preview, so Space closes it and the arrows
 /// move through the items.
 pub const QUICK_LOOK: &str = "QuickLook";
+/// Key context of the sidebar's folder tree, once a row is clicked: the
+/// arrows move through it and the file keys act on its folder.
+pub const TREE: &str = "FolderTree";
+/// The folder tree while a name is being edited in it.
+pub const TREE_RENAMING: &str = "FolderTreeRenaming";
 
 pub fn bind_keys(cx: &mut App) {
     let finder = context(FINDER);
     let files = context(FILES);
     let quick_look = context(QUICK_LOOK);
+    let tree = context(TREE);
     let one_pane = context("FinderFiles && OnePane");
     let bindings = [
         key("secondary-q", Quit, &None, cx),
@@ -208,6 +218,25 @@ pub fn bind_keys(cx: &mut App) {
         key("secondary-z", input::Undo, &files, cx),
         key("secondary-shift-z", input::Redo, &files, cx),
         key("delete", MoveToTrash, &files, cx),
+        // The folder tree, as Explorer's navigation pane has it.
+        key("up", MoveUp, &tree, cx),
+        key("down", MoveDown, &tree, cx),
+        key("left", MoveLeft, &tree, cx),
+        key("right", MoveRight, &tree, cx),
+        key("home", MoveHome, &tree, cx),
+        key("end", MoveEnd, &tree, cx),
+        key("pageup", PageUp, &tree, cx),
+        key("pagedown", PageDown, &tree, cx),
+        key("enter", OpenSelected, &tree, cx),
+        key("f2", Rename, &tree, cx),
+        key("secondary-x", input::Cut, &tree, cx),
+        key("secondary-c", input::Copy, &tree, cx),
+        key("secondary-v", input::Paste, &tree, cx),
+        key("secondary-alt-v", MoveItemsHere, &tree, cx),
+        key("secondary-backspace", MoveToTrash, &tree, cx),
+        key("delete", MoveToTrash, &tree, cx),
+        key("secondary-z", input::Undo, &tree, cx),
+        key("secondary-shift-z", input::Redo, &tree, cx),
     ];
     // Terminals keep most Cmd shortcuts for themselves, so in one every Cmd
     // binding also works with Ctrl. Added last, menus show the Ctrl form.
@@ -357,6 +386,8 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("as Gallery", ViewGallery),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Sidebar as List", SidebarAsList),
+            MenuItem::action("Sidebar as Tree", SidebarAsTree),
             MenuItem::action("Toggle Preview Pane", TogglePreviewPane),
             MenuItem::action("Show/Hide Hidden Files", ToggleHidden),
             MenuItem::action("Keep Folders on Top", ToggleFoldersFirst),

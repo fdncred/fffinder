@@ -63,6 +63,17 @@ impl Finder {
             let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
             this.update_in(cx, |this, window, cx| {
                 let next = item_after(&this.rows, &gone);
+                // The window leaves a folder that went to the Trash, or was
+                // inside one that did, for the folder that held it.
+                let leave_for = this
+                    .current_folder()
+                    .and_then(|current| {
+                        gone.iter().find(|path| {
+                            current.starts_with(path) && path.symlink_metadata().is_err()
+                        })
+                    })
+                    .and_then(|path| path.parent())
+                    .map(Path::to_path_buf);
                 this.selection.clear();
                 // What went before a failure can still be put back.
                 let (trashed, failed) = match result {
@@ -87,6 +98,9 @@ impl Finder {
                     if !left.is_empty() {
                         select = left;
                     }
+                }
+                if let Some(parent) = leave_for {
+                    this.navigate(Location::Folder(parent), window, cx);
                 }
                 this.files_changed(select, cx);
             })
@@ -277,39 +291,49 @@ impl Finder {
                     (undo::reverse(&operation.change, bin.as_ref()), running)
                 })
                 .await;
-            this.update_in(cx, |this, window, cx| match result {
-                Ok(reversed) => {
-                    let opposite = undo::Operation {
-                        name,
-                        change: reversed.opposite,
-                    };
-                    undo::stepped(step, opposite, cx);
-                    this.files_changed(reversed.back, cx);
-                    window.push_notification(format!("{} {name}", step.past()), cx);
+            this.update_in(cx, |this, window, cx| {
+                // What Undo or Redo moved is followed like any other move.
+                let made = match &result {
+                    Ok(reversed) => &reversed.opposite,
+                    Err(stopped) => &stopped.done.opposite,
+                };
+                if let Change::Moved(pairs) = made {
+                    this.follow_moves(pairs, window, cx);
                 }
-                Err(stopped) => {
-                    let undo::Stopped { done, left, error } = *stopped;
-                    undo::stepped(
-                        step,
-                        undo::Operation {
+                match result {
+                    Ok(reversed) => {
+                        let opposite = undo::Operation {
                             name,
-                            change: done.opposite,
-                        },
-                        cx,
-                    );
-                    undo::put_back(step, undo::Operation { name, change: left }, cx);
-                    this.files_changed(done.back, cx);
-                    let verb = match step {
-                        Step::Undo => "undo",
-                        Step::Redo => "redo",
-                    };
-                    window.push_notification(
-                        (
-                            NotificationType::Error,
-                            format!("Couldn’t {verb} {name}: {error}"),
-                        ),
-                        cx,
-                    );
+                            change: reversed.opposite,
+                        };
+                        undo::stepped(step, opposite, cx);
+                        this.files_changed(reversed.back, cx);
+                        window.push_notification(format!("{} {name}", step.past()), cx);
+                    }
+                    Err(stopped) => {
+                        let undo::Stopped { done, left, error } = *stopped;
+                        undo::stepped(
+                            step,
+                            undo::Operation {
+                                name,
+                                change: done.opposite,
+                            },
+                            cx,
+                        );
+                        undo::put_back(step, undo::Operation { name, change: left }, cx);
+                        this.files_changed(done.back, cx);
+                        let verb = match step {
+                            Step::Undo => "undo",
+                            Step::Redo => "redo",
+                        };
+                        window.push_notification(
+                            (
+                                NotificationType::Error,
+                                format!("Couldn’t {verb} {name}: {error}"),
+                            ),
+                            cx,
+                        );
+                    }
                 }
             })
             .ok();
@@ -335,6 +359,7 @@ impl Finder {
             self.rebuild_rows(cx);
         }
         self.reload_columns(cx);
+        self.check_tree_for_changes(cx);
         self.tell_others(cx);
     }
 

@@ -27,6 +27,11 @@ impl Finder {
             let locations = cx.background_spawn(async { places::locations() }).await;
             this.update(cx, |this, cx| {
                 this.locations = locations;
+                // A folder on a disk can only be found in the tree once the
+                // disk is in Locations.
+                if this.tree.selected().is_none() {
+                    this.tree_follow_location(cx);
+                }
                 cx.notify();
             })
             .ok();

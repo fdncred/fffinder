@@ -4,6 +4,20 @@ use crate::entry::FileEntry;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// When a folder last changed: what it holds changes its modification time.
+///
+/// # Arguments
+///
+/// * `dir` - The folder
+///
+/// # Returns
+///
+/// Its modification time, or `None` when it can't be read
+pub fn dir_stamp(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
+}
 
 /// Read a directory. Unreadable children are skipped; an unreadable folder is an error.
 pub fn list_dir(dir: &Path, show_hidden: bool) -> std::io::Result<Vec<FileEntry>> {

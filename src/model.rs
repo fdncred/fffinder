@@ -1,6 +1,6 @@
 //! Browser state that doesn't depend on GPUI: navigation history and selection.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,6 +35,83 @@ impl Location {
             Location::Results { title, .. } => title.clone(),
             Location::Trash => "Trash".into(),
         }
+    }
+
+    /// Go where the folder went, when it moved or was inside one that did.
+    /// Returns whether it moved.
+    fn follow(&mut self, moves: &Moves) -> bool {
+        let Location::Folder(path) = self else {
+            return false;
+        };
+        match moves.follow(path) {
+            Some(to) => {
+                *path = to;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// `path` with `from` at its start swapped for `to`.
+///
+/// # Arguments
+///
+/// * `path` - The path to move
+/// * `from` - Where a folder was
+/// * `to` - Where it is now
+///
+/// # Returns
+///
+/// The path inside the moved folder, or `None` when `path` isn't in `from`
+pub fn rebase(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+    let rest = path.strip_prefix(from).ok()?;
+    // Joining an empty path would add a trailing separator.
+    Some(if rest.as_os_str().is_empty() {
+        to.to_path_buf()
+    } else {
+        to.join(rest)
+    })
+}
+
+/// Items that were renamed or moved, looked up by where each was, to tell
+/// where a path that was in one of them is now.
+#[derive(Debug, Clone, Default)]
+pub struct Moves<'a>(HashMap<&'a Path, &'a Path>);
+
+impl<'a> Moves<'a> {
+    /// Moves from each pair's first path to its second.
+    ///
+    /// # Arguments
+    ///
+    /// * `pairs` - Where each item was, and where it is now
+    ///
+    /// # Returns
+    ///
+    /// The moves, ready to look up
+    pub fn new(pairs: &'a [(PathBuf, PathBuf)]) -> Moves<'a> {
+        Moves(
+            pairs
+                .iter()
+                .map(|(from, to)| (from.as_path(), to.as_path()))
+                .collect(),
+        )
+    }
+
+    /// Where `path` is now. Each folder above it is looked up, so this
+    /// takes as many lookups as the path is deep, however many items moved.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Where something was
+    ///
+    /// # Returns
+    ///
+    /// Where it is now, or `None` when neither it nor a folder holding it
+    /// moved
+    pub fn follow(&self, path: &Path) -> Option<PathBuf> {
+        path.ancestors()
+            .find_map(|dir| rebase(path, dir, self.0.get(dir)?))
     }
 }
 
@@ -93,6 +170,23 @@ impl History {
 
     pub fn can_forward(&self) -> bool {
         !self.forward.is_empty()
+    }
+
+    /// Keep up with items that moved: every folder in the history that was
+    /// one of them, or inside one, is now where it went.
+    ///
+    /// # Arguments
+    ///
+    /// * `moves` - What moved, and where
+    ///
+    /// # Returns
+    ///
+    /// Whether the current location moved
+    pub fn follow(&mut self, moves: &Moves) -> bool {
+        for location in self.back.iter_mut().chain(&mut self.forward) {
+            location.follow(moves);
+        }
+        self.current.follow(moves)
     }
 }
 
@@ -310,6 +404,57 @@ mod tests {
         assert!(h.back() && h.back());
         assert_eq!(h.current(), &a);
         assert!(!h.back());
+    }
+
+    #[test]
+    fn rebase_moves_paths_inside_the_folder() {
+        let (from, to) = (Path::new("/a/old"), Path::new("/a/new"));
+        assert_eq!(
+            rebase(Path::new("/a/old"), from, to),
+            Some(PathBuf::from("/a/new"))
+        );
+        assert_eq!(
+            rebase(Path::new("/a/old/x/y"), from, to),
+            Some(PathBuf::from("/a/new/x/y"))
+        );
+        assert_eq!(rebase(Path::new("/a/older"), from, to), None);
+        assert_eq!(rebase(Path::new("/b"), from, to), None);
+    }
+
+    #[test]
+    fn moves_follow_paths_inside_what_moved() {
+        let pairs = [
+            (PathBuf::from("/a/old"), PathBuf::from("/b/new")),
+            (PathBuf::from("/c"), PathBuf::from("/d")),
+        ];
+        let moves = Moves::new(&pairs);
+        assert_eq!(moves.follow(Path::new("/a/old")), Some("/b/new".into()));
+        assert_eq!(moves.follow(Path::new("/a/old/x")), Some("/b/new/x".into()));
+        assert_eq!(moves.follow(Path::new("/c/y/z")), Some("/d/y/z".into()));
+        assert_eq!(moves.follow(Path::new("/a")), None);
+        assert_eq!(moves.follow(Path::new("/a/older")), None);
+    }
+
+    #[test]
+    fn history_follows_folders_that_moved() {
+        let pairs = [(PathBuf::from("/p/old"), PathBuf::from("/p/new"))];
+        let moves = Moves::new(&pairs);
+        let mut h = History::new(Location::Folder("/p/old/a".into()));
+        h.navigate(Location::Folder("/p".into()));
+        h.navigate(Location::Folder("/p/old".into()));
+        h.back();
+        assert!(!h.follow(&moves), "the current folder stayed put");
+        assert_eq!(h.current(), &Location::Folder("/p".into()));
+        h.forward();
+        assert_eq!(h.current(), &Location::Folder("/p/new".into()));
+        h.back();
+        h.back();
+        assert_eq!(h.current(), &Location::Folder("/p/new/a".into()));
+
+        let mut shown = History::new(Location::Folder("/p/old".into()));
+        assert!(shown.follow(&moves));
+        assert!(!shown.can_back(), "following isn't going somewhere");
+        assert_eq!(shown.current(), &Location::Folder("/p/new".into()));
     }
 
     #[test]

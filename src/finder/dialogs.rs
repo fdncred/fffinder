@@ -6,7 +6,7 @@ use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
 use fffinder_core::terminals::{self, CUSTOM, Platform, Terminal};
-use fffinder_core::{Appearance, FileEntry, SearchCase, config, listing};
+use fffinder_core::{Appearance, FileEntry, SearchCase, SidebarMode, config, listing};
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
@@ -241,7 +241,7 @@ fn choice_stepper(
 }
 
 /// A setting's name and what it affects, with its control beside them.
-fn setting_row(
+pub(super) fn setting_row(
     title: &'static str,
     detail: &'static str,
     control: impl IntoElement,
@@ -346,6 +346,7 @@ impl Finder {
             let appearance = finder.config.appearance;
             let hidden = finder.config.show_hidden;
             let remember_views = finder.config.remember_folder_views;
+            let sidebar_mode = finder.config.sidebar_mode;
             let nu = cx.global::<AppState>().nu.clone();
 
             let mut root_list = v_flex()
@@ -566,6 +567,41 @@ impl Finder {
                             nu_text_stepper(finder, &view),
                             muted,
                         ))
+                        .child(section("SIDEBAR", cx))
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_x(ui(16.))
+                                .gap_y(ui(6.))
+                                .child(
+                                    ButtonGroup::new("sidebar-mode")
+                                        .small()
+                                        .outline()
+                                        .child(Button::new("sidebar-list").label("List").selected(sidebar_mode == SidebarMode::List))
+                                        .child(Button::new("sidebar-tree").label("Tree").selected(sidebar_mode == SidebarMode::Tree))
+                                        .on_click(window.listener_for(&view, |this: &mut Finder, ixs: &Vec<usize>, _, cx| {
+                                            let mode = match ixs.first() {
+                                                Some(1) => SidebarMode::Tree,
+                                                _ => SidebarMode::List,
+                                            };
+                                            this.set_sidebar_mode(mode, cx);
+                                        })),
+                                )
+                                .child(
+                                    Switch::new("expand-to-open-folder")
+                                        .small()
+                                        .label("Open the tree to the folder shown")
+                                        .checked(finder.config.expand_to_open_folder)
+                                        .disabled(sidebar_mode == SidebarMode::List)
+                                        .on_change(window.listener_for(&view, |this: &mut Finder, on: &bool, _, cx| {
+                                            this.set_expand_to_open_folder(*on, cx)
+                                        })),
+                                ),
+                        )
+                        .when(cfg!(target_os = "macos"), |this| {
+                            this.child(section("PRIVACY", cx))
+                                .child(super::disk_access::settings_controls(finder, &view, muted, window, cx))
+                        })
                         .child(
                             div()
                                 .text_size(ui(11.))
@@ -787,18 +823,19 @@ impl Finder {
             notify(Error, format!("Couldn’t rename: {err}"));
             return false;
         }
-        crate::undo::record(
-            "Rename",
-            crate::undo::Change::Moved(vec![(path.to_path_buf(), target.clone())]),
-            cx,
-        );
+        let moved = vec![(path.to_path_buf(), target.clone())];
+        // Renaming the folder the window shows reads it again where it went.
+        let followed = self.follow_moves(&moved, window, cx);
+        crate::undo::record("Rename", crate::undo::Change::Moved(moved), cx);
         self.previews.remove(path);
         for row in self.results.iter_mut().filter(|r| r.entry.path == path) {
             if let Some(entry) = FileEntry::from_path(&target) {
                 *row = super::Row::new(entry, Vec::new(), None);
             }
         }
-        self.load_listing(vec![target], true, cx);
+        if !followed {
+            self.load_listing(vec![target], true, cx);
+        }
         true
     }
 

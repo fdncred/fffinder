@@ -4,9 +4,11 @@
 mod bars;
 mod batch_rename;
 mod dialogs;
+mod disk_access;
 mod editor;
 mod filter;
 mod fit;
+mod folder_tree;
 mod fps;
 mod go_to;
 mod groups;
@@ -31,14 +33,15 @@ mod views;
 mod volumes;
 
 use crate::actions::*;
-use crate::model::{History, Location, Selection};
+use crate::model::{History, Location, Moves, Selection};
 use crate::nushell::{self, NuRun};
 use crate::theme::ui;
+use fffinder_core::listing::dir_stamp;
 use fffinder_core::places::{self, Place};
 use fffinder_core::terminals::{self, CUSTOM, Terminal, TerminalSetting};
 use fffinder_core::{
     Config, Engine, FileEntry, GrepRequest, KindFilter, ListColumn, RootStatus, SearchRequest,
-    SortKey, SortOrder, ViewMode, format, listing,
+    SidebarMode, SortKey, SortOrder, ViewMode, format, listing,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -52,6 +55,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+pub use folder_tree::{NodeKey, Section};
 pub use fps::ShowFps;
 pub use menus::reveal_label;
 pub use preview::Preview;
@@ -230,6 +234,32 @@ impl IndexActivity {
     }
 }
 
+/// Why the window can't show its location's items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListingError {
+    message: String,
+    /// Full Disk Access would let fffinder show them.
+    needs_access: bool,
+}
+
+impl ListingError {
+    fn new(message: String) -> ListingError {
+        ListingError {
+            message,
+            needs_access: false,
+        }
+    }
+}
+
+impl From<crate::trash_bin::TrashError> for ListingError {
+    fn from(err: crate::trash_bin::TrashError) -> ListingError {
+        ListingError {
+            needs_access: matches!(err, crate::trash_bin::TrashError::NeedsFullDiskAccess),
+            message: err.to_string(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SearchStats {
     pub elapsed: Duration,
@@ -247,7 +277,7 @@ pub struct Finder {
     history: History,
 
     listing: Vec<FileEntry>,
-    listing_error: Option<String>,
+    listing_error: Option<ListingError>,
     listing_stamp: Option<SystemTime>,
     loading: bool,
     listing_task: Task<()>,
@@ -340,6 +370,13 @@ pub struct Finder {
 
     favorites: Vec<Place>,
     locations: Vec<Place>,
+    /// The sidebar's folder tree, when it's on (see folder_tree.rs).
+    tree: folder_tree::FolderTree,
+    /// The sidebar has the keyboard, with the tree on.
+    tree_focus: FocusHandle,
+    sidebar_scroll: gpui_kit::component::VirtualListScrollHandle,
+    /// The sidebar's lines, kept between frames.
+    sidebar_layout: Option<sidebar::SidebarLayout>,
     /// Rereads the locations; a newer reread replaces it.
     locations_task: Task<()>,
     index_status: Vec<RootStatus>,
@@ -554,6 +591,10 @@ impl Finder {
             // Read in the background below: naming a volume can wait on a
             // slow drive.
             locations: Vec::new(),
+            tree: folder_tree::FolderTree::default(),
+            tree_focus: cx.focus_handle(),
+            sidebar_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
+            sidebar_layout: None,
             locations_task: Task::ready(()),
             index_status: Vec::new(),
             status_task: Task::ready(()),
@@ -591,6 +632,7 @@ impl Finder {
         };
         this.show_folder_view(cx);
         this.load_listing(Vec::new(), false, cx);
+        this.tree_follow_location(cx);
         this.reload_locations(cx);
         this.poll_index_status(cx);
         this.watch_folder(cx);
@@ -615,6 +657,16 @@ impl Finder {
     #[doc(hidden)]
     pub fn rows_for_test(&self) -> &[Row] {
         &self.rows
+    }
+
+    #[doc(hidden)]
+    pub fn tree_selection_for_test(&self) -> Option<NodeKey> {
+        self.tree.selected().cloned()
+    }
+
+    #[doc(hidden)]
+    pub fn tree_focused_for_test(&self, window: &Window) -> bool {
+        self.tree_focus.is_focused(window)
     }
 
     #[doc(hidden)]
@@ -844,7 +896,40 @@ impl Finder {
         }
         window.set_window_title(&self.history.current().title());
         self.load_listing(select.into_iter().collect(), false, cx);
+        self.tree_follow_location(cx);
         cx.notify();
+    }
+
+    /// Items were renamed or moved, here, by a drop, or by Undo: the
+    /// history and the folder tree follow the folders among them, and the
+    /// window goes where its folder went rather than show it as missing.
+    ///
+    /// # Arguments
+    ///
+    /// * `pairs` - Where each item was, and where it is now
+    /// * `window` - The browser's window
+    /// * `cx` - The browser's context
+    ///
+    /// # Returns
+    ///
+    /// Whether the window's folder moved, in which case it's being listed
+    /// again already
+    pub(super) fn follow_moves(
+        &mut self,
+        pairs: &[(PathBuf, PathBuf)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if pairs.is_empty() {
+            return false;
+        }
+        let moves = Moves::new(pairs);
+        self.tree_follow_moves(pairs, &moves, cx);
+        if !self.history.follow(&moves) {
+            return false;
+        }
+        self.location_changed(None, window, cx);
+        true
     }
 
     pub fn go_back(&mut self, _: &GoBack, window: &mut Window, cx: &mut Context<Self>) {
@@ -923,7 +1008,7 @@ impl Finder {
                                 }
                                 (entries, dir_stamp(dir), Vec::new())
                             })
-                            .map_err(|e| e.to_string()),
+                            .map_err(|err| ListingError::new(err.to_string())),
                         Location::Recents => {
                             engine.wait_ready(Duration::from_secs(60));
                             Ok((engine.recents(500), None, Vec::new()))
@@ -946,7 +1031,7 @@ impl Finder {
                                     .collect();
                                 (entries, None, items)
                             })
-                            .map_err(|e| e.to_string()),
+                            .map_err(ListingError::from),
                     }
                 })
                 .await;
@@ -961,6 +1046,7 @@ impl Finder {
                         if let Some(dir) = this.current_folder().map(Path::to_path_buf) {
                             this.load_folder_stats(dir, cx);
                         }
+                        this.tree_saw_listing(cx);
                         this.load_free_space(cx);
                     }
                     Err(err) => {
@@ -991,6 +1077,7 @@ impl Finder {
 
     /// Reload quietly when the folder changed on disk.
     fn check_for_changes(&mut self, cx: &mut Context<Self>) {
+        self.check_tree_for_changes(cx);
         let actions = crate::user_actions::actions_path();
         if self.user_actions_stamp.is_some()
             && crate::user_actions::modified(&actions) != self.user_actions_stamp
@@ -1717,10 +1804,9 @@ impl Finder {
         }
     }
 
-    /// Finder's type-to-select: letters typed within a second of each other
-    /// form a prefix, and the first item starting with it is selected (or
-    /// the next one after it, alphabetically, when none does).
-    pub fn type_to_select(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    /// The letters typed so far for type-to-select, with `text` added: those
+    /// typed within a second of each other, in lowercase.
+    fn typed_prefix(&mut self, text: &str, cx: &App) -> String {
         let now = cx.background_executor().now();
         if self
             .type_select_at
@@ -1730,7 +1816,14 @@ impl Finder {
         }
         self.type_select.push_str(text);
         self.type_select_at = Some(now);
-        let prefix = self.type_select.to_lowercase();
+        self.type_select.to_lowercase()
+    }
+
+    /// Finder's type-to-select: letters typed within a second of each other
+    /// form a prefix, and the first item starting with it is selected (or
+    /// the next one after it, alphabetically, when none does).
+    pub fn type_to_select(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let prefix = self.typed_prefix(text, cx);
         let pick = |names: Vec<String>| -> Option<usize> {
             let lower: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
             lower
@@ -2154,6 +2247,11 @@ impl Finder {
         if self.config.use_nu_environment != before.use_nu_environment {
             self.apply_nu_environment(cx);
         }
+        if self.config.sidebar_mode != before.sidebar_mode
+            || self.config.expand_to_open_folder != before.expand_to_open_folder
+        {
+            self.sidebar_mode_changed(cx);
+        }
         let shows = |config: &Config, column: ListColumn| {
             config.list_columns.iter().any(|c| c.column == column)
         };
@@ -2211,16 +2309,33 @@ impl Finder {
     // ----- clipboard, reveal, trash, nushell ------------------------------------
 
     fn copy_path(&mut self, _: &CopyPath, window: &mut Window, cx: &mut Context<Self>) {
-        let paths: Vec<String> = self
+        let paths: Vec<PathBuf> = self
             .selected_entries()
-            .iter()
-            .map(|e| e.path.display().to_string())
+            .into_iter()
+            .map(|e| e.path)
             .collect();
+        self.copy_path_text(&paths, window, cx);
+    }
+
+    /// Put the paths themselves on the clipboard as text, one per line.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - The items; none does nothing
+    /// * `window` - Where to say they were copied
+    /// * `cx` - The browser's context
+    pub(super) fn copy_path_text(
+        &mut self,
+        paths: &[PathBuf],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if paths.is_empty() {
             return;
         }
         let count = paths.len();
-        cx.write_to_clipboard(ClipboardItem::new_string(paths.join("\n")));
+        let text: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        cx.write_to_clipboard(ClipboardItem::new_string(text.join("\n")));
         window.push_notification(
             if count == 1 {
                 "Copied path".to_string()
@@ -2562,8 +2677,32 @@ impl Finder {
         let Some(dir) = self.current_folder().map(Path::to_path_buf) else {
             return;
         };
+        if let Some(path) = self.make_untitled_folder(&dir, window, cx) {
+            self.end_search(window, cx);
+            self.add_and_rename(path, window, cx);
+        }
+    }
+
+    /// Make "untitled folder" (or "untitled folder 2", and so on) in `dir`,
+    /// for Undo to take away again.
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - The folder to make it in
+    /// * `window` - Where to say why it couldn't be made
+    /// * `cx` - The browser's context
+    ///
+    /// # Returns
+    ///
+    /// The new folder, or `None` when it wasn't made
+    pub(super) fn make_untitled_folder(
+        &mut self,
+        dir: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PathBuf> {
         if self.wait_for_undo(window, cx) {
-            return;
+            return None;
         }
         let mut name = "untitled folder".to_string();
         let mut n = 2;
@@ -2579,16 +2718,18 @@ impl Finder {
                     crate::undo::Change::Created(vec![path.clone()]),
                     cx,
                 );
-                self.end_search(window, cx);
-                self.add_and_rename(path, window, cx);
+                Some(path)
             }
-            Err(err) => window.push_notification(
-                (
-                    gpui_kit::component::notification::NotificationType::Error,
-                    format!("Could not create a folder: {err}"),
-                ),
-                cx,
-            ),
+            Err(err) => {
+                window.push_notification(
+                    (
+                        gpui_kit::component::notification::NotificationType::Error,
+                        format!("Could not create a folder: {err}"),
+                    ),
+                    cx,
+                );
+                None
+            }
         }
     }
 
@@ -2745,10 +2886,6 @@ impl Finder {
     }
 }
 
-fn dir_stamp(dir: &Path) -> Option<SystemTime> {
-    std::fs::metadata(dir).and_then(|m| m.modified()).ok()
-}
-
 /// Content search: one row per matching file, showing the first matching line.
 fn content_search(
     engine: &Engine,
@@ -2843,6 +2980,12 @@ impl Render for Finder {
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(Self::toggle_hidden))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(|this, _: &SidebarAsList, _, cx| {
+                this.set_sidebar_mode(SidebarMode::List, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SidebarAsTree, _, cx| {
+                this.set_sidebar_mode(SidebarMode::Tree, cx)
+            }))
             .on_action(cx.listener(Self::toggle_preview_pane))
             .on_action(cx.listener(Self::toggle_appearance))
             .on_action(cx.listener(Self::copy_path))
@@ -2974,7 +3117,18 @@ impl Finder {
                 Location::Trash => "Can’t show the Trash",
                 _ => "Can’t open this folder",
             };
-            self.render_message(title, &err, cx).into_any_element()
+            self.render_message(title, &err.message, cx)
+                .when(err.needs_access, |this| {
+                    this.child(
+                        gpui_kit::component::button::Button::new("trash-disk-access")
+                            .mt(ui(10.))
+                            .label("Open System Settings")
+                            .on_click(|_, _, cx| {
+                                crate::system::open_url(crate::disk_access::SETTINGS_URL, cx)
+                            }),
+                    )
+                })
+                .into_any_element()
         } else if self.rows.is_empty() && !self.loading && !self.searching {
             let (title, detail) = if self.is_searching() {
                 match self.indexing_progress() {
@@ -3133,7 +3287,7 @@ impl Finder {
             .map(Path::to_path_buf)
     }
 
-    fn render_message(&self, title: &str, detail: &str, cx: &Context<Self>) -> impl IntoElement {
+    fn render_message(&self, title: &str, detail: &str, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -3174,9 +3328,19 @@ pub fn group_digits(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's `test` attribute would replace the standard one.
-    use super::IndexActivity;
+    use super::{IndexActivity, ListingError};
+    use crate::trash_bin::TrashError;
     use fffinder_core::RootStatus;
     use std::path::PathBuf;
+
+    #[test]
+    fn only_a_trash_kept_out_by_macos_asks_for_full_disk_access() {
+        let denied = ListingError::from(TrashError::NeedsFullDiskAccess);
+        assert!(denied.needs_access);
+        assert_eq!(denied.message, TrashError::NeedsFullDiskAccess.to_string());
+        assert!(!ListingError::from(TrashError::NoHome).needs_access);
+        assert!(!ListingError::new("Permission denied".into()).needs_access);
+    }
 
     fn root(scanning: bool, finishing: bool, files: usize) -> RootStatus {
         RootStatus {

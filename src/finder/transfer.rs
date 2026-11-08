@@ -3,6 +3,7 @@
 //! `fffinder_core::ops`, on a background thread.
 
 use super::Finder;
+use super::folder_tree::NodeKey;
 use super::views::DraggedFiles;
 use crate::actions::MoveItemsHere;
 use crate::model::Location;
@@ -23,11 +24,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The place a drag is waiting over: a folder, and where it's drawn.
+/// The place a drag is waiting over: a folder, where it's drawn, and what
+/// waiting there does.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SpringTarget {
     folder: PathBuf,
     bounds: Bounds<Pixels>,
+    spring: Spring,
+}
+
+/// What holding dragged items over a folder does after a moment.
+#[derive(Debug, Clone, PartialEq)]
+enum Spring {
+    /// The window shows the folder.
+    Show,
+    /// The folder tree's node opens, as Explorer's does, so the drag can go
+    /// on down into it.
+    Expand(NodeKey),
 }
 
 /// How long dragged items wait over a folder before it opens.
@@ -107,6 +120,22 @@ impl Finder {
             .into_iter()
             .map(|e| e.path)
             .collect();
+        self.copy_paths(paths, window, cx);
+    }
+
+    /// Put the items at `paths` on the clipboard, to paste as copies.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - The items; none does nothing
+    /// * `window` - Where to say they were copied
+    /// * `cx` - The browser's context
+    pub(super) fn copy_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if paths.is_empty() {
             return;
         }
@@ -127,6 +156,22 @@ impl Finder {
             .into_iter()
             .map(|e| e.path)
             .collect();
+        self.cut_paths(paths, window, cx);
+    }
+
+    /// Mark the items at `paths` to be moved by the next paste.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - The items; none does nothing
+    /// * `window` - Where to say they were cut
+    /// * `cx` - The browser's context
+    pub(super) fn cut_paths(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if paths.is_empty() {
             return;
         }
@@ -142,11 +187,17 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mode = match crate::system::clipboard_is_cut(cx) {
+        let dest = self.paste_folder();
+        self.paste_into(dest, Self::paste_mode(cx), window, cx);
+    }
+
+    /// How a paste puts the clipboard's items in place: moving what was cut,
+    /// copying the rest.
+    pub(super) fn paste_mode(cx: &App) -> Mode {
+        match crate::system::clipboard_is_cut(cx) {
             true => Mode::Move,
             false => Mode::Copy,
-        };
-        self.paste(mode, window, cx);
+        }
     }
 
     /// Cmd+Alt+V: move what's on the clipboard into this folder.
@@ -156,15 +207,34 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.paste(Mode::Move, window, cx);
+        let dest = self.paste_folder();
+        self.paste_into(dest, Mode::Move, window, cx);
     }
 
-    fn paste(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        let sources = crate::system::clipboard_files(cx);
-        let dest = self
-            .current_folder()
+    /// Where a paste in the files goes: the folder shown, unless it's
+    /// search results.
+    fn paste_folder(&self) -> Option<PathBuf> {
+        self.current_folder()
             .filter(|_| !self.is_searching())
-            .map(Path::to_path_buf);
+            .map(Path::to_path_buf)
+    }
+
+    /// Put what's on the clipboard into `dest`.
+    ///
+    /// # Arguments
+    ///
+    /// * `dest` - The folder; `None` says to open one first
+    /// * `mode` - Whether the items move or are copied
+    /// * `window` - Where to warn when there's nothing to paste
+    /// * `cx` - The browser's context
+    pub(super) fn paste_into(
+        &mut self,
+        dest: Option<PathBuf>,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sources = crate::system::clipboard_files(cx);
         let warning = match (&dest, sources.is_empty()) {
             (_, true) => "There are no files on the clipboard",
             (None, false) => "Open a folder to paste into",
@@ -220,16 +290,24 @@ impl Finder {
             }
             return;
         }
-        if waiting || self.current_folder() == Some(target.folder.as_path()) {
+        let done = match &target.spring {
+            Spring::Show => self.current_folder() == Some(target.folder.as_path()),
+            Spring::Expand(key) => self.node_is_open(key),
+        };
+        if waiting || done {
             return;
         }
-        let folder = target.folder.clone();
+        let (folder, spring) = (target.folder.clone(), target.spring.clone());
         let opens = cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(SPRING_DELAY).await;
             this.update_in(cx, |this, window, cx| {
                 this.spring_folder = None;
-                if cx.has_active_drag() {
-                    this.navigate(Location::Folder(folder), window, cx);
+                if !cx.has_active_drag() {
+                    return;
+                }
+                match spring {
+                    Spring::Show => this.navigate(Location::Folder(folder), window, cx),
+                    Spring::Expand(key) => this.expand_node(key, cx),
                 }
             })
             .ok();
@@ -466,6 +544,7 @@ impl Finder {
                     .iter()
                     .cloned()
                     .partition(|(from, _)| report.left.iter().any(|(left, _)| left == from));
+                self.follow_moves(&moved, window, cx);
                 undo::record("Move", Change::Moved(moved), cx);
                 let copies = copied.into_iter().map(|(_, to)| to).collect();
                 undo::record("Copy", Change::Created(copies), cx);
@@ -586,7 +665,27 @@ pub(super) fn spring_loaded<E: InteractiveElement + ParentElement>(
     folder: PathBuf,
     cx: &mut Context<Finder>,
 ) -> E {
+    springs(el, folder, Spring::Show, cx)
+}
+
+/// Holding dragged items over `el`, a node of the sidebar's folder tree,
+/// opens the node after a moment, so they can go on down into it.
+pub(super) fn spring_loaded_node<E: InteractiveElement + ParentElement>(
+    el: E,
+    key: NodeKey,
+    cx: &mut Context<Finder>,
+) -> E {
+    springs(el, key.path.clone(), Spring::Expand(key), cx)
+}
+
+fn springs<E: InteractiveElement + ParentElement>(
+    el: E,
+    folder: PathBuf,
+    spring: Spring,
+    cx: &mut Context<Finder>,
+) -> E {
     let external = folder.clone();
+    let external_spring = spring.clone();
     // A drag move only says where `el` is laid out, and a row in a list wider
     // than its view can be laid out under the preview pane or the header. A
     // hitbox knows what clips it and what's drawn over it.
@@ -614,6 +713,7 @@ pub(super) fn spring_loaded<E: InteractiveElement + ParentElement>(
             let target = SpringTarget {
                 folder: folder.clone(),
                 bounds: event.bounds,
+                spring: spring.clone(),
             };
             this.drag_over_folder(target, over, window, cx);
         },
@@ -624,6 +724,7 @@ pub(super) fn spring_loaded<E: InteractiveElement + ParentElement>(
             let target = SpringTarget {
                 folder: external.clone(),
                 bounds: event.bounds,
+                spring: external_spring.clone(),
             };
             this.drag_over_folder(target, over, window, cx);
         },

@@ -64,6 +64,7 @@ impl Finder {
         }
         self.reload_columns(cx);
         self.reload_children(cx);
+        self.check_tree_for_changes(cx);
     }
 
     /// Tell the window's other tabs and pane that files changed.

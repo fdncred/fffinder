@@ -1,6 +1,6 @@
 //! Renaming an item in place: its name becomes a text field in the list,
-//! icon, and column views. The gallery has no room to edit a name, so it
-//! keeps the dialog.
+//! icon, and column views, or in the sidebar's folder tree. The gallery has
+//! no room to edit a name, so it keeps the dialog.
 
 use super::Finder;
 use crate::theme::ui;
@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 /// A name being edited in place.
 pub(super) struct InlineRename {
     pub(super) path: PathBuf,
+    /// The field is in the sidebar's folder tree, not the file views, and
+    /// the keyboard goes back there afterward.
+    pub(super) in_sidebar: bool,
     input: Entity<InputState>,
     /// What was typed when it was last refused, so leaving the field doesn't
     /// say why a second time.
@@ -55,6 +58,28 @@ impl Finder {
                 pane.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
             }
         }
+        self.start_rename_field(path, false, window, cx);
+    }
+
+    /// Start renaming the folder at `path` in its row of the sidebar's tree.
+    pub(super) fn begin_sidebar_rename(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_rename_field(path, true, window, cx);
+    }
+
+    /// Make the field that edits the name at `path`, with the part to
+    /// retype selected.
+    fn start_rename_field(
+        &mut self,
+        path: PathBuf,
+        in_sidebar: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let name = fffinder_core::entry::display_name(&path);
         let stem = name_stem_len(&name, path.is_dir());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
@@ -69,6 +94,7 @@ impl Finder {
         });
         self.renaming = Some(InlineRename {
             path,
+            in_sidebar,
             input,
             refused: None,
             drawn: Cell::new(true),
@@ -80,8 +106,8 @@ impl Finder {
     /// Stop editing and leave the name as it was.
     pub(super) fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Dropping it first means the field losing focus doesn't finish it.
-        if self.renaming.take().is_some() {
-            self.focus_files(window, cx);
+        if let Some(renaming) = self.renaming.take() {
+            self.keyboard_back(renaming.in_sidebar, window, cx);
             cx.notify();
         }
     }
@@ -96,7 +122,7 @@ impl Finder {
         if typed.trim().is_empty()
             || self.submit_rename(&renaming.path, &renaming.input, window, cx)
         {
-            self.keyboard_back_to_files(&renaming.input, window, cx);
+            self.keyboard_back_from(&renaming, window, cx);
             return;
         }
         renaming.refused = Some(typed);
@@ -149,21 +175,31 @@ impl Finder {
         if !typed.trim().is_empty() && renaming.refused.as_ref() != Some(&typed) {
             self.submit_rename(&renaming.path, &renaming.input, window, cx);
         }
-        self.keyboard_back_to_files(&renaming.input, window, cx);
+        self.keyboard_back_from(&renaming, window, cx);
     }
 
-    /// The edit is over, so the keyboard goes back to the files, unless it's
-    /// already gone on to something else, like the search field.
-    fn keyboard_back_to_files(
+    /// The edit is over, so the keyboard goes back to where the name was
+    /// edited, unless it's already gone on to something else, like the
+    /// search field.
+    fn keyboard_back_from(
         &mut self,
-        input: &Entity<InputState>,
+        renaming: &InlineRename,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if input.read(cx).focus_handle(cx).is_focused(window) {
-            self.focus_files(window, cx);
+        if renaming.input.read(cx).focus_handle(cx).is_focused(window) {
+            self.keyboard_back(renaming.in_sidebar, window, cx);
         }
         cx.notify();
+    }
+
+    /// Give the keyboard back to the sidebar's tree, or to the files.
+    fn keyboard_back(&mut self, to_sidebar: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if to_sidebar {
+            self.tree_focus.focus(window, cx);
+        } else {
+            self.focus_files(window, cx);
+        }
     }
 
     /// The window became active again. Its field may have gone while it was
@@ -182,8 +218,28 @@ impl Finder {
     }
 
     /// The field that replaces the name at `path`, while it's being edited.
-    pub(super) fn rename_field(&self, path: &Path, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let renaming = self.renaming.as_ref().filter(|r| r.path == path)?;
+    /// The same folder can show in the views and in the sidebar's tree, and
+    /// the field is drawn only where the edit began.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The item a row or tile shows
+    /// * `in_sidebar` - Whether the row is in the sidebar
+    /// * `cx` - The browser's context
+    ///
+    /// # Returns
+    ///
+    /// The field, when that item's name is being edited there
+    pub(super) fn rename_field(
+        &self,
+        path: &Path,
+        in_sidebar: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let renaming = self
+            .renaming
+            .as_ref()
+            .filter(|r| r.path == path && r.in_sidebar == in_sidebar)?;
         renaming.drawn.set(true);
         Some(
             div()
