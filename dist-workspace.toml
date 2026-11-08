@@ -19,6 +19,8 @@ install-updater = false
 include = ["nu/fff.nu"]
 
 [dist.github-custom-runners]
+# GitHub retired the macos-14 image that dist picks by default for this target
+aarch64-apple-darwin = "macos-15"
 aarch64-pc-windows-msvc = "windows-11-vs2026-arm"
 
 # GPUI's Linux build dependencies
