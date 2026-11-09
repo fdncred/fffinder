@@ -22,6 +22,8 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 
 ![Search results](docs/images/search-dark.png)
 
+![The sidebar as a folder tree, opened down to the folder the window shows](docs/images/tree-dark.png)
+
 ## Nushell integration
 
 ### The `fff` module
