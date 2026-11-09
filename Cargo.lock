@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "fffinder"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1906,7 +1906,7 @@ dependencies = [
 
 [[package]]
 name = "fffinder-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "chrono",
