@@ -42,7 +42,7 @@ use fffinder_core::places::{self, Place};
 use fffinder_core::terminals::{self, CUSTOM, Terminal, TerminalSetting};
 use fffinder_core::{
     Config, Engine, FileEntry, GrepRequest, KindFilter, ListColumn, RootStatus, SearchRequest,
-    SidebarMode, SortKey, SortOrder, ViewMode, format, listing,
+    SidebarMode, SortKey, SortOrder, ViewMode, format, listing, subfolders,
 };
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -208,6 +208,16 @@ pub struct ColumnPane {
     pub scroll: UniformListScrollHandle,
     /// The pane's width in points.
     pub width: f32,
+    /// The folder's change time as of reading it. The first pane mirrors
+    /// the window's listing and goes without one.
+    pub stamp: Option<SystemTime>,
+}
+
+/// A folder open in place in the list view.
+struct OpenFolder {
+    entries: Vec<FileEntry>,
+    /// The folder's change time as of reading it.
+    stamp: Option<SystemTime>,
 }
 
 /// What the index is doing, for the sidebar footer and the status bar.
@@ -400,7 +410,9 @@ pub struct Finder {
     info: Option<info::InfoPanel>,
     /// Folders open in the list view's tree, and what they hold.
     expanded: HashSet<PathBuf>,
-    children: HashMap<PathBuf, Vec<FileEntry>>,
+    children: HashMap<PathBuf, OpenFolder>,
+    /// A look for folders changed on disk is under way.
+    checking_folders: bool,
     /// Folder sizes and git statuses from the index, by folder.
     folder_stats: HashMap<PathBuf, fffinder_core::FolderStats>,
     /// The folder dragged items are waiting over, and what opens it.
@@ -617,6 +629,7 @@ impl Finder {
             split_pane: false,
             expanded: HashSet::new(),
             children: HashMap::new(),
+            checking_folders: false,
             folder_stats: HashMap::new(),
             spring_folder: None,
             renaming: None,
@@ -1009,14 +1022,20 @@ impl Finder {
             let result = cx
                 .background_spawn(async move {
                     match &location {
-                        Location::Folder(dir) => listing::list_dir(dir, show_hidden)
-                            .map(|mut entries| {
-                                if last_opened {
-                                    entries.iter_mut().for_each(FileEntry::read_last_opened);
-                                }
-                                (entries, dir_stamp(dir), Vec::new())
-                            })
-                            .map_err(|err| ListingError::new(err.to_string())),
+                        Location::Folder(dir) => {
+                            // Stamped before the read, so an item added while
+                            // it runs moves the time past the stamp, and the
+                            // next look reads the folder again.
+                            let stamp = dir_stamp(dir);
+                            listing::list_dir(dir, show_hidden)
+                                .map(|mut entries| {
+                                    if last_opened {
+                                        entries.iter_mut().for_each(FileEntry::read_last_opened);
+                                    }
+                                    (entries, stamp, Vec::new())
+                                })
+                                .map_err(|err| ListingError::new(err.to_string()))
+                        }
                         Location::Recents => {
                             engine.wait_ready(Duration::from_secs(60));
                             Ok((engine.recents(500), None, Vec::new()))
@@ -1083,7 +1102,11 @@ impl Finder {
         });
     }
 
-    /// Reload quietly when the folder changed on disk.
+    /// Reload quietly what changed on disk: the folder the window shows,
+    /// folders open in place in the list, and the column view's panes.
+    /// Their change times are read off the UI thread, so a stalled network
+    /// volume can't freeze the window, and only a folder whose time moved is
+    /// read again.
     fn check_for_changes(&mut self, cx: &mut Context<Self>) {
         self.check_tree_for_changes(cx);
         let actions = crate::user_actions::actions_path();
@@ -1092,13 +1115,66 @@ impl Finder {
         {
             self.load_user_actions(cx);
         }
-        if self.loading {
+        // A look that's slow, as on a network volume, isn't joined by more.
+        if self.checking_folders {
             return;
         }
-        if let Some(dir) = self.current_folder()
-            && dir_stamp(dir) != self.listing_stamp
+        let shown = self.folders_on_screen();
+        if shown.is_empty() {
+            return;
+        }
+        self.checking_folders = true;
+        cx.spawn(async move |this, cx| {
+            let changed = cx
+                .background_spawn(async move { subfolders::changed(shown) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.checking_folders = false;
+                this.reload_changed(changed, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Each folder on screen, with its change time as of reading it.
+    fn folders_on_screen(&self) -> Vec<(PathBuf, Option<SystemTime>)> {
+        let mut shown = Vec::new();
+        if !self.loading
+            && let Some(dir) = self.current_folder()
         {
-            self.load_listing(Vec::new(), true, cx);
+            shown.push((dir.to_path_buf(), self.listing_stamp));
+        }
+        if self.tree_mode() {
+            shown.extend(
+                self.expanded
+                    .iter()
+                    .filter_map(|dir| Some((dir.clone(), self.children.get(dir)?.stamp))),
+            );
+        }
+        if self.effective_view() == ViewMode::Columns {
+            shown.extend(
+                self.columns
+                    .iter()
+                    .skip(1)
+                    .map(|pane| (pane.dir.clone(), pane.stamp)),
+            );
+        }
+        shown
+    }
+
+    /// Read each of `changed` again wherever it still shows.
+    fn reload_changed(&mut self, changed: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for dir in changed {
+            if !self.loading && self.current_folder() == Some(dir.as_path()) {
+                self.load_listing(Vec::new(), true, cx);
+            }
+            if self.expanded.contains(&dir) && self.children.contains_key(&dir) {
+                self.load_children(dir.clone(), cx);
+            }
+            if let Some(ix) = self.columns.iter().skip(1).position(|pane| pane.dir == dir) {
+                self.load_column(ix + 1, dir, cx);
+            }
         }
     }
 
@@ -2785,6 +2861,7 @@ impl Finder {
                     selected: None,
                     scroll: UniformListScrollHandle::new(),
                     width: self.config.column_view_width(),
+                    stamp: None,
                 }];
                 self.active_column = 0;
             }
@@ -2826,6 +2903,7 @@ impl Finder {
                 selected: None,
                 scroll: UniformListScrollHandle::new(),
                 width,
+                stamp: None,
             });
             self.load_column(col + 1, entry.path.clone(), cx);
         } else {
@@ -2842,13 +2920,15 @@ impl Finder {
         let sort = self.config.sort;
         let folders_first = self.config.folders_first;
         cx.spawn(async move |this, cx| {
-            let entries = cx
+            let (entries, stamp) = cx
                 .background_spawn({
                     let dir = dir.clone();
                     async move {
+                        // Stamped first, as for the window's listing.
+                        let stamp = dir_stamp(&dir);
                         let mut entries = listing::list_dir(&dir, show_hidden).unwrap_or_default();
                         listing::sort_entries(&mut entries, sort, folders_first);
-                        entries
+                        (entries, stamp)
                     }
                 })
                 .await;
@@ -2857,6 +2937,7 @@ impl Finder {
                     && pane.dir == dir
                 {
                     pane.entries = entries;
+                    pane.stamp = stamp;
                     cx.notify();
                 }
             })

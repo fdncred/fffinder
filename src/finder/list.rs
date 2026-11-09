@@ -149,7 +149,10 @@ impl Finder {
         });
         for (entry, git) in decorated {
             let open = entry.is_navigable() && self.expanded.contains(&entry.path);
-            let children = open.then(|| self.children.get(&entry.path)).flatten();
+            let children = open
+                .then(|| self.children.get(&entry.path))
+                .flatten()
+                .map(|folder| &folder.entries);
             let mut row = Row::new(entry, Vec::new(), None);
             row.depth = depth;
             row.git = git.unwrap_or_default().into();
@@ -170,25 +173,28 @@ impl Finder {
     }
 
     /// List a folder that's open in the list, then redraw.
-    fn load_children(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+    pub(super) fn load_children(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
         let show_hidden = self.config.show_hidden;
         let last_opened = self.wants_last_opened();
         self.load_folder_stats(dir.clone(), cx);
         cx.spawn(async move |this, cx| {
-            let entries = cx
+            let (entries, stamp) = cx
                 .background_spawn({
                     let dir = dir.clone();
                     async move {
+                        // Stamped first, as for the window's listing.
+                        let stamp = listing::dir_stamp(&dir);
                         let mut entries = listing::list_dir(&dir, show_hidden).unwrap_or_default();
                         if last_opened {
                             entries.iter_mut().for_each(FileEntry::read_last_opened);
                         }
-                        entries
+                        (entries, stamp)
                     }
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.children.insert(dir, entries);
+                this.children
+                    .insert(dir, super::OpenFolder { entries, stamp });
                 this.rebuild_rows(cx);
             })
             .ok();

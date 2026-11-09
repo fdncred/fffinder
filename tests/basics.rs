@@ -1163,3 +1163,50 @@ fn the_empty_space_menu_changes_the_view_and_sort(cx: &mut TestAppContext) {
     ui.click_menu_item("Select All");
     assert_eq!(ui.selected().len(), ui.names().len());
 }
+
+#[gpui_kit::test]
+fn folders_on_screen_show_what_other_programs_add(cx: &mut TestAppContext) {
+    let fx = Fixture::new("outside-changes");
+    let mut ui = Ui::open(cx, &fx.dir);
+    // A little over the 2 seconds between looks.
+    let next_look = |ui: &mut Ui| {
+        ui.cx
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(2100));
+        ui.settle();
+    };
+    let shows = |ui: &Ui, name: &str| ui.names().iter().any(|n| n == name);
+
+    ui.click("view-list");
+    std::fs::write(fx.path("made outside.txt"), "x").unwrap();
+    next_look(&mut ui);
+    assert!(shows(&ui, "made outside.txt"), "the window's own folder");
+
+    ui.select("Projects");
+    ui.press("right");
+    assert!(shows(&ui, "atlas"), "Projects is open in place");
+    std::fs::write(fx.path("Projects/added inside.txt"), "x").unwrap();
+    next_look(&mut ui);
+    assert!(
+        shows(&ui, "added inside.txt"),
+        "a folder open in the list: {:?}",
+        ui.names()
+    );
+
+    ui.click("view-columns");
+    let projects = ui
+        .read(|f| f.column_names_for_test())
+        .first()
+        .and_then(|names| names.iter().position(|n| n == "Projects"))
+        .expect("Projects in the first pane");
+    ui.update(|f, window, cx| f.select_in_column(0, projects, window, cx));
+    std::fs::write(fx.path("Projects/added to the pane.txt"), "x").unwrap();
+    next_look(&mut ui);
+    let panes = ui.read(|f| f.column_names_for_test());
+    assert!(
+        panes
+            .get(1)
+            .is_some_and(|names| names.iter().any(|n| n == "added to the pane.txt")),
+        "a column pane: {panes:?}"
+    );
+}

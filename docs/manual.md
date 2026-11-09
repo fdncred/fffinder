@@ -127,7 +127,7 @@ The file area shows a message when there is nothing to list:
 | No Recent Files | Recents is empty. |
 | No Items | The folder is empty. |
 
-Open folders refresh on their own. fffinder checks the folder every two seconds and reloads it quietly when it changed on disk.
+Open folders refresh on their own. Every two seconds fffinder checks each folder on screen: the one the window shows, folders opened in place in the list, and the column view's panes. It quietly reads again any that gained, lost, or renamed an item. The check happens off the window's thread, so a slow network volume can't freeze it. A file whose contents change in place keeps its old size and date until something in its folder changes or you refresh.
 
 ### Preview pane
 

@@ -2,6 +2,14 @@
 
 This file lists every notable change to fffinder. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Folders opened in place in the list view, and the column view's panes after the first, now show files that other programs add, remove, or rename. Only the folder the window showed was checked before, so a build script's output could stay out of sight until a refresh.
+- A file created while fffinder read a folder could stay out of sight until something else in the folder changed. fffinder now notes the folder's change time before reading it, not after, so the next check catches the file.
+- Checking folders for changes no longer runs on the window's thread, where a stalled network volume could freeze the window every two seconds.
+
 ## [0.5.0] - 2026-11-09
 
 This release adds an explore mode to Quick Look for JSON, TOML, CSV, and other structured files. Copying and moving no longer delete anything, and Replace sends the old item to the Trash. On macOS, indexing waits for Full Disk Access instead of setting off a prompt per folder, and the sidebar runs edge to edge, as in macOS 27.
