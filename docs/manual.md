@@ -127,7 +127,7 @@ The file area shows a message when there is nothing to list:
 | No Recent Files | Recents is empty. |
 | No Items | The folder is empty. |
 
-Open folders refresh on their own. fffinder checks the folder every two seconds and reloads it quietly when it changed on disk.
+Open folders refresh on their own. Every two seconds fffinder checks each folder on screen: the one the window shows, folders opened in place in the list, and the column view's panes. It quietly reads again any that gained, lost, or renamed an item. The check happens off the window's thread, so a slow network volume can't freeze it. A file whose contents change in place keeps its old size and date until something in its folder changes or you refresh.
 
 ### Preview pane
 
@@ -220,6 +220,7 @@ In tree mode, every Favorites and Locations row has a triangle. Click it to open
 - Drag items onto a folder in the tree to move them into it, or hold Option (macOS) or Ctrl (Linux and Windows) to copy. Hold a drag over a closed folder for a moment and it opens, so you can go on down into it. The window stays where it is.
 - Drag a folder out of the tree to move it, as you would from the window. Let go anywhere in the sidebar but on a folder or the Trash and nothing happens. Add to Sidebar in its right-click menu makes it a favorite.
 - The tree keeps up with changes. fffinder reads a folder when it opens, then checks every two seconds whether an open folder changed and reads it again if so. A folder without a triangle that gets a folder inside gets its triangle by the same check. What you do in fffinder shows at once.
+- When deep folders or long names make the tree wider than the sidebar, it scrolls sideways, as Explorer's navigation pane does. The list of places cuts long names short instead, as Finder's sidebar does.
 
 Right-click a folder in the tree for Open in New Tab, Open in New Window, Expand or Collapse, **New Folder** (made inside it and named in place), **Paste Into** the folder, Get Info, Open Nushell Here, Show in Finder, Cut, Copy, Copy Path, **Rename…** (in place), Add to Sidebar, and Move to Trash. Moving to the Trash the folder the window shows, or a folder that holds it, takes the window to the folder above it. Renaming or moving that folder, from the tree or the window, by dragging, Cut and Paste, or Undo, takes the window to where it went, and what was open inside it stays open. Back and Forward go to the new place too, not the old one. In tree mode, Favorites and Locations rows also have Expand or Collapse, New Folder, Paste Into, and Get Info.
 

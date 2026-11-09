@@ -44,6 +44,12 @@ const DISCLOSURE_WIDTH: f32 = 14.;
 /// indented by both, so a folder's triangle sits under its parent's icon.
 const DISCLOSURE_GAP: f32 = 2.;
 const TREE_INDENT: f32 = DISCLOSURE_WIDTH + DISCLOSURE_GAP;
+/// What a row adds around its name, in points: the list's margins (8 and
+/// 8), the row's own padding (8 and 8), the disclosure triangle and icon
+/// (14, 2, and 16), and the gap before the name (8), with 2 to spare.
+const ROW_EXTRA: f32 = 8. + 8. + DISCLOSURE_WIDTH + DISCLOSURE_GAP + 16. + 8. + 8. + 8. + 2.;
+/// A removable volume's eject button and the gap before it.
+const EJECT_EXTRA: f32 = 28.;
 
 /// A Favorites row being dragged to a new place in the list.
 #[derive(Clone)]
@@ -108,6 +114,8 @@ pub(super) struct SidebarLayout {
     key: u64,
     lines: Rc<Vec<Line>>,
     sizes: Rc<Vec<Size<Pixels>>>,
+    /// How wide the widest row is, in points, once something asked.
+    width: Option<f32>,
 }
 
 /// What a sidebar row for a place shows and does.
@@ -241,6 +249,7 @@ impl Finder {
                 key,
                 lines: Rc::new(lines),
                 sizes: Rc::new(sizes),
+                width: None,
             });
         }
         let layout = self
@@ -248,6 +257,40 @@ impl Finder {
             .as_ref()
             .expect("the layout was just made");
         (layout.lines.clone(), layout.sizes.clone())
+    }
+
+    /// How wide the widest of the sidebar's rows is, in points: its name
+    /// plus its indent and the rest of the row. Measured once for each
+    /// layout, so drawing the sidebar again costs nothing.
+    fn sidebar_rows_width(&mut self, lines: &[Line], window: &Window, cx: &App) -> f32 {
+        if let Some(width) = self.sidebar_layout.as_ref().and_then(|l| l.width) {
+            return width;
+        }
+        let texts: Vec<(SharedString, f32)> = lines
+            .iter()
+            .filter_map(|line| match line {
+                Line::Folder(folder) => Some((
+                    folder.name.clone(),
+                    ROW_EXTRA + TREE_INDENT * (folder.depth + 1) as f32,
+                )),
+                Line::Place { key, ix, .. } => {
+                    let place = self.place(key.section, *ix)?;
+                    let eject = if place.ejectable { EJECT_EXTRA } else { 0. };
+                    Some((place.name.clone().into(), ROW_EXTRA + eject))
+                }
+                Line::Smart(ix) => self
+                    .smart_folders()
+                    .get(*ix)
+                    .map(|smart| (smart.name.clone().into(), ROW_EXTRA)),
+                Line::Heading(_) | Line::Recents | Line::Trash => None,
+            })
+            .collect();
+        let font = font(cx.theme().font_family.clone());
+        let width = super::fit::widest_points(texts, &font, ui(13.), window);
+        if let Some(layout) = self.sidebar_layout.as_mut() {
+            layout.width = Some(width);
+        }
+        width
     }
 
     /// The sidebar's lines, laid out again if what they show changed.
@@ -334,8 +377,13 @@ impl Finder {
             self.sidebar_scroll.scroll_to_item(ix, ScrollStrategy::Top);
         }
         let tree = self.tree_on();
+        // Deep folders and long names in the tree can be wider than the
+        // sidebar. The rows then scroll sideways, as in Explorer's pane.
+        let wide = tree
+            .then(|| self.sidebar_rows_width(&lines, window, cx))
+            .filter(|&width| width > self.sidebar_width_shown(window));
         let renaming_here = self.renaming.as_ref().is_some_and(|r| r.in_sidebar);
-        let list = v_virtual_list(
+        let mut list = v_virtual_list(
             cx.entity(),
             "sidebar-lines",
             sizes,
@@ -349,6 +397,20 @@ impl Finder {
         .px(ui(8.))
         .pb(ui(8.))
         .track_scroll(&self.sidebar_scroll);
+        // A sideways swipe moves the scroller around the list, not the list.
+        list.style().restrict_scroll_to_axis = Some(true);
+        let list = match wide {
+            Some(width) => div()
+                .id("sidebar-sideways")
+                .size_full()
+                .overflow_x_scroll()
+                .restrict_scroll_to_axis()
+                .track_scroll(&self.sidebar_sideways)
+                .child(div().h_full().w(ui(width)).child(list))
+                .test_support()
+                .into_any_element(),
+            None => list.into_any_element(),
+        };
         let list = div()
             .id("sidebar-scroll")
             .flex_1()
@@ -356,6 +418,9 @@ impl Finder {
             .relative()
             .child(list)
             .vertical_scrollbar(&self.sidebar_scroll)
+            .when(wide.is_some(), |this| {
+                this.horizontal_scrollbar(&self.sidebar_sideways)
+            })
             // With the tree, the sidebar takes the keyboard when a row is
             // clicked, as Explorer's does.
             .when(tree, |this| {
