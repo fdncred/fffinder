@@ -1,15 +1,19 @@
 //! File previews for the gallery, the column view, and Quick Look. Structured
-//! files (CSV, JSON, TOML, YAML, SQLite, …) are opened with Nushell and shown
-//! as tables. Code is highlighted, Markdown rendered, archives listed, fonts
-//! shown in their own type, PDFs drawn page by page (see `pdf.rs`), and
-//! videos and documents show the system's thumbnail of them.
+//! files that are text (CSV, JSON, TOML, YAML, …) are highlighted like code;
+//! binary ones (SQLite, spreadsheets, …) are opened with Nushell and shown as
+//! tables, and Quick Look can explore either (see `explore.rs`). Code is
+//! highlighted, Markdown rendered, archives listed, fonts shown in their own
+//! type, PDFs drawn page by page (see `pdf.rs`), and videos and documents
+//! show the system's thumbnail of them.
 
+use super::explore::{QuickLookMode, mode_buttons};
 use super::pdf::Surface;
 use super::views::file_icon;
 use super::{AppState, Finder};
 use crate::actions::{
-    MoveDown, MoveLeft, MoveRight, MoveUp, NextPdfPage, PreviewTextBigger, PreviewTextReset,
-    PreviewTextSmaller, PreviousPdfPage, QUICK_LOOK, QuickLook,
+    ExploreBack, ExploreInto, MoveDown, MoveLeft, MoveRight, MoveUp, NextPdfPage,
+    PreviewTextBigger, PreviewTextReset, PreviewTextSmaller, PreviousPdfPage, QUICK_LOOK,
+    QuickLook, QuickLookExplore,
 };
 use crate::nushell::{self, NuOutput};
 use crate::theme::palette;
@@ -160,12 +164,9 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
             .unwrap_or(0);
         return Preview::Folder { items };
     }
-    let is_nu = entry
-        .path
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("nu"));
+    let ext = extension(entry);
     if let Some(nu) = nu
-        && is_nu
+        && matches!(ext.as_str(), "nu" | "nuon")
         && let Some((source, truncated)) = read_text(&entry.path)
         && let Ok(colored) = nushell::highlight_nu(nu, &source)
     {
@@ -181,9 +182,14 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
             truncated,
         };
     }
+    // Structured files that are text show as text, colored. The others
+    // (SQLite, spreadsheets, MessagePack, binary plists) open with Nushell.
+    let structured = nushell::is_structured(&entry.path);
+    let structured_text = structured.then(|| read_text(&entry.path)).flatten();
     if let Some(nu) = nu
-        && nushell::is_structured(&entry.path)
-        && entry.size.unwrap_or(0) < 50_000_000
+        && structured
+        && structured_text.is_none()
+        && entry.size.unwrap_or(0) < nushell::OPEN_LIMIT
     {
         let run = nushell::preview_file(nu, &entry.path);
         match run.output {
@@ -217,7 +223,6 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
             NuOutput::Empty => {}
         }
     }
-    let ext = extension(entry);
     if fffinder_core::archive::format(&entry.path).is_some()
         && let Some(table) = archive_table(entry)
     {
@@ -244,11 +249,18 @@ fn load_preview(entry: &FileEntry, nu: Option<&Path>, dark: bool) -> Preview {
         }
         _ => {}
     }
-    if matches!(
-        entry.kind,
-        FileKind::Text | FileKind::Code | FileKind::Data | FileKind::Other | FileKind::Executable
-    ) && let Some((text, truncated)) = read_text(&entry.path)
-    {
+    if let Some((text, truncated)) = structured_text.or_else(|| {
+        matches!(
+            entry.kind,
+            FileKind::Text
+                | FileKind::Code
+                | FileKind::Data
+                | FileKind::Other
+                | FileKind::Executable
+        )
+        .then(|| read_text(&entry.path))
+        .flatten()
+    }) {
         if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
             return Preview::Markdown { text: text.into() };
         }
@@ -344,20 +356,53 @@ impl Finder {
             .unwrap_or(Preview::Loading)
     }
 
-    /// Space or Cmd+Y: show the selected item in Quick Look, or close it.
-    /// Quick Look is a window of its own, except in `--term` mode, where the
-    /// terminal shows one window and it's a dialog in it.
+    /// Space or Cmd+Y: show the selected item in Quick Look, a structured
+    /// file as its text, or close it.
     pub fn quick_look(&mut self, _: &QuickLook, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::term::active() {
+        self.quick_look_as(QuickLookMode::Text, window, cx);
+    }
+
+    /// Cmd+Space: show the selected item in Quick Look, a structured file as
+    /// data to explore, or close it.
+    pub fn quick_look_explore(
+        &mut self,
+        _: &QuickLookExplore,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.quick_look_as(QuickLookMode::Explore, window, cx);
+    }
+
+    /// Open Quick Look in `mode`, switch it to `mode` when it's open in the
+    /// other, or close it. Quick Look is a window of its own, except in
+    /// `--term` mode, where the terminal shows one window and it's a dialog
+    /// in it.
+    fn quick_look_as(&mut self, mode: QuickLookMode, window: &mut Window, cx: &mut Context<Self>) {
+        let term = crate::term::active();
+        let open = self.quick_look_open && (!term || window.has_active_dialog(cx));
+        if open && self.quick_look_mode != mode {
+            self.set_quick_look_mode(mode, cx);
+            window.refresh();
+            return;
+        }
+        self.quick_look_mode = mode;
+        if term {
             self.quick_look_dialog(window, cx);
         } else {
             self.toggle_quick_look_window(window, cx);
         }
+        self.ensure_explore(cx);
+    }
+
+    /// Forget what Quick Look showed, once it's closed.
+    pub(super) fn quick_look_closed(&mut self) {
+        self.quick_look_open = false;
+        self.explore = None;
     }
 
     fn quick_look_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_look_open {
-            self.quick_look_open = false;
+            self.quick_look_closed();
             // The flag can outlive the dialog; only close what is open.
             if window.has_active_dialog(cx) {
                 window.close_dialog(cx);
@@ -390,6 +435,7 @@ impl Finder {
                 .preview_of(&entry)
                 .has_text()
                 .then(|| finder.config.preview_font_size());
+            let modes = Finder::can_explore(&entry, cx).then_some(finder.quick_look_mode());
             // Quick Look takes most of the window, so a bigger window shows
             // a bigger preview, and never gets smaller than it used to be.
             let viewport = window.viewport_size();
@@ -408,11 +454,26 @@ impl Finder {
                     div()
                         .track_focus(&focus)
                         .key_context(crate::actions::QUICK_LOOK)
+                        .on_action(mode_handler::<QuickLook>(&view, QuickLookMode::Text))
+                        .on_action(mode_handler::<QuickLookExplore>(
+                            &view,
+                            QuickLookMode::Explore,
+                        ))
                         .on_action({
                             let view = view.clone();
-                            move |_: &QuickLook, window, cx| {
-                                window.close_dialog(cx);
-                                view.update(cx, |this, _| this.quick_look_open = false);
+                            move |_: &ExploreInto, window, cx| {
+                                view.update(cx, |this, cx| this.explore_into(cx));
+                                window.refresh();
+                            }
+                        })
+                        .on_action({
+                            let view = view.clone();
+                            move |_: &ExploreBack, window, cx| {
+                                if !view.update(cx, |this, cx| this.explore_back(cx)) {
+                                    window.close_dialog(cx);
+                                    view.update(cx, |this, _| this.quick_look_closed());
+                                }
+                                window.refresh();
                             }
                         })
                         .on_action(text_size_handler::<PreviewTextBigger>(&view, Some(1.)))
@@ -435,9 +496,17 @@ impl Finder {
                 )
                 .footer(
                     DialogFooter::new()
-                        .child(h_flex().flex_1().when_some(text_size, |this, size| {
-                            this.child(text_size_buttons(&view, size))
-                        }))
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .gap(ui(8.))
+                                .when_some(text_size, |this, size| {
+                                    this.child(text_size_buttons(&view, size))
+                                })
+                                .when_some(modes, |this, mode| {
+                                    this.child(mode_buttons(&view, mode))
+                                }),
+                        )
                         .child(
                             Button::new("ql-reveal")
                                 .label(super::menus::reveal_label())
@@ -451,7 +520,7 @@ impl Finder {
                                 // `close_dialog` doesn't run `on_close`.
                                 window.close_dialog(cx);
                                 open_view.update(cx, |this, cx| {
-                                    this.quick_look_open = false;
+                                    this.quick_look_closed();
                                     // A file no app claims opens in an editor.
                                     this.open_files(vec![open_path.clone()], window, cx);
                                 });
@@ -459,7 +528,7 @@ impl Finder {
                         )),
                 )
                 .on_close(move |_, _, cx| {
-                    close_view.update(cx, |this, _| this.quick_look_open = false);
+                    close_view.update(cx, |this, _| this.quick_look_closed());
                 })
         });
     }
@@ -476,6 +545,9 @@ impl Finder {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.explore_move(dx, dy, cx) {
+            return;
+        }
         let view = self.effective_view();
         if view != ViewMode::Columns && self.selection.len() > 1 {
             self.selection.cycle_cursor(dx + dy);
@@ -491,12 +563,31 @@ impl Finder {
         if let Some(entry) = self.primary_entry() {
             self.ensure_preview(&entry, cx);
             self.ensure_pdf(&entry, cx);
+            self.ensure_explore(cx);
         }
         // Selecting in a column focuses the files; keep the keys coming to
         // the dialog. Quick Look's own window keeps its focus.
         if self.quick_look_window.is_none() {
             self.quick_look_focus.focus(window, cx);
         }
+    }
+}
+
+/// Space or Cmd+Space in Quick Look's dialog: the mode it's in closes it,
+/// and the other switches to that mode.
+fn mode_handler<A: Action>(
+    view: &Entity<Finder>,
+    mode: QuickLookMode,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    let view = view.clone();
+    move |_, window, cx| {
+        if view.read(cx).quick_look_mode() == mode {
+            window.close_dialog(cx);
+            view.update(cx, |this, _| this.quick_look_closed());
+        } else {
+            view.update(cx, |this, cx| this.set_quick_look_mode(mode, cx));
+        }
+        window.refresh();
     }
 }
 
@@ -624,8 +715,10 @@ pub fn render_preview_large(
 
 /// The item's name, then its kind, size, and date.
 pub(super) fn preview_caption(finder: &Finder, entry: &FileEntry, cx: &App) -> impl IntoElement {
+    // The details go under the name when both don't fit side by side.
     h_flex()
-        .gap(ui(8.))
+        .flex_wrap()
+        .gap_x(ui(8.))
         .text_size(ui(12.))
         .child(
             div()
@@ -647,6 +740,9 @@ pub(super) fn preview_area(
     surface: Surface,
     cx: &App,
 ) -> AnyElement {
+    if surface == Surface::QuickLook && finder.explores(entry, cx) {
+        return super::explore::render_explore(finder, view, entry, cx);
+    }
     let pdf = finder.pdf_view(entry);
     let body = preview_body(
         finder,
@@ -1080,6 +1176,34 @@ mod tests {
             }
             _ => panic!("expected highlighted code"),
         }
+        // Structured files that are text stay text, colored; a binary one
+        // is opened with Nushell.
+        for (name, text) in [
+            ("Cargo.toml", "[package]\nname = \"fff\"\n"),
+            ("data.json", "{\"a\": [1, 2]}\n"),
+            ("people.csv", "name,age\nana,31\n"),
+        ] {
+            std::fs::write(dir.join(name), text).unwrap();
+            let entry = FileEntry::from_path(dir.join(name)).unwrap();
+            assert!(
+                matches!(load_preview(&entry, Some(&nu), false), Preview::Code { .. }),
+                "{name} is highlighted text"
+            );
+        }
+        let db = dir.join("shop.db");
+        let made = std::process::Command::new(&nu)
+            .args(["--no-config-file", "-c"])
+            .arg("[[item qty]; [pen 3]] | into sqlite $env.DB --table-name stock")
+            .env("DB", &db)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let entry = FileEntry::from_path(&db).unwrap();
+        assert!(matches!(
+            load_preview(&entry, Some(&nu), false),
+            Preview::Table { .. }
+        ));
+
         let plain = dir.join("notes.txt");
         std::fs::write(&plain, "def greet").unwrap();
         let entry = FileEntry::from_path(&plain).unwrap();

@@ -6,6 +6,7 @@ mod batch_rename;
 mod dialogs;
 mod disk_access;
 mod editor;
+mod explore;
 mod filter;
 mod fit;
 mod folder_tree;
@@ -55,6 +56,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+pub use explore::QuickLookMode;
 pub use folder_tree::{NodeKey, Section};
 pub use fps::ShowFps;
 pub use menus::reveal_label;
@@ -317,6 +319,10 @@ pub struct Finder {
     /// The PDF the large preview shows page by page.
     pdf: Option<pdf::PdfView>,
     quick_look_open: bool,
+    /// How Quick Look shows a structured file: as text or as data.
+    quick_look_mode: QuickLookMode,
+    /// Explore mode's state for the file Quick Look shows.
+    explore: Option<explore::Explore>,
     quick_look_focus: FocusHandle,
     /// Quick Look's own window, while it's open (outside `--term` mode).
     quick_look_window: Option<AnyWindowHandle>,
@@ -554,6 +560,8 @@ impl Finder {
             preview_tasks: HashMap::new(),
             pdf: None,
             quick_look_open: false,
+            quick_look_mode: QuickLookMode::default(),
+            explore: None,
             quick_look_focus: cx.focus_handle(),
             quick_look_window: None,
             item_menu_at: None,
@@ -1630,6 +1638,7 @@ impl Finder {
             // Quick Look's window follows clicks in the browser.
             if self.quick_look_open {
                 self.ensure_pdf(&entry, cx);
+                self.ensure_explore(cx);
             }
         }
     }
@@ -2706,7 +2715,8 @@ impl Finder {
         }
         let mut name = "untitled folder".to_string();
         let mut n = 2;
-        while dir.join(&name).exists() {
+        // `symlink_metadata`, not `exists`, so a broken link counts as taken.
+        while dir.join(&name).symlink_metadata().is_ok() {
             name = format!("untitled folder {n}");
             n += 1;
         }
@@ -2949,6 +2959,7 @@ impl Render for Finder {
             // file views, but menus can send them from anywhere in the window.
             .on_action(cx.listener(Self::open_selected))
             .on_action(cx.listener(Self::quick_look))
+            .on_action(cx.listener(Self::quick_look_explore))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))

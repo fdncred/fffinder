@@ -38,6 +38,15 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+/// Act as if this process drew its window in the terminal, for tests of
+/// what `--term` mode does differently, such as Quick Look as a dialog and
+/// Ctrl for every Cmd shortcut. Call it before `fffinder::init`, which binds
+/// the keys, and only in a test binary of its own: the flag is process-wide.
+#[doc(hidden)]
+pub fn pretend_active_for_tests() {
+    ACTIVE.store(true, Ordering::Relaxed);
+}
+
 /// How many frames have reached the terminal so far. Frames that arrived
 /// while the terminal was still taking an earlier one, and were replaced by
 /// a newer one, don't count. Always 0 outside the terminal.

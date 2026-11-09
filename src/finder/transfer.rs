@@ -8,6 +8,7 @@ use super::views::DraggedFiles;
 use crate::actions::MoveItemsHere;
 use crate::model::Location;
 use crate::theme::ui;
+use crate::trash_bin::{self, Bin, TrashStopped, Trashed};
 use crate::undo::{self, Change};
 use fffinder_core::entry::display_name;
 use fffinder_core::ops::{self, Clash, Mode, Progress, Report, Transfer, TransferError};
@@ -427,17 +428,22 @@ impl Finder {
             cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
         }
         let progress = self.start_job(kind, transfer.sources.len(), cx);
+        let bin = trash_bin::bin(cx);
         cx.spawn_in(window, async move |this, cx| {
-            let report = cx
+            let (report, set_aside) = cx
                 .background_spawn({
                     let progress = progress.clone();
-                    async move { ops::run(&transfer, clash, &progress) }
+                    async move {
+                        let report = ops::run(&transfer, clash, &progress);
+                        let set_aside = trash_replaced(bin.as_ref(), &report.replaced);
+                        (report, set_aside)
+                    }
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.transfers
                     .retain(|job| !Arc::ptr_eq(&job.progress, &progress));
-                this.transfer_finished(mode, &report, window, cx);
+                this.transfer_finished(mode, &report, set_aside, window, cx);
             })
             .ok();
         })
@@ -530,10 +536,14 @@ impl Finder {
         &mut self,
         mode: Mode,
         report: &Report,
+        set_aside: SetAside,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let landed: Vec<PathBuf> = report.done.iter().map(|(_, to)| to.clone()).collect();
+        // Recorded first, so Undo takes back the copy or move, and the next
+        // Undo puts back what it replaced.
+        undo::record("Replace", Change::Replaced(set_aside.trashed), cx);
         match mode {
             Mode::Copy => undo::record("Copy", Change::Created(landed.clone()), cx),
             Mode::Move => {
@@ -551,6 +561,19 @@ impl Finder {
             }
         }
         self.files_changed(landed, cx);
+        if let Some(kept) = set_aside.kept.first() {
+            let why = set_aside.error.as_deref().unwrap_or("it was refused");
+            window.push_notification(
+                (
+                    NotificationType::Warning,
+                    format!(
+                        "What was replaced couldn’t go to the Trash ({why}), so it was kept as “{}”",
+                        display_name(kept)
+                    ),
+                ),
+                cx,
+            );
+        }
         if let Some((path, why)) = report.left.first() {
             window.push_notification(
                 (
@@ -650,6 +673,43 @@ impl Finder {
 
 /// The key that makes a drag copy instead of move: Option on macOS, as in
 /// Finder, and Ctrl on Linux and Windows, as in their file managers.
+/// What Replace set aside, after it went to the Trash: what's there now,
+/// each with the path it had before, and what the Trash refused, still
+/// beside what replaced it.
+#[derive(Debug, Default)]
+struct SetAside {
+    trashed: Vec<(Trashed, PathBuf)>,
+    kept: Vec<PathBuf>,
+    error: Option<String>,
+}
+
+/// Move the items Replace set aside (as "name (replaced)") to the Trash.
+/// Whatever the Trash refuses stays where it is, so nothing is lost.
+fn trash_replaced(bin: &dyn Bin, replaced: &[(PathBuf, PathBuf)]) -> SetAside {
+    let asides: Vec<PathBuf> = replaced.iter().map(|(_, aside)| aside.clone()).collect();
+    if asides.is_empty() {
+        return SetAside::default();
+    }
+    let (trashed, error) = match bin.trash(&asides) {
+        Ok(trashed) => (trashed, None),
+        Err(TrashStopped { trashed, error }) => (trashed, Some(error.to_string())),
+    };
+    // The Trash takes them in order and stops at the first it refuses.
+    let trashed = trashed
+        .into_iter()
+        .zip(replaced.iter().map(|(target, _)| target.clone()))
+        .collect();
+    let kept = asides
+        .into_iter()
+        .filter(|aside| aside.symlink_metadata().is_ok())
+        .collect();
+    SetAside {
+        trashed,
+        kept,
+        error,
+    }
+}
+
 pub(super) fn copy_modifier(modifiers: Modifiers) -> bool {
     if cfg!(target_os = "macos") {
         modifiers.alt

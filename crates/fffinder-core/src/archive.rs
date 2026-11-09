@@ -4,8 +4,8 @@
 //! half made: the work happens under a hidden name and is renamed at the end.
 
 use crate::ops::{
-    Progress, TransferError, free_name, io_error, make_symlink, numbered_name, remove_any,
-    sized_while, staging_path,
+    Progress, TransferError, io_error, make_symlink, numbered_name, remove_any,
+    rename_to_free_name, sized_while, split_extension, staging_path,
 };
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -73,8 +73,19 @@ pub fn zip_path(sources: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Put `sources` (files and folders, which share a parent) into a new zip
-/// at `zip`. Links are stored as links.
-pub fn compress(sources: &[PathBuf], zip: &Path, progress: &Progress) -> Result<(), TransferError> {
+/// at `zip`, and return where it landed: `zip`, or the next numbered name
+/// when something took that one while the job ran. Links are stored as
+/// links.
+///
+/// # Errors
+///
+/// Fails when a source can't be read or the zip can't be written; nothing
+/// of the unfinished zip is left behind.
+pub fn compress(
+    sources: &[PathBuf],
+    zip: &Path,
+    progress: &Progress,
+) -> Result<PathBuf, TransferError> {
     let temp = staging_path(zip);
     // Only what this job made is removed when it fails.
     let file = File::create_new(&temp).map_err(io_error(&temp))?;
@@ -86,7 +97,15 @@ pub fn compress(sources: &[PathBuf], zip: &Path, progress: &Progress) -> Result<
             add_to_zip(&mut writer, source, base, progress)?;
         }
         writer.finish().map_err(zip_error(&temp))?;
-        fs::rename(&temp, zip).map_err(io_error(zip))
+        // The name was free when the job began; something may have it now.
+        let dir = zip.parent().unwrap_or(Path::new("."));
+        let name = crate::entry::display_name(zip);
+        let (stem, ext) = split_extension(&name, false);
+        rename_to_free_name(&temp, dir, |n| match n {
+            1 => name.clone(),
+            n => format!("{stem} {n}{ext}"),
+        })
+        .map_err(io_error(zip))
     });
     if result.is_err() {
         let _ = fs::remove_file(&temp);
@@ -300,22 +319,24 @@ fn settle(temp: &Path, dir: &Path, name: &str) -> Result<PathBuf, TransferError>
         .filter_map(Result::ok)
         .map(|e| e.path())
         .collect();
+    // Each name is claimed by the rename itself, so nothing that took one
+    // since it was checked is replaced.
     if let [only] = top.as_slice() {
         let only_name = crate::entry::display_name(only);
-        let target = match dir.join(&only_name).symlink_metadata() {
-            Ok(_) => numbered_name(dir, &only_name, only.is_dir()),
-            Err(_) => dir.join(&only_name),
-        };
-        fs::rename(only, &target).map_err(io_error(&target))?;
+        let (stem, ext) = split_extension(&only_name, only.is_dir());
+        let target = rename_to_free_name(only, dir, |n| match n {
+            1 => only_name.clone(),
+            n => format!("{stem} {n}{ext}"),
+        })
+        .map_err(io_error(dir))?;
         let _ = fs::remove_dir(temp);
         return Ok(target);
     }
-    let target = free_name(dir, |n| match n {
+    rename_to_free_name(temp, dir, |n| match n {
         1 => name.to_string(),
         n => format!("{name} {n}"),
-    });
-    fs::rename(temp, &target).map_err(io_error(&target))?;
-    Ok(target)
+    })
+    .map_err(io_error(dir))
 }
 
 fn extract_zip(archive: &Path, into: &Path, progress: &Progress) -> Result<(), TransferError> {
@@ -408,6 +429,19 @@ mod tests {
         fs::write(dir.join("folder/inner/b.txt"), "beta").unwrap();
         fs::write(dir.join("c.txt"), "gamma").unwrap();
         dir
+    }
+
+    #[test]
+    fn a_zip_never_lands_on_a_name_taken_meanwhile() {
+        let dir = temp("zip-taken");
+        let zip = zip_path(&[dir.join("c.txt")]).unwrap();
+        // Something takes the name after Compress chose it.
+        fs::write(&zip, "someone else's").unwrap();
+        let landed = compress(&[dir.join("c.txt")], &zip, &Progress::default()).unwrap();
+        assert_eq!(landed, dir.join("c.txt 2.zip"));
+        assert_eq!(fs::read_to_string(&zip).unwrap(), "someone else's");
+        assert!(list(&landed, 10).is_ok());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

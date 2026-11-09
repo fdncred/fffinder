@@ -210,8 +210,8 @@ impl Finder {
             COMPRESS,
             count,
             move |progress| match archive::compress(&sources, &zip, progress) {
-                Ok(()) => Made {
-                    items: vec![zip],
+                Ok(landed) => Made {
+                    items: vec![landed],
                     failed: Vec::new(),
                 },
                 Err(err) => Made {

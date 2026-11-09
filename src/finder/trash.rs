@@ -275,6 +275,17 @@ impl Finder {
         if self.wait_for_undo(window, cx) {
             return;
         }
+        // Undo could move items a running copy is still reading or writing.
+        if self.transfers_running() {
+            window.push_notification(
+                (
+                    NotificationType::Warning,
+                    "Wait for copying and moving to finish".to_string(),
+                ),
+                cx,
+            );
+            return;
+        }
         let Some((operation, running)) = undo::take_last(step, cx) else {
             let message = match step {
                 Step::Undo => "There’s nothing to undo",

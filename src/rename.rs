@@ -200,8 +200,15 @@ pub fn move_all(moves: &[(PathBuf, PathBuf)]) -> Result<(), MoveError> {
     let stamp = format!("{}-{}", std::process::id(), nanos());
     let mut parked: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(moves.len());
     for (i, (from, _)) in moves.iter().enumerate() {
-        let temp = from.with_file_name(format!(".fff-rename-{stamp}-{i}"));
-        if let Err(err) = std::fs::rename(from, &temp) {
+        // The old name rides along, so an item left here by a crash can
+        // still be told apart. Names stop at 255 bytes.
+        let name = display(from);
+        let mut keep = name.len().min(150);
+        while !name.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        let temp = from.with_file_name(format!(".fff-rename-{stamp}-{i}-{}", &name[..keep]));
+        if let Err(err) = ops::rename_no_replace(from, &temp) {
             put_back(&[], &parked);
             return Err(MoveError::Failed {
                 path: from.clone(),
@@ -233,13 +240,22 @@ pub fn move_all(moves: &[(PathBuf, PathBuf)]) -> Result<(), MoveError> {
 }
 
 /// Undo a [`move_all`] that stopped: `moved` items go back to their hidden
-/// names, newest first, then every parked item to its own name.
+/// names, newest first, then every parked item to its own name. When
+/// something took that name meanwhile, the item gets a numbered one beside
+/// it ("name 2.ext") rather than replacing that or staying hidden.
 fn put_back(moved: &[(PathBuf, PathBuf)], parked: &[(PathBuf, PathBuf)]) {
     for ((_, to), (temp, _)) in moved.iter().zip(parked).rev() {
         let _ = ops::move_item(to, temp);
     }
     for (temp, from) in parked.iter().rev() {
-        let _ = std::fs::rename(temp, from);
+        if ops::rename_no_replace(temp, from).is_ok() {
+            continue;
+        }
+        let (Some(dir), name) = (from.parent(), display(from)) else {
+            continue;
+        };
+        let (stem, ext) = ops::split_extension(&name, temp.is_dir());
+        let _ = ops::rename_to_free_name(temp, dir, |n| format!("{stem} {}{ext}", n + 1));
     }
 }
 
@@ -429,5 +445,22 @@ mod tests {
         assert!(apply(&planned).is_err());
         assert_eq!(dir.contents("a.txt"), "a.txt");
         assert!(!dir.0.join("one.txt").exists());
+    }
+
+    #[test]
+    fn putting_back_never_replaces_what_took_a_name() {
+        let dir = Dir::new("put-back-taken", &["a.txt"]);
+        let parked = dir.0.join(".fff-rename-test-0-a.txt");
+        std::fs::rename(dir.0.join("a.txt"), &parked).unwrap();
+        // Something takes the old name while the item is parked.
+        std::fs::write(dir.0.join("a.txt"), "newcomer").unwrap();
+        put_back(&[], &[(parked.clone(), dir.0.join("a.txt"))]);
+        assert_eq!(dir.contents("a.txt"), "newcomer");
+        assert_eq!(
+            dir.contents("a 2.txt"),
+            "a.txt",
+            "the item comes back beside it"
+        );
+        assert!(!parked.exists(), "and isn't left hidden");
     }
 }

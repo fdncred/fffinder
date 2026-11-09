@@ -2,6 +2,34 @@
 
 All notable changes to fffinder are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Quick Look has an explore mode for structured files, opened with Cmd+Space or File › Explore Data. It shows the data Nushell's `open` reads one level at a time, the way Nushell's `explore` does: a record as its fields, a table as its rows and columns, a list as its items. Click a nested value, or press Return on it, to go into it; the path above the grid shows where you are, and clicking a name in it or pressing Escape goes back. In Quick Look, Space and Cmd+Space switch between text and explore mode, and so do the Text and Explore buttons at the bottom. See [Exploring data](docs/manual.md#exploring-data).
+
+### Changed
+
+- CSV, JSON, TOML, YAML, XML, INI, and the other structured files that are text preview as colored text in the gallery, the column view, the Preview Pane, and Quick Look, instead of as a Nushell table whose nested values couldn't be opened. SQLite databases, spreadsheets, MessagePack, and binary plists still preview as a table. NUON files are colored by `nu-highlight`, like `.nu` scripts.
+- Code previews use bat's grammars instead of syntect's own, which adds TOML, INI, CSV, TSV, and many other languages.
+- The Nushell table previews, and explore mode, load the plugins registered with `plugin add`, so formats a plugin reads, such as INI with `nu_plugin_formats`, open as data.
+- Quick Look's caption is no longer cut off when its window is narrow: the buttons move to a second line instead.
+- A nested table in a Nushell table cell reads `[table 3 rows]`, as in Nushell, instead of `[list 3 items]`.
+
+### Fixed
+
+- Replace no longer deletes what it replaces: the old item goes to the Trash as "name (replaced).ext", a replaced folder whole, and a second Undo puts it back under its own name. If the Trash refuses it, it stays beside its replacement.
+- Items with one name from different folders, pasted or dropped together, are all kept ("name 2.ext"). With Replace, the second used to delete the first.
+- A copy, move, rename, Compress, or Extract never writes over an item that takes its name while it runs: copies are built under a hidden name and claim the real one with a rename that refuses a taken name.
+- Replace refuses a link that points to the item it would replace, and a folder that holds other items of the same copy or move.
+- A move to another volume flushes the copy to disk and checks its size before it removes the original.
+- Copies keep extended attributes (Finder tags, comments) on folders, on large files, and on Linux.
+- Copying a folder with a pipe in it reports the pipe instead of hanging.
+- Renaming onto a broken link is refused instead of replacing the link, and New Folder skips a name a broken link has.
+- Undo and Redo wait for running copies and moves.
+- The macOS Trash journal, which Put Back reads, no longer loses entries when items are trashed and put back at once.
+- A structured file whose data mentions SQLite, such as Nushell's own `Cargo.toml` with its `sqlite` feature, was taken for a database, and its preview failed with "Can't convert to database".
+
 ## [0.4.0] - 2026-11-08
 
 This release adds a tree mode to the sidebar, which works the way Explorer's navigation pane does, and on macOS a check at startup for Full Disk Access.

@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run --example screenshot -- out.png [--dir PATH] [--view icons|list|columns|gallery]
-//!     [--light|--dark] [--query TEXT] [--scope-folder] [--select N] [--quicklook]
+//!     [--light|--dark] [--query TEXT] [--scope-folder] [--select N] [--quicklook] [--explore]
 //!     [--nu PIPELINE] [--size 1100x700] [--no-sidebar] [--settings] [--info]
 //!     [--tabs N] [--split]
 //! ```
@@ -29,6 +29,8 @@ struct Options {
     select: Option<usize>,
     nu: Option<String>,
     quick_look: bool,
+    /// Quick Look in explore mode, as Cmd-Space opens it.
+    explore: bool,
     settings: bool,
     info: bool,
     tabs: usize,
@@ -50,6 +52,7 @@ fn parse() -> Options {
         select: None,
         nu: None,
         quick_look: false,
+        explore: false,
         settings: false,
         info: false,
         tabs: 1,
@@ -77,6 +80,7 @@ fn parse() -> Options {
             "--nu" => o.nu = args.next(),
             "--no-sidebar" => o.sidebar = false,
             "--quicklook" => o.quick_look = true,
+            "--explore" => (o.quick_look, o.explore) = (true, true),
             "--settings" => o.settings = true,
             "--info" => o.info = true,
             "--tabs" => o.tabs = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
@@ -208,13 +212,16 @@ fn main() {
     }
     if o.quick_look {
         cx.update_window(handle, |_, window, cx| {
-            view.update(cx, |finder, cx| {
-                finder.quick_look(&fffinder::actions::QuickLook, window, cx)
+            view.update(cx, |finder, cx| match o.explore {
+                true => finder.quick_look_explore(&fffinder::actions::QuickLookExplore, window, cx),
+                false => finder.quick_look(&fffinder::actions::QuickLook, window, cx),
             });
         })
         .ok();
-        settle(&mut cx);
-        settle(&mut cx);
+        // Explore mode opens the file in a real `nu` process.
+        for _ in 0..3 {
+            settle(&mut cx);
+        }
     }
     let dialogs: [(bool, Box<dyn gpui_kit::Action>); 2] = [
         (o.settings, Box::new(fffinder::actions::ShowSettings)),

@@ -135,11 +135,11 @@ pub fn filter_paths(
     let script = format!("{TYPED_INPUT}\n{stage}\n| get path | to json --raw");
     let out = exec(
         nu,
-        &script,
-        Some(entries_json(entries)),
-        cwd,
-        &[],
-        Some(FILTER_TIMEOUT),
+        Job {
+            stdin: Some(entries_json(entries)),
+            timeout: Some(FILTER_TIMEOUT),
+            ..Job::new(&script, cwd)
+        },
     )?;
     serde_json::from_str::<Vec<String>>(out.trim())
         .map(|paths| paths.into_iter().map(PathBuf::from).collect())
@@ -172,11 +172,11 @@ pub fn rename_names(
     );
     let out = exec(
         nu,
-        &script,
-        Some(entries_json(entries)),
-        cwd,
-        &[],
-        Some(FILTER_TIMEOUT),
+        Job {
+            stdin: Some(entries_json(entries)),
+            timeout: Some(FILTER_TIMEOUT),
+            ..Job::new(&script, cwd)
+        },
     )?;
     let names: Vec<String> = serde_json::from_str(out.trim())
         .map_err(|_| "The closure must return a name for each item.".to_string())?;
@@ -263,47 +263,91 @@ pub fn comment_ranges(
 
 /// Run a script with no input; returns its stdout or its error message.
 pub fn run_raw(nu: &Path, script: &str, cwd: &Path) -> Result<String, String> {
-    exec(nu, script, None, cwd, &[], Some(FILTER_TIMEOUT))
+    exec(
+        nu,
+        Job {
+            timeout: Some(FILTER_TIMEOUT),
+            ..Job::new(script, cwd)
+        },
+    )
+}
+
+/// One `nu -c` run: the script and what it starts with.
+struct Job<'a> {
+    script: &'a str,
+    /// JSON the script reads as its input, through `--stdin`.
+    stdin: Option<String>,
+    cwd: &'a Path,
+    env: &'a [(&'a str, &'a std::ffi::OsStr)],
+    /// How long it may run before it is stopped; `None` waits for it.
+    timeout: Option<Duration>,
+    /// Whether the plugins registered with `plugin add` load, so `open` can
+    /// use their `from` commands (`from ini` from `nu_plugin_formats`, say).
+    plugins: bool,
+}
+
+impl<'a> Job<'a> {
+    /// `script` run in `cwd` with no input, no time limit, and no plugins.
+    fn new(script: &'a str, cwd: &'a Path) -> Self {
+        Self {
+            script,
+            stdin: None,
+            cwd,
+            env: &[],
+            timeout: None,
+            plugins: false,
+        }
+    }
+
+    /// Run the script to its end. `Ok(None)` means the timeout stopped it.
+    fn run(self, nu: &Path) -> std::io::Result<Option<std::process::Output>> {
+        self.command(nu)
+            .spawn()
+            .and_then(|child| wait_for(child, self.stdin, self.timeout))
+    }
+
+    /// The `nu` command line for this run, its output piped back.
+    fn command(&self, nu: &Path) -> Command {
+        let mut cmd = Command::new(nu);
+        // `nu -c` reads neither config.nu nor env.nu on its own; it does read
+        // the plugin registry, unless `--no-config-file` turns that off too.
+        if !self.plugins {
+            cmd.arg("--no-config-file");
+        }
+        if self.stdin.is_some() {
+            cmd.arg("--stdin");
+        }
+        cmd.arg("-c")
+            .arg(self.script)
+            .current_dir(self.cwd)
+            .env("NO_COLOR", "1")
+            .envs(self.env.iter().copied())
+            .stdin(if self.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+}
+
+/// The message for a run its timeout stopped.
+fn timed_out(timeout: Option<Duration>) -> String {
+    format!(
+        "nu took longer than {} s and was stopped",
+        timeout.unwrap_or_default().as_secs()
+    )
 }
 
 /// Run a script and return its stdout, or its error message.
-fn exec(
-    nu: &Path,
-    script: &str,
-    stdin: Option<String>,
-    cwd: &Path,
-    env: &[(&str, &std::ffi::OsStr)],
-    timeout: Option<Duration>,
-) -> Result<String, String> {
-    let mut cmd = Command::new(nu);
-    cmd.arg("--no-config-file");
-    if stdin.is_some() {
-        cmd.arg("--stdin");
-    }
-    cmd.arg("-c")
-        .arg(script)
-        .current_dir(cwd)
-        .env("NO_COLOR", "1")
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
-    let output = cmd
-        .spawn()
-        .and_then(|child| wait_for(child, stdin, timeout))
+fn exec(nu: &Path, job: Job) -> Result<String, String> {
+    let timeout = job.timeout;
+    let output = job
+        .run(nu)
         .map_err(|err| format!("could not run {}: {err}", nu.display()))?
-        .ok_or_else(|| {
-            format!(
-                "nu took longer than {} s and was stopped",
-                timeout.unwrap_or_default().as_secs()
-            )
-        })?;
+        .ok_or_else(|| timed_out(timeout))?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -323,7 +367,13 @@ fn exec(
 pub fn run_pipeline(nu: &Path, pipeline: &str, entries: &[FileEntry], cwd: &Path) -> NuRun {
     let script = format!("{TYPED_INPUT} | do {{\n{pipeline}\n}} | fff-render | to json --raw");
     let script = format!("{PRELUDE}\n{script}");
-    run_script(nu, &script, Some(entries_json(entries)), cwd, &[], None)
+    run_script(
+        nu,
+        Job {
+            stdin: Some(entries_json(entries)),
+            ..Job::new(&script, cwd)
+        },
+    )
 }
 
 /// Longest a preview may take before it is abandoned and the file shows its icon.
@@ -336,7 +386,7 @@ let data = open $env.FFF_PREVIEW_PATH
 let type = $data | describe
 let data = if ($type | str starts-with 'table') or ($type | str starts-with 'list') {
     $data | first 500
-} else if ($type | str starts-with 'SQLiteDatabase') or ($type | str contains 'sqlite') {
+} else if $type == 'SQLiteDatabase' {
     $data | schema | get tables | transpose table info | each {|t| {table: $t.table, columns: ($t.info.columns | length)} }
 } else {
     $data
@@ -346,23 +396,157 @@ $data | fff-render | to json --raw
     let cwd = path.parent().unwrap_or(Path::new("."));
     run_script(
         nu,
-        &format!("{PRELUDE}\n{SCRIPT}"),
-        None,
-        cwd,
-        &[("FFF_PREVIEW_PATH", path.as_os_str())],
-        Some(PREVIEW_TIMEOUT),
+        Job {
+            env: &[("FFF_PREVIEW_PATH", path.as_os_str())],
+            timeout: Some(PREVIEW_TIMEOUT),
+            plugins: true,
+            ..Job::new(&format!("{PRELUDE}\n{SCRIPT}"), cwd)
+        },
     )
+}
+
+/// Files bigger than this, in bytes, aren't opened with Nushell to preview
+/// or explore them.
+pub const OPEN_LIMIT: u64 = 50_000_000;
+
+/// Most rows explore mode reads from a table or list at the top of a file,
+/// and from each table of a SQLite database.
+pub const EXPLORE_ROWS: usize = 10_000;
+
+/// A structured file as `open` reads it, nested values and all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Opened {
+    pub data: Json,
+    /// How many rows the table or list at the top holds, when it is one,
+    /// before it was cut to [`EXPLORE_ROWS`].
+    pub rows: Option<usize>,
+}
+
+/// Open a structured file for explore mode, keeping what `preview_file`
+/// abbreviates. A SQLite database becomes a record of its tables, with each
+/// blob shown as its size. The plugins registered with `plugin add` load, so
+/// formats they read, such as INI with `nu_plugin_formats`, open as data.
+///
+/// # Errors
+///
+/// A short message when the file can't be read as data: Nushell's headline
+/// and reason when `open` fails (a parse error, say), or when the file reads
+/// as raw bytes, or as text because no `from` command reads its extension.
+/// Also when `nu` can't run, takes longer than
+/// [`PREVIEW_TIMEOUT`], or prints something that isn't JSON.
+pub fn explore_file(nu: &Path, path: &Path) -> Result<Opened, String> {
+    // `describe` names a database exactly `SQLiteDatabase`; a looser match
+    // also catches files that only mention SQLite, like a Cargo.toml with a
+    // `sqlite` feature. Errors come back as data from `catch`, so Nushell's
+    // printed report, which quotes the environment the path came from, never
+    // reaches the window.
+    const SCRIPT: &str = r#"
+let path = $env.FFF_PREVIEW_PATH
+let cap = $env.FFF_EXPLORE_ROWS | into int
+try {
+    let data = match $env.FFF_PREVIEW_EXT {
+        'jsonl' => (open --raw $path | from json --objects)
+        _ => (open $path)
+    }
+    let type = $data | describe
+    let opened = if $type == 'SQLiteDatabase' {
+        let tables = $data | columns | each {|table|
+            let name = $table | str replace --all '"' '""'
+            let cells = $data
+                | query db 'SELECT name FROM pragma_table_info(?)' --params [$table]
+                | get name
+                | each {|column|
+                    let column = $column | str replace --all '"' '""'
+                    $"CASE WHEN typeof\(\"($column)\") = 'blob' THEN '[binary ' || length\(\"($column)\") || ' bytes]' ELSE \"($column)\" END AS \"($column)\""
+                }
+                | str join ', '
+            {$table: ($data | query db $"SELECT ($cells) FROM \"($name)\" LIMIT ($cap)")}
+        }
+        {rows: null, data: ($tables | into record)}
+    } else if $type == 'binary' {
+        {error: {msg: 'Nushell reads this file as raw bytes, not as data.'}}
+    } else if $type == 'string' and (scope commands | where name == $"from ($env.FFF_PREVIEW_EXT)" | is-empty) {
+        {error: {msg: $"Nushell has no `from ($env.FFF_PREVIEW_EXT)` command, so it reads this file as plain text. A plugin can add one: `from ini` comes with nu_plugin_formats, for example."}}
+    } else if ($type | str starts-with 'table') or ($type | str starts-with 'list') {
+        {rows: ($data | length), data: ($data | first $cap)}
+    } else {
+        {rows: null, data: $data}
+    }
+    $opened | to json --raw
+} catch {|err|
+    {error: ($err.details? | default {msg: $err.msg})} | to json --raw
+}
+"#;
+    let cwd = path.parent().unwrap_or(Path::new("."));
+    let cap = EXPLORE_ROWS.to_string();
+    let ext = lowercase_extension(path);
+    let env = [
+        ("FFF_PREVIEW_PATH", path.as_os_str()),
+        ("FFF_PREVIEW_EXT", std::ffi::OsStr::new(&ext)),
+        ("FFF_EXPLORE_ROWS", std::ffi::OsStr::new(&cap)),
+    ];
+    let stdout = exec(
+        nu,
+        Job {
+            env: &env,
+            timeout: Some(PREVIEW_TIMEOUT),
+            plugins: true,
+            ..Job::new(SCRIPT, cwd)
+        },
+    )?;
+    let mut opened: Json = serde_json::from_str(&stdout).map_err(|err| err.to_string())?;
+    if let Some(error) = opened.get("error") {
+        return Err(error_text(error));
+    }
+    Ok(Opened {
+        rows: opened
+            .get("rows")
+            .and_then(Json::as_u64)
+            .and_then(|rows| usize::try_from(rows).ok()),
+        data: opened.get_mut("data").map(Json::take).unwrap_or_default(),
+    })
+}
+
+/// Nushell's error record, as `catch` hands it over, cut down to its headline
+/// and the most specific reason under it, such as the parser's line and
+/// column. The source snippets Nushell prints around errors are left out.
+fn error_text(error: &Json) -> String {
+    let headline = error
+        .get("msg")
+        .and_then(Json::as_str)
+        .unwrap_or("Nushell couldn't open the file.");
+    // `inner` holds the errors this one wraps, so the deepest is the parser's
+    // own. Top-level help only says to try `open --raw`, so it is skipped.
+    let reason = std::iter::successors(Some(error), |level| level.get("inner")?.get(0))
+        .enumerate()
+        .filter_map(|(depth, level)| {
+            let help = level
+                .get("help")
+                .and_then(Json::as_str)
+                .filter(|_| depth > 0);
+            help.or_else(|| level.get("labels")?.get(0)?.get("text")?.as_str())
+        })
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .last();
+    match reason {
+        Some(reason) if !reason.eq_ignore_ascii_case(headline) => format!("{headline}\n{reason}"),
+        _ => headline.to_string(),
+    }
+}
+
+/// The extension of `path` in lowercase, or `""` when it has none.
+fn lowercase_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// File types `open` turns into structured data.
 pub fn is_structured(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
     matches!(
-        ext.as_str(),
+        lowercase_extension(path).as_str(),
         "csv"
             | "tsv"
             | "json"
@@ -387,37 +571,10 @@ pub fn is_structured(path: &Path) -> bool {
     )
 }
 
-fn run_script(
-    nu: &Path,
-    script: &str,
-    stdin: Option<String>,
-    cwd: &Path,
-    env: &[(&str, &std::ffi::OsStr)],
-    timeout: Option<Duration>,
-) -> NuRun {
+fn run_script(nu: &Path, job: Job) -> NuRun {
     let started = Instant::now();
-    let mut cmd = Command::new(nu);
-    cmd.arg("--no-config-file");
-    if stdin.is_some() {
-        cmd.arg("--stdin");
-    }
-    cmd.arg("-c")
-        .arg(script)
-        .current_dir(cwd)
-        .env("NO_COLOR", "1")
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
-    let result = cmd
-        .spawn()
-        .and_then(|child| wait_for(child, stdin, timeout));
+    let timeout = job.timeout;
+    let result = job.run(nu);
     let elapsed = started.elapsed();
     match result {
         Err(err) => NuRun {
@@ -427,10 +584,7 @@ fn run_script(
         },
         Ok(None) => NuRun {
             output: NuOutput::Empty,
-            error: Some(format!(
-                "nu took longer than {} s and was stopped",
-                timeout.unwrap_or_default().as_secs()
-            )),
+            error: Some(timed_out(timeout)),
             elapsed,
         },
         Ok(Some(out)) => {
@@ -531,8 +685,7 @@ pub fn parse_output(stdout: &str) -> NuOutput {
                 return NuOutput::Empty;
             }
             let mut columns: Vec<String> = Vec::new();
-            let all_records = items.iter().all(Json::is_object);
-            if all_records {
+            if is_table(&items) {
                 for item in &items {
                     if let Json::Object(map) = item {
                         for key in map.keys() {
@@ -568,18 +721,27 @@ pub fn parse_output(stdout: &str) -> NuOutput {
 }
 
 /// One table cell, abbreviated like Nushell does for nested data.
-fn cell(value: &Json) -> String {
+pub fn cell(value: &Json) -> String {
     match value {
         Json::Null => String::new(),
         Json::Bool(b) => b.to_string(),
         Json::Number(n) => n.to_string(),
         Json::String(s) => s.clone(),
+        Json::Array(items) if is_table(items) => {
+            format!("[table {} row{}]", items.len(), plural(items.len()))
+        }
         Json::Array(items) => format!("[list {} item{}]", items.len(), plural(items.len())),
         Json::Object(map) => format!("{{record {} field{}}}", map.len(), plural(map.len())),
     }
 }
 
-fn plural(n: usize) -> &'static str {
+/// Whether a list is what Nushell calls a table: records, at least one.
+pub fn is_table(items: &[Json]) -> bool {
+    !items.is_empty() && items.iter().all(Json::is_object)
+}
+
+/// The `s` that makes a noun plural for `n` of them.
+pub fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
@@ -782,5 +944,179 @@ mod tests {
         let run = run_pipeline(&nu, "this-command-does-not-exist", &entries, &dir);
         assert!(run.error.is_some());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Runs only where `nu` is installed.
+    #[test]
+    fn explores_nested_data_with_real_nu() {
+        let Some(nu) = find_nu(None) else { return };
+        let dir = std::env::temp_dir().join(format!("fff-nu-explore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let toml = dir.join("Cargo.toml");
+        std::fs::write(
+            &toml,
+            "[package]\nname = \"fff\"\nedition = \"2024\"\n\n[[bin]]\nname = \"a\"\n",
+        )
+        .unwrap();
+        let opened = explore_file(&nu, &toml).unwrap();
+        assert_eq!(opened.rows, None, "a record isn't cut short");
+        assert_eq!(
+            opened.data,
+            serde_json::json!({"package": {"name": "fff", "edition": "2024"}, "bin": [{"name": "a"}]})
+        );
+        let keys: Vec<&String> = opened.data["package"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["name", "edition"], "fields keep the file's order");
+
+        let csv = dir.join("people.csv");
+        std::fs::write(&csv, "name,age\nana,31\nbo,42\n").unwrap();
+        let opened = explore_file(&nu, &csv).unwrap();
+        assert_eq!(opened.rows, Some(2));
+        assert_eq!(opened.data[1]["age"], 42);
+
+        let db = dir.join("shop.db");
+        let made = Command::new(&nu)
+            .args(["--no-config-file", "-c"])
+            .arg("[[item qty]; [pen 3]] | into sqlite $env.DB --table-name stock")
+            .env("DB", &db)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let opened = explore_file(&nu, &db).unwrap();
+        assert_eq!(
+            opened.data,
+            serde_json::json!({"stock": [{"item": "pen", "qty": 3}]}),
+            "a database is a record of its tables"
+        );
+
+        let blobs = dir.join("blobs.sqlite");
+        let made = Command::new(&nu)
+            .args(["--no-config-file", "-c"])
+            .arg("[[name data]; [a 0x[00ff]]] | into sqlite $env.DB --table-name files")
+            .env("DB", &blobs)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert_eq!(
+            explore_file(&nu, &blobs).unwrap().data,
+            serde_json::json!({"files": [{"name": "a", "data": "[binary 2 bytes]"}]}),
+            "a blob shows its size, not its bytes"
+        );
+
+        // Nushell's own Cargo.toml has a `sqlite` feature, which once made
+        // this record look like a database.
+        let features = dir.join("features.toml");
+        std::fs::write(&features, "[features]\nsqlite = [\"nu-command/sqlite\"]\n").unwrap();
+        assert_eq!(
+            explore_file(&nu, &features).unwrap().data,
+            serde_json::json!({"features": {"sqlite": ["nu-command/sqlite"]}})
+        );
+
+        let lines = dir.join("events.jsonl");
+        std::fs::write(&lines, "{\"a\":1}\n{\"a\":2}\n").unwrap();
+        let opened = explore_file(&nu, &lines).unwrap();
+        assert_eq!(opened.rows, Some(2), "each line is a row");
+        assert_eq!(opened.data[1]["a"], 2);
+
+        let broken = dir.join("broken.toml");
+        std::fs::write(&broken, "a = [\n").unwrap();
+        let err = explore_file(&nu, &broken).unwrap_err();
+        assert!(err.to_lowercase().contains("toml"), "{err}");
+        assert!(err.contains("line 1"), "the parser's position: {err}");
+        assert!(
+            !err.contains("Environment") && !err.contains("FFF_"),
+            "no environment in the message: {err}"
+        );
+
+        let junk = dir.join("junk.db");
+        std::fs::write(&junk, [0u8, 0xff, 0x10, 0x80]).unwrap();
+        assert_eq!(
+            explore_file(&nu, &junk).unwrap_err(),
+            "Nushell reads this file as raw bytes, not as data."
+        );
+
+        // `open` only gets text back when no `from` command reads the type.
+        let text = dir.join("notes.db");
+        std::fs::write(&text, "not a database\n").unwrap();
+        let err = explore_file(&nu, &text).unwrap_err();
+        assert!(err.contains("no `from db` command"), "{err}");
+
+        let err = explore_file(&nu, &dir.join("missing.json")).unwrap_err();
+        assert!(!err.contains("Environment"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plugins_load_only_when_asked() {
+        let cwd = Path::new(".");
+        let args = |job: Job| -> Vec<String> {
+            let cmd = job.command(Path::new("nu"));
+            cmd.get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            args(Job::new("ls", cwd)),
+            ["--no-config-file", "-c", "ls"],
+            "a plain run loads nothing of the user's"
+        );
+        assert_eq!(
+            args(Job {
+                plugins: true,
+                stdin: Some("[]".into()),
+                ..Job::new("ls", cwd)
+            }),
+            ["--stdin", "-c", "ls"],
+            "`nu -c` reads the plugin registry, and still no config files"
+        );
+    }
+
+    #[test]
+    fn error_text_keeps_the_headline_and_deepest_reason() {
+        let toml = serde_json::json!({
+            "msg": "Error while parsing as toml",
+            "labels": [{"text": "Could not parse 'a.toml' with `from toml`"}],
+            "help": "Check out `help from toml`",
+            "inner": [{
+                "msg": "Can't convert to structured toml data.",
+                "labels": [{"text": "can't convert string to structured toml data"}],
+                "help": "TOML parse error at line 1, column 6\nunclosed array\n",
+                "inner": []
+            }]
+        });
+        assert_eq!(
+            error_text(&toml),
+            "Error while parsing as toml\nTOML parse error at line 1, column 6\nunclosed array"
+        );
+
+        let json = serde_json::json!({
+            "msg": "Error while parsing as json",
+            "inner": [{
+                "msg": "Error while parsing JSON text",
+                "labels": [{"text": "error parsing JSON text"}],
+                "help": null,
+                "inner": [{"labels": [{"text": "EOF at line 1 column 10"}], "inner": []}]
+            }]
+        });
+        assert_eq!(
+            error_text(&json),
+            "Error while parsing as json\nEOF at line 1 column 10"
+        );
+
+        let denied = serde_json::json!({
+            "msg": "I/O error",
+            "labels": [{"text": "Permission denied"}],
+            "help": "The error occurred at '/secret/path'",
+            "inner": []
+        });
+        assert_eq!(error_text(&denied), "I/O error\nPermission denied");
+
+        let missing =
+            serde_json::json!({"msg": "File not found", "labels": [{"text": "file not found"}]});
+        assert_eq!(error_text(&missing), "File not found", "no repeated reason");
+        assert_eq!(
+            error_text(&serde_json::json!({})),
+            "Nushell couldn't open the file."
+        );
     }
 }

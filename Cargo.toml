@@ -13,7 +13,8 @@ fffinder-core = { path = "crates/fffinder-core" }
 fff-search = "0.11.0"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Records keep their keys in file order, as Nushell prints them.
+serde_json = { version = "1", features = ["preserve_order"] }
 dirs = "7"
 log = "0.4"
 thiserror = "2"
@@ -79,7 +80,10 @@ thiserror.workspace = true
 # Hands control-socket requests to the UI thread.
 async-channel = "2"
 # Code previews: grammars and themes for syntax highlighting, in pure Rust.
-syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+syntect = { version = "5", default-features = false, features = ["parsing", "default-themes", "regex-fancy"] }
+# bat's grammars for syntect, a superset of syntect's own that adds TOML, INI,
+# CSV and TSV, among others (about 600 KB more than syntect's set).
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 # Font previews: the family name inside a font file.
 ttf-parser = "0.25"
 # Colors file names the way Nushell's `ls` does.

@@ -30,6 +30,9 @@ actions!(
         ConnectToServer,
         OpenSelected,
         QuickLook,
+        QuickLookExplore,
+        ExploreInto,
+        ExploreBack,
         GetInfo,
         ToggleSidebar,
         SidebarAsList,
@@ -105,7 +108,7 @@ pub const FILES_ONE_PANE: &str = "FinderFiles OnePane";
 /// The file views while a name is being edited in them.
 pub const FILES_RENAMING: &str = "FinderFilesRenaming";
 /// Key context of the Quick Look preview, so Space closes it and the arrows
-/// move through the items.
+/// move through the items, or through explore mode's grid.
 pub const QUICK_LOOK: &str = "QuickLook";
 /// Key context of the sidebar's folder tree, once a row is clicked: the
 /// arrows move through it and the file keys act on its folder.
@@ -183,9 +186,12 @@ pub fn bind_keys(cx: &mut App) {
         key("secondary-o", OpenSelected, &files, cx),
         key("space", QuickLook, &files, cx),
         key("secondary-y", QuickLook, &files, cx),
+        key("secondary-space", QuickLookExplore, &files, cx),
         key("space", QuickLook, &quick_look, cx),
         key("secondary-y", QuickLook, &quick_look, cx),
-        key("escape", QuickLook, &quick_look, cx),
+        key("secondary-space", QuickLookExplore, &quick_look, cx),
+        key("escape", ExploreBack, &quick_look, cx),
+        key("enter", ExploreInto, &quick_look, cx),
         key("up", MoveUp, &quick_look, cx),
         key("down", MoveDown, &quick_look, cx),
         key("left", MoveLeft, &quick_look, cx),
@@ -334,6 +340,7 @@ pub fn set_menus(cx: &mut App) {
         MenuItem::action("Open", OpenSelected),
         MenuItem::action("Open in Editor", OpenInEditor),
         MenuItem::action("Quick Look", QuickLook),
+        MenuItem::action("Explore Data", QuickLookExplore),
         MenuItem::action("Get Info", GetInfo),
         MenuItem::action("Rename…", Rename),
         MenuItem::action("Duplicate", Duplicate),

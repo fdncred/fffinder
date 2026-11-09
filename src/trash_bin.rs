@@ -234,9 +234,9 @@ mod imp {
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
-    struct Entry {
-        path: PathBuf,
-        original: PathBuf,
+    pub(super) struct Entry {
+        pub(super) path: PathBuf,
+        pub(super) original: PathBuf,
     }
 
     fn journal_path() -> PathBuf {
@@ -244,26 +244,51 @@ mod imp {
     }
 
     fn load() -> Vec<Entry> {
-        std::fs::read(journal_path())
+        load_from(&journal_path())
+    }
+
+    pub(super) fn load_from(path: &Path) -> Vec<Entry> {
+        std::fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
     }
 
-    fn save(entries: &[Entry]) {
-        let path = journal_path();
+    /// Write the journal whole: to a file beside it, then renamed over it,
+    /// so a crash mid-write leaves the old one rather than half of a new one.
+    fn save_to(path: &Path, entries: &[Entry]) {
         let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
-        if let Ok(json) = serde_json::to_vec(entries) {
-            let _ = std::fs::write(path, json);
+        let Ok(json) = serde_json::to_vec(entries) else {
+            return;
+        };
+        let temp = path.with_extension(format!("json.{}", std::process::id()));
+        if std::fs::write(&temp, json).is_ok() && std::fs::rename(&temp, path).is_err() {
+            let _ = std::fs::remove_file(&temp);
         }
     }
 
-    /// Change the journal, dropping items no longer in the Trash.
+    /// Change the journal, dropping items no longer in the Trash. Jobs run
+    /// at once (trashing, Put Back, Undo), so one change at a time: each
+    /// reads what the last one wrote.
     fn update(edit: impl FnOnce(&mut Vec<Entry>)) {
-        let mut entries = load();
+        update_at(&journal_path(), edit);
+    }
+
+    pub(super) fn update_at(path: &Path, edit: impl FnOnce(&mut Vec<Entry>)) {
+        static JOURNAL: Mutex<()> = Mutex::new(());
+        let _one_at_a_time = JOURNAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = load_from(path);
         edit(&mut entries);
-        entries.retain(|e| e.path.symlink_metadata().is_ok());
-        save(&entries);
+        // Only what's surely gone is dropped: without Full Disk Access the
+        // Trash can't be read, and those entries are still needed.
+        entries.retain(|e| {
+            e.path
+                .symlink_metadata()
+                .map_or_else(|err| err.kind() != std::io::ErrorKind::NotFound, |_| true)
+        });
+        save_to(path, &entries);
     }
 
     fn trash_dir() -> Result<PathBuf, TrashError> {
@@ -457,6 +482,37 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_journal_keeps_every_change_made_at_once() {
+        let base = std::env::temp_dir().join(format!("fffinder-journal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let journal = base.join("trash.json");
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let (base, journal) = (&base, &journal);
+                scope.spawn(move || {
+                    let item = base.join(format!("item {i}"));
+                    std::fs::write(&item, "x").unwrap();
+                    imp::update_at(journal, |entries| {
+                        entries.push(imp::Entry {
+                            path: item.clone(),
+                            original: item,
+                        })
+                    });
+                });
+            }
+        });
+        assert_eq!(imp::load_from(&journal).len(), 8, "no change was lost");
+        let leftovers = std::fs::read_dir(&base)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().starts_with("trash.json."));
+        assert!(!leftovers, "no half-written journal is left");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn folder_bin_trashes_restores_and_deletes() {
