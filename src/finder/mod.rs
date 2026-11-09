@@ -391,6 +391,9 @@ pub struct Finder {
     /// The sidebar has the keyboard, with the tree on.
     tree_focus: FocusHandle,
     sidebar_scroll: gpui_kit::component::VirtualListScrollHandle,
+    /// Where the sidebar's tree is scrolled sideways, when it's wider than
+    /// the sidebar.
+    sidebar_sideways: ScrollHandle,
     /// The sidebar's lines, kept between frames.
     sidebar_layout: Option<sidebar::SidebarLayout>,
     /// Rereads the locations; a newer reread replaces it.
@@ -614,6 +617,7 @@ impl Finder {
             tree: folder_tree::FolderTree::default(),
             tree_focus: cx.focus_handle(),
             sidebar_scroll: gpui_kit::component::VirtualListScrollHandle::new(),
+            sidebar_sideways: ScrollHandle::new(),
             sidebar_layout: None,
             locations_task: Task::ready(()),
             index_status: Vec::new(),

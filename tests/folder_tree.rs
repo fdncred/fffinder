@@ -551,3 +551,43 @@ fn indexing_waits_for_full_disk_access(cx: &mut TestAppContext) {
     assert!(!held(&mut ui));
     assert_eq!(roots(&mut ui).len(), 1);
 }
+
+#[gpui_kit::test]
+fn a_deep_tree_scrolls_sideways_and_down(cx: &mut TestAppContext) {
+    let fx = Fixture::new("tree-sideways");
+    let deep = "Projects/a folder with a rather long name/and another one inside it/\
+                and a third level down/with a fourth one under that";
+    std::fs::create_dir_all(fx.path(deep)).unwrap();
+    let (mut ui, home) = tree_window(cx, &fx);
+    ui.go_to(&fx.path(deep));
+    let row = home.under(fx.path(deep));
+    assert!(ui.exists(row.row_id()), "the tree opens down to the folder");
+    assert!(ui.exists("sidebar-sideways"), "and is too wide to fit");
+    let before = ui.snapshot(row.row_id()).bounds().origin.x;
+    ui.scroll("sidebar-sideways", point(px(-200.), px(0.)));
+    let after = ui.snapshot(row.row_id()).bounds().origin.x;
+    assert!(
+        after < before,
+        "a sideways swipe moves the rows: {before:?} -> {after:?}"
+    );
+
+    // Up and down still scroll the rows, now inside the sideways scroller.
+    for n in 0..40 {
+        std::fs::create_dir(fx.path(&format!("Folder {n:02}"))).unwrap();
+    }
+    ui.go_to(&fx.dir);
+    ui.press(&cmd("r"));
+    let last = home.under(fx.path("Folder 39"));
+    assert!(
+        !ui.exists(last.row_id()),
+        "the last folder is below the window"
+    );
+    for _ in 0..20 {
+        ui.scroll("sidebar-sideways", point(px(0.), px(-400.)));
+    }
+    assert!(ui.exists(last.row_id()), "scrolling down shows it");
+
+    // The list of places cuts long names short instead, as Finder's does.
+    ui.update(|f, _, cx| f.set_sidebar_mode(SidebarMode::List, cx));
+    assert!(!ui.exists("sidebar-sideways"));
+}

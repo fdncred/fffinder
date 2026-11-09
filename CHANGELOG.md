@@ -4,10 +4,11 @@ This file lists every notable change to fffinder. The format follows [Keep a Cha
 
 ## [0.5.1] - 2026-11-09
 
-This release keeps every folder on screen up to date with files other programs add, remove, or rename, including folders opened in place in the list and the column view's panes.
+This release keeps every folder on screen up to date with files other programs add, remove, or rename, including folders opened in place in the list and the column view's panes. The sidebar's tree also scrolls sideways when it's wider than the sidebar.
 
 ### Fixed
 
+- When deep folders or long names made the sidebar's tree wider than the sidebar, names ran off its edge and could only be read in a tooltip. The tree now scrolls sideways, as Explorer's navigation pane does.
 - Folders opened in place in the list view, and the column view's panes after the first, now show files that other programs add, remove, or rename. Only the folder the window showed was checked before, so a build script's output could stay out of sight until a refresh.
 - A file created while fffinder read a folder could stay out of sight until something else in the folder changed. fffinder now notes the folder's change time before reading it, not after, so the next check catches the file.
 - Checking folders for changes no longer runs on the window's thread, where a stalled network volume could freeze the window every two seconds.
