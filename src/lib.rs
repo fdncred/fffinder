@@ -68,9 +68,23 @@ pub fn run(args: args::Args) {
     } else {
         gpui_kit::application()
     };
-    // Indexing starts right away, in the background.
+    // Without Full Disk Access, indexing makes macOS ask about Desktop,
+    // Documents, Downloads, and the other protected folders one after
+    // another, so it's checked first: the reads it tries never make macOS
+    // ask. A file picker or a window in a terminal is there for a moment,
+    // and in a terminal it's the terminal that macOS grants access to.
+    let checks_access = cfg!(target_os = "macos") && picker.is_none() && !args.term;
+    let access = match checks_access {
+        true => disk_access::check(),
+        false => disk_access::Access::Unknown,
+    };
+    let hold_index = disk_access::holds_index(access, config.ask_for_full_disk_access);
+    // Otherwise indexing starts right away, in the background.
     let engine = Engine::new(EngineOptions {
-        roots: config.search_roots.clone(),
+        roots: match hold_index {
+            true => Vec::new(),
+            false => config.search_roots.clone(),
+        },
         app_dirs: config.app_dirs(),
         db_dir: Some(config::data_dir().join("gui")),
         watch: true,
@@ -127,36 +141,27 @@ pub fn run(args: args::Args) {
             let config = settings::current(cx);
             open_window(start_location(None, &config), None, None, cx);
         });
+        if checks_access {
+            cx.set_global(disk_access::Checked(access));
+            cx.set_global(disk_access::IndexHeld(hold_index));
+        }
         open_window(start, args.query.clone(), picker, cx);
         cx.activate(true);
-        // A file picker or a window in a terminal is there for a moment, and
-        // in a terminal it's the terminal that macOS grants access to.
-        if cfg!(target_os = "macos") && picker.is_none() && !args.term {
-            check_disk_access(cx);
+        if hold_index {
+            ask_for_disk_access(cx);
         }
     });
 }
 
-/// Look for Full Disk Access once the first window is up, and when it's
-/// missing, ask for it in the window in front, unless asking is turned off.
-fn check_disk_access(cx: &mut App) {
-    cx.spawn(async move |cx| {
-        let access = cx.background_spawn(async { disk_access::check() }).await;
-        cx.update(|cx| {
-            cx.set_global(disk_access::Checked(access));
-            if access != disk_access::Access::Denied
-                || !settings::current(cx).ask_for_full_disk_access
-            {
-                return;
-            }
-            if let Some((handle, view)) = frontmost(cx) {
-                let _ = handle.update(cx, |_, window, cx| {
-                    view.update(cx, |f, cx| f.ask_for_full_disk_access(window, cx))
-                });
-            }
+/// Ask for Full Disk Access in the window in front, which indexing waits
+/// for. System Settings opens only from the dialog's button, so nothing
+/// takes the focus from fffinder before the dialog is read.
+fn ask_for_disk_access(cx: &mut App) {
+    if let Some((handle, view)) = frontmost(cx) {
+        let _ = handle.update(cx, |_, window, cx| {
+            view.update(cx, |f, cx| f.ask_for_full_disk_access(window, cx))
         });
-    })
-    .detach();
+    }
 }
 
 /// Browser windows, oldest first, for requests that need "the window".

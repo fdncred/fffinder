@@ -1467,6 +1467,15 @@ impl Finder {
     pub fn set_search_roots(&mut self, roots: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.config.search_roots = roots;
         self.settings_changed(cx);
+        // While indexing waits for Full Disk Access, the new folders wait too.
+        if !crate::disk_access::index_held(cx) {
+            self.index_search_roots(cx);
+        }
+        cx.notify();
+    }
+
+    /// Index the folders in the search settings, off the UI thread.
+    pub(super) fn index_search_roots(&mut self, cx: &mut Context<Self>) {
         let engine = self.engine.clone();
         let roots = self.config.search_roots.clone();
         self.roots_task = cx.spawn(async move |this, cx| {
@@ -1474,7 +1483,6 @@ impl Finder {
                 .await;
             this.update(cx, |this, cx| this.poll_index_status(cx)).ok();
         });
-        cx.notify();
     }
 
     /// Find apps by name from the app folders in "This Computer" searches,

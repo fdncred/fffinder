@@ -4,7 +4,7 @@
 //! cargo run --example screenshot -- out.png [--dir PATH] [--view icons|list|columns|gallery]
 //!     [--light|--dark] [--query TEXT] [--scope-folder] [--select N] [--quicklook] [--explore]
 //!     [--nu PIPELINE] [--size 1100x700] [--no-sidebar] [--settings] [--info]
-//!     [--tabs N] [--split]
+//!     [--tabs N] [--split] [--disk-access]
 //! ```
 
 use fffinder::finder::AppState;
@@ -33,6 +33,8 @@ struct Options {
     explore: bool,
     settings: bool,
     info: bool,
+    /// Indexing waiting for Full Disk Access, with the dialog that asks.
+    disk_access: bool,
     tabs: usize,
     split: bool,
     scope_folder: bool,
@@ -55,6 +57,7 @@ fn parse() -> Options {
         explore: false,
         settings: false,
         info: false,
+        disk_access: false,
         tabs: 1,
         split: false,
         scope_folder: false,
@@ -83,6 +86,7 @@ fn parse() -> Options {
             "--explore" => (o.quick_look, o.explore) = (true, true),
             "--settings" => o.settings = true,
             "--info" => o.info = true,
+            "--disk-access" => o.disk_access = true,
             "--tabs" => o.tabs = args.next().and_then(|n| n.parse().ok()).unwrap_or(1),
             "--split" => o.split = true,
             "--scope-folder" => o.scope_folder = true,
@@ -234,6 +238,14 @@ fn main() {
         })
         .ok();
         settle(&mut cx);
+        settle(&mut cx);
+    }
+    if o.disk_access {
+        cx.update(|cx| cx.set_global(fffinder::disk_access::IndexHeld(true)));
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |finder, cx| finder.ask_for_full_disk_access(window, cx));
+        })
+        .ok();
         settle(&mut cx);
     }
     if let Some(pipeline) = o.nu {

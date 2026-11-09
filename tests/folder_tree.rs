@@ -494,14 +494,14 @@ fn missing_full_disk_access_opens_system_settings(cx: &mut TestAppContext) {
     ui.update(|f, window, cx| f.ask_for_full_disk_access(window, cx));
     ui.settle();
     assert!(ui.dialog_open());
-    assert_eq!(ui.system_calls(), std::slice::from_ref(&opened));
+    assert!(
+        ui.system_calls().is_empty(),
+        "System Settings doesn't come up in front of the dialog by itself"
+    );
 
     ui.click("disk-access-open");
-    assert_eq!(ui.system_calls(), [opened.clone(), opened]);
-    assert!(
-        ui.dialog_open(),
-        "opening Settings again leaves the dialog up"
-    );
+    assert_eq!(ui.system_calls(), std::slice::from_ref(&opened));
+    assert!(ui.dialog_open(), "opening Settings leaves the dialog up");
     // The click that brings the window back from System Settings lands
     // outside the dialog, and mustn't close it.
     ui.click_point(point(px(10.), px(300.)));
@@ -510,4 +510,44 @@ fn missing_full_disk_access_opens_system_settings(cx: &mut TestAppContext) {
     ui.click("disk-access-never");
     assert!(!ui.dialog_open());
     assert!(!ui.read(|f| f.config().ask_for_full_disk_access));
+}
+
+#[gpui_kit::test]
+fn indexing_waits_for_full_disk_access(cx: &mut TestAppContext) {
+    let fx = Fixture::new("disk-access-held");
+    let mut ui = Ui::open(cx, &fx.dir);
+    let roots = |ui: &mut Ui| {
+        ui.cx
+            .read(|cx| cx.global::<fffinder::finder::AppState>().engine.roots())
+    };
+    let held = |ui: &mut Ui| ui.cx.read(fffinder::disk_access::index_held);
+    // As startup leaves things when access is off and asking is on.
+    ui.cx.update(|cx| {
+        cx.global::<fffinder::finder::AppState>()
+            .engine
+            .set_roots(&[]);
+        cx.set_global(fffinder::disk_access::IndexHeld(true));
+    });
+    ui.update(|f, _, cx| f.set_search_roots(vec![fx.dir.clone()], cx));
+    assert!(roots(&mut ui).is_empty(), "new folders to index wait too");
+    assert!(ui.exists("index-status"));
+
+    ui.click("index-status");
+    assert!(ui.dialog_open(), "the sidebar says why, and asks again");
+    assert!(ui.system_calls().is_empty());
+    ui.click("disk-access-index");
+    assert!(!ui.dialog_open());
+    assert!(!held(&mut ui));
+    assert_eq!(roots(&mut ui).len(), 1, "indexing starts");
+
+    // Turning asking off starts it as well.
+    ui.cx.update(|cx| {
+        cx.global::<fffinder::finder::AppState>()
+            .engine
+            .set_roots(&[]);
+        cx.set_global(fffinder::disk_access::IndexHeld(true));
+    });
+    ui.update(|f, _, cx| f.set_ask_for_full_disk_access(false, cx));
+    assert!(!held(&mut ui));
+    assert_eq!(roots(&mut ui).len(), 1);
 }

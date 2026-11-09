@@ -883,7 +883,16 @@ impl Finder {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let spinner = || Spinner::new().xsmall().color(muted).into_any_element();
+        let held = crate::disk_access::index_held(cx);
         let (icon, text) = match self.index_activity() {
+            // Nothing is indexed yet, and the click below says why.
+            _ if held => (
+                Icon::new(Lucide::Lock)
+                    .with_size(ui(14.))
+                    .text_color(muted)
+                    .into_any_element(),
+                "Indexing paused".to_string(),
+            ),
             Some(IndexActivity::Scanning(n)) => {
                 (spinner(), format!("Indexing… {}", group_digits(n)))
             }
@@ -907,7 +916,28 @@ impl Finder {
             .text_size(ui(11.))
             .text_color(muted)
             .child(icon)
-            .child(div().flex_1().truncate().child(text))
+            .child(
+                div()
+                    .id("index-status")
+                    .flex_1()
+                    .truncate()
+                    .child(text)
+                    .when(held, |this| {
+                        this.cursor_pointer()
+                            .hover(|s| s.text_color(theme.foreground))
+                            .tooltip(|window, cx| {
+                                Tooltip::new(
+                                    "Indexing waits for Full Disk Access. Click to turn it on, \
+                                     or to index without it.",
+                                )
+                                .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.ask_for_full_disk_access(window, cx)
+                            }))
+                    })
+                    .test_support(),
+            )
             .child(
                 div()
                     .id("index-settings")

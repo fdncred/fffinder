@@ -87,11 +87,15 @@ macOS asks before an app reads Desktop, Documents, or Downloads. To index those 
 
 ### Full Disk Access on macOS
 
-Without Full Disk Access, macOS keeps fffinder out of the Trash, Mail, Safari, and other apps' data, so those folders look empty and searches miss what's in them. When fffinder starts, it tries to read two of those places, `~/.Trash` and the system's privacy database. If macOS refuses, fffinder opens System Settings at Privacy & Security > Full Disk Access and shows a dialog saying what to turn on there. The check never makes macOS ask for anything.
+Without Full Disk Access, macOS keeps fffinder out of the Trash, Mail, Safari, and other apps' data, so those folders look empty and searches miss what's in them. Indexing your home folder without it also makes macOS ask about Desktop, Documents, Downloads, and other folders, one dialog after another, each taking the focus from fffinder.
+
+So before it indexes anything, fffinder tries to read two protected places, `~/.Trash` and the system's privacy database; the check never makes macOS ask for anything. If macOS refuses, indexing waits, and a dialog says what to turn on in System Settings at Privacy & Security > Full Disk Access. Nothing else opens until you choose. While indexing waits, the sidebar's footer says "Indexing paused"; click it to see the dialog again.
 
 macOS gives the permission to the app that started fffinder. Opened as `fffinder.app`, that's fffinder, so turn on fffinder, adding it with the + button if it isn't in the list. Started from a terminal, that's the terminal, and the dialog says to turn on the terminal instead. Either way, quit and reopen what you turned on, since macOS applies the change only to apps that start after it.
 
-The dialog stays up until you press one of its three buttons, its X, or Escape, so the click that brings fffinder back in front of System Settings can't close it. **OK** closes it. **Open System Settings** opens the pane again. **Don't Ask Again** turns the check off, which [Settings > Privacy](#privacy) can turn back on. `--pick` and `--term` windows skip the check, and Linux and Windows have no such permission.
+After you turn it on, System Settings offers to quit and reopen fffinder; the new fffinder has access and indexes everything without a single prompt.
+
+The dialog stays up until you press one of its buttons, its X, or Escape, so the click that brings fffinder back in front of System Settings can't close it. **Open System Settings** opens the pane. **Index Without It** starts indexing now, and macOS asks about each protected folder as fffinder reaches it. **Don't Ask Again** turns the check off and starts indexing, as does turning off the check in [Settings > Privacy](#privacy). Closing the dialog leaves indexing waiting. Once the check is off, fffinder indexes at startup whether or not it has access. `--pick` and `--term` windows skip the check, and Linux and Windows have no such permission.
 
 On Linux the index watches folders with inotify, one watch per folder, and a big home folder can exceed the default limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
 
@@ -1061,7 +1065,7 @@ Every tab and window shows a change to a setting at once, with these exceptions,
 | `show_sidebar` | `true` | Show the sidebar. |
 | `sidebar_mode` | `"tree"` on Windows, `"list"` elsewhere | `list`: one row for each place. `tree`: Favorites and Locations open in place to show their folders. See [Folder tree](#folder-tree). |
 | `expand_to_open_folder` | `true` | The folder tree opens down to the folder the window shows. |
-| `ask_for_full_disk_access` | `true` | On macOS, open System Settings at Full Disk Access when fffinder starts without it. |
+| `ask_for_full_disk_access` | `true` | On macOS, when fffinder starts without Full Disk Access, wait to index and ask for it first. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |
 | `kind_filter` | `"any"` | The search Kind menu: `any`, `folder`, `document`, `image`, `movie`, `audio`, `code`, `archive`. |
 | `result_limit` | `500` | Maximum results shown for a search. |
