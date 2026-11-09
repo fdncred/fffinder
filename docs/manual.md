@@ -87,11 +87,15 @@ macOS asks before an app reads Desktop, Documents, or Downloads. To index those 
 
 ### Full Disk Access on macOS
 
-Without Full Disk Access, macOS keeps fffinder out of the Trash, Mail, Safari, and other apps' data, so those folders look empty and searches miss what's in them. When fffinder starts, it tries to read two of those places, `~/.Trash` and the system's privacy database. If macOS refuses, fffinder opens System Settings at Privacy & Security > Full Disk Access and shows a dialog saying what to turn on there. The check never makes macOS ask for anything.
+Without Full Disk Access, macOS keeps fffinder out of the Trash, Mail, Safari, and other apps' data, so those folders look empty and searches miss what's in them. Indexing your home folder without it also makes macOS ask about Desktop, Documents, Downloads, and other folders, one dialog after another, each taking the focus from fffinder.
+
+So before it indexes anything, fffinder tries to read two protected places, `~/.Trash` and the system's privacy database; the check never makes macOS ask for anything. If macOS refuses, indexing waits, and a dialog says what to turn on in System Settings at Privacy & Security > Full Disk Access. Nothing else opens until you choose. While indexing waits, the sidebar's footer says "Indexing paused"; click it to see the dialog again.
 
 macOS gives the permission to the app that started fffinder. Opened as `fffinder.app`, that's fffinder, so turn on fffinder, adding it with the + button if it isn't in the list. Started from a terminal, that's the terminal, and the dialog says to turn on the terminal instead. Either way, quit and reopen what you turned on, since macOS applies the change only to apps that start after it.
 
-The dialog stays up until you press one of its three buttons, its X, or Escape, so the click that brings fffinder back in front of System Settings can't close it. **OK** closes it. **Open System Settings** opens the pane again. **Don't Ask Again** turns the check off, which [Settings > Privacy](#privacy) can turn back on. `--pick` and `--term` windows skip the check, and Linux and Windows have no such permission.
+After you turn it on, System Settings offers to quit and reopen fffinder; the new fffinder has access and indexes everything without a single prompt.
+
+The dialog stays up until you press one of its buttons, its X, or Escape, so the click that brings fffinder back in front of System Settings can't close it. **Open System Settings** opens the pane. **Index Without It** starts indexing now, and macOS asks about each protected folder as fffinder reaches it. **Don't Ask Again** turns the check off and starts indexing, as does turning off the check in [Settings > Privacy](#privacy). Closing the dialog leaves indexing waiting. Once the check is off, fffinder indexes at startup whether or not it has access. `--pick` and `--term` windows skip the check, and Linux and Windows have no such permission.
 
 On Linux the index watches folders with inotify, one watch per folder, and a big home folder can exceed the default limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
 
@@ -387,12 +391,13 @@ Previews appear in the gallery, in the column view's last column, and in Quick L
 | Zip, `.tar`, `.tar.gz`, `.tgz` | A table of what's inside: each item's path and size, up to 200 items, with the count below. |
 | TrueType and OpenType fonts (`.ttf`, `.otf`, `.ttc`) | The family name, the alphabet, digits, and a sample line, drawn in the font itself. |
 | Markdown (`.md`, `.markdown`) | Rendered: headings, lists, links, tables, and code blocks. Text can be selected. |
-| CSV, TSV, JSON, JSONL, NUON, TOML, YAML, XML, INI, SQLite, XLSX, ODS, EML, ICS, VCF, MessagePack, plist | Opened with Nushell's `open` and shown as a table of up to 200 rows, with "Opened with Nushell" and the row count below. Files over 50 MB are skipped. |
-| `.nu` scripts | Colored the way `nu-highlight` colors them with your `color_config`. |
-| Code and other text | The first 64 KB, marked "preview truncated" when longer. Code in the languages syntect knows (Rust, Python, JavaScript, C and C++, Go, Java, shell, HTML, CSS, SQL, and dozens more, found by extension, by names like `Makefile`, or by a `#!` line) is colored with a light or dark theme to match the window. Files with lines over 2,000 characters, such as minified JavaScript, stay plain. |
+| CSV, TSV, JSON, JSONL, TOML, YAML, XML, INI, EML, ICS, VCF, XML plists | Their text, like other code: colored where a grammar knows the format, which ICS and VCF have none of. Quick Look can also [explore their data](#exploring-data). |
+| SQLite, XLSX, ODS, MessagePack, binary plists | Opened with Nushell's `open` and shown as a table of up to 200 rows, with "Opened with Nushell" and the row count below. A database shows its tables. Files over 50 MB are skipped. Quick Look can also [explore their data](#exploring-data). |
+| `.nu` scripts and NUON files | Colored the way `nu-highlight` colors them with your `color_config`. |
+| Code and other text | The first 64 KB, marked "preview truncated" when longer. Code in the languages bat's grammars know (Rust, Python, JavaScript, C and C++, Go, Java, shell, HTML, CSS, SQL, TOML, YAML, CSV, INI, and nearly two hundred more, found by extension, by names like `Makefile`, or by a `#!` line) is colored with a light or dark theme to match the window. Files with lines over 2,000 characters, such as minified JavaScript, stay plain. |
 | Anything else | The file's icon. |
 
-Nushell previews give up after 10 seconds and show the icon. They need `nu`; without it, structured files preview as text.
+Nushell previews give up after 10 seconds and show the icon. They need `nu`; without it, databases, spreadsheets, and the other binary formats show their icon, and Quick Look has no explore mode.
 
 ### Thumbnails
 
@@ -412,7 +417,7 @@ Each item shows its icon until its thumbnail is ready. Thumbnails are cached as 
 
 ### Quick Look
 
-Space or Cmd+Y opens Quick Look for the selected item in a window of its own, over the browser, with the item's name as its title. Move it, resize it, maximize it, or make it full screen like any window; the preview fills it, with the item's kind, size, and date, and the Show in Finder and Open buttons, in a bar at the bottom. Space, Cmd+Y, or Escape in Quick Look closes it, and so does Space or Cmd+Y in the browser. Quick Look follows the browser's selection while it's open, and closes with its browser. In `--term` mode, where the terminal shows a single window, Quick Look is a dialog in it instead.
+Space or Cmd+Y opens Quick Look for the selected item in a window of its own, over the browser, with the item's name as its title. Cmd+Space opens it in [explore mode](#exploring-data) instead. Move it, resize it, maximize it, or make it full screen like any window; the preview fills it, with the item's kind, size, and date, and the Show in Finder and Open buttons, in a bar at the bottom. Space, Cmd+Y, or Escape in Quick Look closes it, and so does Space or Cmd+Y in the browser. Quick Look follows the browser's selection while it's open, and closes with its browser. In `--term` mode, where the terminal shows a single window, Quick Look is a dialog in it instead.
 
 The arrow keys move to other items while Quick Look stays open, as in Finder:
 
@@ -422,9 +427,22 @@ The arrow keys move to other items while Quick Look stays open, as in Finder:
 - **Show in Finder** (Show in Explorer, Show in File Manager) reveals the item and keeps Quick Look open.
 - **Open** opens the item and closes Quick Look.
 
+### Exploring data
+
+Cmd+Space (File › Explore Data) opens Quick Look in explore mode, which shows a structured file's data the way Nushell's `explore` does. Nushell's `open` reads the file, and the data is shown one level at a time in a grid: a record as a row per field, with its name and value; a table as a row per record and a column per field; a list as a row per item, numbered from 0. Nested values read the way Nushell writes them, such as `{record 3 fields}`, `[table 12 rows]`, and `[list 4 items]`, in the link color. Any file in the structured rows of the [preview table](#previews-and-quick-look) can be explored, up to 50 MB, when `nu` is installed. Explore mode and the Nushell table previews load the plugins registered with `plugin add`, so a plugin's `from` commands work there: with `nu_plugin_formats` registered, INI, email, calendar, vCard, and property list files open as data. A file whose type no `from` command reads says so. Your `config.nu` and `env.nu` aren't loaded. JSON Lines files are a table with a row per line.
+
+- Click a nested value, or move to it with the arrow keys and press Return, to go into it. Return or a double-click on a plain value shows it whole, which helps with long strings. A double-click on a table's row number shows that row as a record.
+- The path above the grid names each level gone into, such as `Cargo.toml › dependencies › serde`, with a table cell as `3.name`, its row and column. Click a name to go back to that level, or press Escape to go back one. The cursor comes back to where it was. Escape at the top closes Quick Look.
+- The right end of the path says what's shown, such as `record · 21 fields` or `table · 340 rows · 6 columns`.
+- A table or list at the top of a file is cut to its first 10,000 rows, and the path says `first 10000 of 25000 rows`. A SQLite database is a record of its tables, each cut to its first 10,000 rows, with each blob shown as its size, such as `[binary 2048 bytes]`.
+- A file Nushell can't read as data, such as a TOML file with a syntax error, shows Nushell's reason, with the line and column where it has one. Press Space to see the file as text.
+- While a grid is shown, the arrow keys move its cursor instead of going to other items; click in the browser to show another one. Items explore mode can't open, such as images, show their usual preview, and the arrows go to other items as before.
+
+Space and Cmd+Space switch between the two modes: in explore mode, Space shows the file as text and Cmd+Space closes Quick Look, and in text mode it's the other way round. The **Text** and **Explore** buttons at the bottom of Quick Look do the same with the mouse. On macOS, Cmd+Space opens Spotlight unless Spotlight has another shortcut (System Settings › Keyboard › Keyboard Shortcuts › Spotlight); File › Explore Data and the Explore button work either way.
+
 ### Preview text size
 
-Text, code, and table previews in Quick Look have text size controls at the bottom left:
+Text, code, and table previews in Quick Look, and explore mode's grid, have text size controls at the bottom left:
 
 - The small "A" makes the text one point smaller.
 - The large "A" makes it one point bigger.
@@ -498,11 +516,20 @@ When items with the same names are already in the folder, a dialog asks what to 
 | Stop | Copies or moves nothing. |
 | Skip | Leaves the items that are there, and copies or moves the rest. |
 | Keep Both | Gives the new items free names: "name 2.ext", "name 3.ext", and so on. |
-| Replace | Removes the items that are there and puts the new ones in their place. The old item is removed only once its replacement is complete. |
+| Replace | Puts the new items in place of the ones that are there, and moves those to the Trash as "name (replaced).ext". A replaced folder goes to the Trash whole, with everything in it, so nothing it held is lost; Replace doesn't merge folders. |
 
-A folder can't go inside itself, and an item can't replace the folder it's in. A notification says so.
+Nothing a copy or move does deletes anything you had:
 
-Copies keep the original's modification date. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item; a move to another volume copies it and then removes the original.
+- An item is copied under a hidden name and takes its real name only once it's complete, and only if that name is still free. If something else took the name meanwhile, that item is left alone and the copy is reported as failed.
+- Items with the same name from different folders, pasted or dropped together, are all kept: the second becomes "name 2.ext" whatever the dialog's answer.
+- If the Trash refuses a replaced item, as a network volume without one can, it stays beside its replacement as "name (replaced).ext" and a notification says so.
+- Undo takes back the copy or move, and the next Undo puts back what it replaced, under its own name. Put Back in the Trash puts it back as "name (replaced).ext".
+
+A folder can't go inside itself, an item can't replace the folder it's in or a folder that holds other items being copied or moved, and a link can't replace the item it points to. A notification says so.
+
+Copies keep the original's modification date and its extended attributes, such as Finder tags and comments. On macOS, a copy on the same APFS volume is a clone, which is instant and takes no extra space until one of them changes. A move within a volume renames the item. A move to another volume copies it, flushes the copy to disk, checks that it holds as many bytes as the original, and only then removes the original; a file that changed while it was copied keeps the original in place. Pipes, sockets, and devices can't be copied, so a folder holding one reports it rather than waiting forever.
+
+Undo and Redo wait while a copy or move is still running.
 
 A copy, move, Compress, or Extract that takes longer than a moment shows a row above the path bar with the item being copied, a progress bar, and a Stop button. The work starts at once while fffinder counts the bytes to copy alongside it, and the bar stays at 0% until the count is done. Stop finishes nothing more and removes the item that was half copied. Items already copied stay. When an item can't be copied or moved, a notification names it and says why, and the other items still go.
 
@@ -746,7 +773,7 @@ While fffinder has the terminal, anything it would print to stderr goes to `term
 | Menu | Items |
 | --- | --- |
 | fffinder | Settings… (Cmd+,), Rescan Index, Empty Trash…, Quit fffinder (Cmd+Q) |
-| File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
+| File | New Window (Cmd+N), New Tab (Cmd+T), New Folder, New File… (Cmd+Alt+N), Open, Open in Editor, Quick Look, Explore Data (Cmd+Space), Get Info (Cmd+I), Rename…, Duplicate (Cmd+D), Make Alias (macOS) or Create Shortcut (Windows), Make Symbolic Link, Compress, Extract, Move to Trash, Put Back, Delete Immediately…, Close Window (Cmd+W) |
 | Edit | Undo (text fields, or the latest file operation when the files have focus), Redo (text fields, or the latest Undo when the files have focus), Cut, Copy, Paste (text fields, or items when the files have focus), Move Items Here, Copy Path, Copy as Nushell List, Select All Items, Find, Filter with Nushell, Search Syntax… |
 | View | as Icons, as List, as Columns, as Gallery, Toggle Sidebar, Sidebar as List, Sidebar as Tree, Toggle Preview Pane, Show/Hide Hidden Files, Keep Folders on Top, Use Groups, Toggle Light/Dark, Refresh |
 | Go | Back, Forward, Enclosing Folder, Recents, Home, Trash, Go to Folder…, Connect to Server… (Cmd+K) |
@@ -873,6 +900,7 @@ Cmd on macOS, Ctrl elsewhere.
 | Shift+Page Up, Shift+Page Down | Extend the selection a screenful |
 | Return, Cmd+Down, Cmd+O | Open |
 | Space, Cmd+Y | Quick Look |
+| Cmd+Space | Quick Look, exploring a structured file's data |
 | Right, Left | In the list view, open or close the selected folder in place |
 | Escape | Clear the selection, end the search, or cancel `--pick` |
 | Cmd+A | Select all |
@@ -918,8 +946,11 @@ F2, Cut, Copy, and the Trash leave Favorites and Locations rows alone, so a key 
 
 | Keys | Action |
 | --- | --- |
-| Space, Cmd+Y, Escape | Close Quick Look |
-| Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)) |
+| Space, Cmd+Y | Close Quick Look, or show the file as text in explore mode |
+| Cmd+Space | Explore the file's data, or close Quick Look in explore mode |
+| Escape | Close Quick Look, or in explore mode go back out one level |
+| Return | In explore mode, go into the value under the cursor |
+| Up, Down, Left, Right | Previous or next item (see [Quick Look](#quick-look)), or move explore mode's cursor |
 | Cmd+=, Cmd++ | Bigger preview text, or zoom in on a PDF |
 | Cmd+- | Smaller preview text, or zoom out of a PDF |
 | Cmd+0 | Reset the preview text size, or fit a PDF to the width |
@@ -1034,7 +1065,7 @@ Every tab and window shows a change to a setting at once, with these exceptions,
 | `show_sidebar` | `true` | Show the sidebar. |
 | `sidebar_mode` | `"tree"` on Windows, `"list"` elsewhere | `list`: one row for each place. `tree`: Favorites and Locations open in place to show their folders. See [Folder tree](#folder-tree). |
 | `expand_to_open_folder` | `true` | The folder tree opens down to the folder the window shows. |
-| `ask_for_full_disk_access` | `true` | On macOS, open System Settings at Full Disk Access when fffinder starts without it. |
+| `ask_for_full_disk_access` | `true` | On macOS, when fffinder starts without Full Disk Access, wait to index and ask for it first. |
 | `appearance` | `"system"` | `system`, `light`, or `dark`. |
 | `kind_filter` | `"any"` | The search Kind menu: `any`, `folder`, `document`, `image`, `movie`, `audio`, `code`, `archive`. |
 | `result_limit` | `500` | Maximum results shown for a search. |

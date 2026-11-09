@@ -12,15 +12,17 @@ This README is an overview. [The manual](docs/manual.md) documents every view, m
 
 - Indexes your home folder in the background and keeps the index up to date as files change. On the development Mac that's about 310,000 files in 3 seconds, and a search over all of them takes 25 to 35 ms. On macOS it finds apps by reading the app folders instead of indexing them.
 - Searches by name with typo tolerance, or by file contents. You can narrow a search to the current folder, a kind, an extension, a glob, or a git status.
-- Browses folders as icons, a list, columns, or a gallery. There's a sidebar that can show folders as a tree, as Explorer's does, tabs, back and forward history, a clickable path bar, and a split view where F5 copies and F6 moves between panes. The list and icon views can group items by kind, date, size, or name, and you can collapse each group. The list opens folders in place and has a column chooser (dates created and last opened, permissions, git status), resizable and movable columns, Keep Folders on Top, and folder sizes added up from the index. You can drag a box to select, rename in place, cut and paste, and open a preview pane beside the list or icon view. Each folder remembers its view and sort, and windows reopen where they were.
-- Previews files in the gallery, the column view, and Quick Look (Space): syntax-highlighted code, rendered Markdown, fonts, archive contents, media durations, PDFs you can scroll through and zoom, and the system's thumbnails of PDFs, videos, and documents (QuickLook, Explorer's, or the desktop's thumbnailers), which also show in the icon view. CSV, JSON, TOML, YAML, SQLite and other structured files open through Nushell's `open` and show as tables.
-- Handles everyday file work: open, open with another app or change the default, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, undo and redo, Get Info with folder sizes and permissions, duplicate, aliases and symbolic links, zip and tar archives, copy paths, rename one item or many, new file and folder, a Trash view with Put Back and Empty, eject, free space in the status bar, and Connect to Server for SMB, SFTP, and WebDAV.
+- Browses folders as icons, a list, columns, or a gallery, with tabs, back and forward history, a clickable path bar, and a split view where F5 copies and F6 moves between panes. The sidebar lists your places, or shows them as a folder tree the way Explorer does. The list and icon views can group items by kind, date, size, or name, and you can collapse each group. The list opens folders in place. Its columns resize and move, and a column chooser adds dates created and last opened, permissions, and git status. Keep Folders on Top and folder sizes from the index work there too. You can drag a box to select, rename in place, cut and paste, and open a preview pane beside the list or icon view. Each folder remembers its view and sort, and windows reopen where they were.
+- Previews files in the gallery, the column view, and Quick Look (Space): syntax-highlighted code, rendered Markdown, fonts, archive contents, media durations, PDFs you can scroll through and zoom, and the system's thumbnails of PDFs, videos, and documents (QuickLook, Explorer's, or the desktop's thumbnailers), which also show in the icon view. CSV, JSON, TOML, YAML, and other structured text files show as colored text. Cmd+Space explores their data level by level, the way Nushell's `explore` does. SQLite databases and spreadsheets open through Nushell's `open` and show as tables.
+- Handles everyday file work: open, open with another app or change the default, open in your editor, show in Finder, copy, paste, and move files (with a dialog for name clashes and progress you can stop), drag files between folders and to other apps, undo and redo, Get Info with folder sizes and permissions, duplicate, aliases and symbolic links, zip and tar archives, copy paths, rename one item or many, new file and folder, a Trash view with Put Back and Empty, eject, free space in the status bar, and Connect to Server for SMB, SFTP, and WebDAV. Nothing it does deletes your files behind your back. Replace moves the old item to the Trash, and a copy never writes over a file that took its name while it ran.
 - Has light and dark themes that follow the system, and a text size setting for the whole window.
 - Runs inside a terminal with `fffinder --term`. On macOS and Linux it's drawn with the kitty graphics protocol, so it looks the same as the window, in a terminal like kitty, Ghostty, or WezTerm. On Windows it's drawn with kitty graphics in terminals that have them, such as WezTerm, and as sixel images in Windows Terminal 1.22 or later. It needs a build with `--features term`.
 
 ![fffinder --term running in a Ghostty tab](docs/images/term-dark.png)
 
 ![Search results](docs/images/search-dark.png)
+
+![The sidebar as a folder tree, opened down to the folder the window shows](docs/images/tree-dark.png)
 
 ## Nushell integration
 
@@ -45,13 +47,13 @@ The manual lists [every `fff` command](docs/manual.md#the-fff-nushell-module).
 
 ### Inside the app
 
-- **The Nushell panel** (Ctrl+`) runs a pipeline with the selected files as `$in`. Each row has `name`, `path`, `type`, `kind`, `size`, and `modified`, so `where size > 1mb | sort-by modified` works on them.
-- **Filters** (Cmd+Alt+F) narrow a folder or search results with a `where` condition such as `size > 10mb and modified > 2024-01-01`. Save a search and its filter in the sidebar as a Smart Folder.
-- **Batch rename** (F2 with several items selected) renames with a closure, such as `{|f| $f.name | str downcase }`, and previews every new name first.
+- **The Nushell panel.** Ctrl+` runs a pipeline with the selected files as `$in`. Each row has `name`, `path`, `type`, `kind`, `size`, and `modified`, so `where size > 1mb | sort-by modified` works on them.
+- **Filters.** Cmd+Alt+F narrows a folder or search results with a `where` condition such as `size > 10mb and modified > 2024-01-01`. Save a search and its filter in the sidebar as a Smart Folder.
+- **Batch rename.** F2 with several items selected renames them with a closure, such as `{|f| $f.name | str downcase }`, and shows every new name before anything changes.
 - **Your own actions.** Commands you export from `actions.nu` in the settings folder appear in the context menu and get the selection on `$in`. The first run writes a few starters, such as Count Lines and Find Duplicates.
 - **Your Nushell environment.** With "Use Nushell's file colors and editor" on in Settings, file names use your `LS_COLORS` and "Open in Editor" uses your `buffer_editor`.
-- **Open Nushell Here** (Cmd+Alt+T) opens `nu` in the folder, in the terminal you pick in Settings.
-- **`fffinder --pick`** turns the window into a file chooser for scripts and prints the chosen paths as JSON.
+- **Open Nushell Here.** Cmd+Alt+T opens `nu` in the folder, in the terminal you pick in Settings.
+- **`fffinder --pick`.** The window becomes a file chooser for scripts and prints the chosen paths as JSON.
 
 ![Nushell pipeline panel](docs/images/nushell-dark.png)
 
@@ -74,7 +76,7 @@ Each [release](https://github.com/fdncred/fffinder/releases) has binaries for ma
 cargo binstall --git https://github.com/fdncred/fffinder fffinder
 ```
 
-That installs only the binary. For the `fff` Nushell commands, take `nu/fff.nu` from this repository or the release archive and load it as [the `fff` module](#the-fff-module) section shows. Linux also needs a Vulkan driver.
+That installs only the binary. For the `fff` Nushell commands, take `nu/fff.nu` from this repository or the release archive and load it the way [The `fff` module](#the-fff-module) shows. Linux also needs a Vulkan driver.
 
 To build from source, you need Rust 1.92 or newer and Nushell 0.116, plus:
 
@@ -93,7 +95,9 @@ nu scripts/bundle.nu --install   # Linux: also install the desktop entry
 
 `install.nu` prints the `use` line that loads the `fff` module.
 
-On macOS, give fffinder Full Disk Access in System Settings > Privacy & Security, then reopen it, so it can index Desktop, Documents, Downloads, and other protected folders without asking. When it starts without access, fffinder opens that pane for you. On Linux, a big home folder can use up the inotify watch limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
+On macOS, give fffinder Full Disk Access in System Settings > Privacy & Security, then reopen it. With access, it indexes Desktop, Documents, Downloads, and the other protected folders without macOS asking about each one. Without it, fffinder holds off indexing and asks you first, instead of setting off a stack of permission prompts.
+
+On Linux, a big home folder can use up the inotify watch limit. Raise it with `sudo sysctl fs.inotify.max_user_watches=1048576`.
 
 ## Using it
 
@@ -120,6 +124,7 @@ Cmd on macOS, Ctrl elsewhere. The manual lists [every shortcut](docs/manual.md#k
 | Cmd+Alt+F      | Filter with Nushell           |
 | Cmd+1 to Cmd+4 | Icons, list, columns, gallery |
 | Space          | Quick Look                    |
+| Cmd+Space      | Quick Look, exploring data    |
 | Cmd+Shift+G    | Go to folder                  |
 | F2             | Rename                        |
 | Ctrl+`         | Nushell panel                 |
@@ -160,4 +165,4 @@ The UI tests open the real window headlessly, click every control, and press its
 - fff-search skips hidden files unless the search location is itself a git repository. It also skips files a repository's `.gitignore` excludes, and outside git repositories it skips build and cache folders such as `node_modules` and `~/Library/Caches`. See [What the index skips](docs/manual.md#what-the-index-skips).
 - Searches can't filter by size or date. A Nushell filter can, on the results a search returns.
 - The first scan has to finish before searches return results. The search runs again on its own when the scan is done.
-- Only the macOS build has been run and tested so far. CI builds and tests Linux and Windows too, but expect rough edges there until they get hands-on use.
+- Only the macOS build gets daily hands-on use so far. CI builds and tests Linux and Windows too, but expect rough edges there.

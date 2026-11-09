@@ -811,17 +811,32 @@ impl Finder {
             notify(Warning, "A name can’t contain “/” or “\\”".into());
             return false;
         }
+        if let Some(problem) = crate::rename::name_problem(&new_name) {
+            notify(Warning, problem);
+            return false;
+        }
         let target = path.with_file_name(&new_name);
         if target == path {
             return true;
         }
-        if target.exists() && !crate::rename::only_case_differs(path, &target) {
-            notify(Warning, format!("“{new_name}” already exists"));
-            return false;
-        }
-        if let Err(err) = std::fs::rename(path, &target) {
-            notify(Error, format!("Couldn’t rename: {err}"));
-            return false;
+        // Only a change of case, which names the same item, takes a plain
+        // rename. Any other refuses a taken name, a broken link there too,
+        // even one that turns up while this runs.
+        let renamed = if crate::rename::only_case_differs(path, &target) {
+            std::fs::rename(path, &target)
+        } else {
+            fffinder_core::ops::rename_no_replace(path, &target)
+        };
+        match renamed {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                notify(Warning, format!("“{new_name}” already exists"));
+                return false;
+            }
+            Err(err) => {
+                notify(Error, format!("Couldn’t rename: {err}"));
+                return false;
+            }
         }
         let moved = vec![(path.to_path_buf(), target.clone())];
         // Renaming the folder the window shows reads it again where it went.

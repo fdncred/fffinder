@@ -30,6 +30,39 @@ pub struct Checked(pub Access);
 
 impl Global for Checked {}
 
+/// Whether indexing is waiting for Full Disk Access. Without it, indexing the
+/// home folder makes macOS ask about Desktop, Documents, Downloads, and each
+/// other protected folder in turn, every dialog taking the focus. So when
+/// startup finds access off and asking is on, indexing waits until the user
+/// turns access on (and reopens fffinder) or chooses to go ahead without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndexHeld(pub bool);
+
+impl Global for IndexHeld {}
+
+/// Whether indexing should wait for Full Disk Access.
+///
+/// # Arguments
+///
+/// * `access` - What [`check`] found
+/// * `ask` - The `ask_for_full_disk_access` setting
+///
+/// # Returns
+///
+/// `true` only when access is surely off and the user wants to be asked
+pub fn holds_index(access: Access, ask: bool) -> bool {
+    access == Access::Denied && ask
+}
+
+/// Whether indexing is waiting for Full Disk Access now.
+///
+/// # Arguments
+///
+/// * `cx` - The app, which holds the flag
+pub fn index_held(cx: &gpui_kit::App) -> bool {
+    cx.try_global::<IndexHeld>().is_some_and(|held| held.0)
+}
+
 /// Try reading places macOS guards with Full Disk Access. None of them makes
 /// macOS ask the user, the way the Desktop or Documents folders would; a
 /// missing permission just fails the read.
@@ -128,6 +161,21 @@ mod tests {
     fn nothing_to_read_tells_nothing() {
         assert_eq!(judge([missing(), missing()]), Access::Unknown);
         assert_eq!(judge(std::iter::empty()), Access::Unknown);
+    }
+
+    #[test]
+    fn indexing_waits_only_when_access_is_off_and_asking_is_on() {
+        use super::holds_index;
+        assert!(holds_index(Access::Denied, true));
+        assert!(
+            !holds_index(Access::Denied, false),
+            "Don’t Ask Again indexes"
+        );
+        assert!(!holds_index(Access::Granted, true));
+        assert!(
+            !holds_index(Access::Unknown, true),
+            "a picker, --term, or not macOS"
+        );
     }
 
     #[test]

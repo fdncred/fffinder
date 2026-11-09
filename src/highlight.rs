@@ -1,6 +1,6 @@
-//! Syntax highlighting for code previews, with syntect's bundled grammars
-//! (Rust, Python, JavaScript, C, Go, shell, and dozens more) and a light or
-//! dark theme to match the window.
+//! Syntax highlighting for code previews, with bat's grammars for syntect
+//! (Rust, Python, JavaScript, C, Go, shell, TOML, YAML, CSV, and nearly two
+//! hundred more) and a light or dark theme to match the window.
 
 use gpui_kit::{FontStyle, FontWeight, HighlightStyle, Hsla, Rgba};
 use std::ops::Range;
@@ -17,7 +17,15 @@ const LONGEST_LINE: usize = 2_000;
 
 fn syntaxes() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    SET.get_or_init(two_face::syntax::extra_newlines)
+}
+
+/// The extension a grammar knows for `ext`: JSON Lines is JSON line by line.
+fn grammar_extension(ext: &str) -> &str {
+    match ext {
+        "jsonl" | "ndjson" => "json",
+        other => other,
+    }
 }
 
 fn themes() -> &'static ThemeSet {
@@ -61,7 +69,7 @@ pub fn highlight(
     let by_name = |name: &str| set.find_syntax_by_extension(name);
     let syntax = path
         .extension()
-        .and_then(|e| by_name(&e.to_string_lossy()))
+        .and_then(|e| by_name(grammar_extension(&e.to_string_lossy())))
         // Names like `Makefile` and `Dockerfile` are grammars' extensions too.
         .or_else(|| path.file_name().and_then(|n| by_name(&n.to_string_lossy())))
         .or_else(|| set.find_syntax_by_first_line(text.lines().next()?))
@@ -109,6 +117,8 @@ mod tests {
         assert!(spans.len() > 3, "more than one color");
         assert!(highlight("#!/bin/sh\necho hi\n", Path::new("run"), true).is_some());
         assert!(highlight("just words", Path::new("notes.txt"), false).is_none());
+        assert!(highlight("[a]\nb = 1\n", Path::new("Cargo.toml"), false).is_some());
+        assert!(highlight("{\"a\": 1}\n", Path::new("rows.jsonl"), false).is_some());
         let minified = format!("var a={};\n", "1,".repeat(3_000));
         assert!(highlight(&minified, Path::new("app.js"), false).is_none());
     }

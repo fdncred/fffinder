@@ -1,6 +1,7 @@
-//! Asking for Full Disk Access on macOS: System Settings opens at the right
-//! pane, and a dialog says what to turn on there. See `crate::disk_access`
-//! for how fffinder tells whether it has it.
+//! Asking for Full Disk Access on macOS: a dialog says what to turn on in
+//! System Settings and opens it at the right pane. Indexing waits for the
+//! answer, since without access it makes macOS ask about each protected
+//! folder. See `crate::disk_access` for how fffinder tells whether it has it.
 
 use super::Finder;
 use crate::disk_access::{self, Access};
@@ -9,6 +10,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::{DialogClose, DialogFooter};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 /// What to turn on in System Settings: fffinder itself when it runs from its
@@ -26,19 +28,20 @@ fn what_to_turn_on() -> &'static str {
 }
 
 impl Finder {
-    /// Open System Settings at Full Disk Access and say in a dialog what to
-    /// turn on there, with a way to stop asking.
+    /// Say in a dialog what to turn on in System Settings for Full Disk
+    /// Access, with a button that opens it there, a way to index without it
+    /// while indexing waits, and a way to stop asking.
     ///
     /// # Arguments
     ///
     /// * `window` - The window the dialog opens in
     /// * `cx` - The browser's context
     pub fn ask_for_full_disk_access(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        crate::system::open_url(disk_access::SETTINGS_URL, cx);
         self.focus_before_dialog(window, cx);
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let muted = cx.theme().muted_foreground;
+            let held = disk_access::index_held(cx);
             dialog
                 .title("Give fffinder Full Disk Access")
                 .w(ui(460.))
@@ -56,7 +59,14 @@ impl Finder {
                              protected places until it has Full Disk Access, so those folders \
                              look empty and searches miss what’s inside them.",
                         )
-                        .child("System Settings is open at Privacy & Security › Full Disk Access.")
+                        .when(held, |this| {
+                            this.child(
+                                "Indexing waits until you decide. Without Full Disk Access, \
+                                 macOS asks about Desktop, Documents, Downloads, and other \
+                                 folders one at a time while fffinder indexes them.",
+                            )
+                        })
+                        .child("Open System Settings to Privacy & Security › Full Disk Access.")
                         .child(div().text_color(muted).child(what_to_turn_on())),
                 )
                 .footer(
@@ -72,19 +82,49 @@ impl Finder {
                                     },
                                 )),
                         )
+                        .when(held, |footer| {
+                            footer.child(
+                                Button::new("disk-access-index")
+                                    .label("Index Without It")
+                                    .on_click(window.listener_for(
+                                        &view,
+                                        |this: &mut Finder, _: &ClickEvent, window, cx| {
+                                            this.start_held_index(cx);
+                                            window.close_dialog(cx);
+                                        },
+                                    )),
+                            )
+                        })
                         .child(
                             Button::new("disk-access-open")
+                                .primary()
                                 .label("Open System Settings")
                                 .on_click(|_, _, cx| {
                                     crate::system::open_url(disk_access::SETTINGS_URL, cx)
                                 }),
                         )
-                        .child(
-                            DialogClose::new()
-                                .child(Button::new("disk-access-ok").primary().label("OK")),
-                        ),
+                        .when(!held, |footer| {
+                            footer.child(
+                                DialogClose::new().child(Button::new("disk-access-ok").label("OK")),
+                            )
+                        }),
                 )
         });
+    }
+
+    /// Start the indexing that waited for Full Disk Access, when it did.
+    ///
+    /// # Arguments
+    ///
+    /// * `cx` - The browser's context
+    pub fn start_held_index(&mut self, cx: &mut Context<Self>) {
+        if !disk_access::index_held(cx) {
+            return;
+        }
+        cx.set_global(disk_access::IndexHeld(false));
+        self.index_search_roots(cx);
+        // Every window's sidebar says indexing waits; now it doesn't.
+        cx.refresh_windows();
     }
 
     /// Choose whether startup asks for Full Disk Access when it's missing.
@@ -96,6 +136,10 @@ impl Finder {
     pub fn set_ask_for_full_disk_access(&mut self, ask: bool, cx: &mut Context<Self>) {
         self.config.ask_for_full_disk_access = ask;
         self.settings_changed(cx);
+        // Not asking means not waiting either.
+        if !ask {
+            self.start_held_index(cx);
+        }
         cx.notify();
     }
 }

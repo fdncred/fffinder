@@ -1,7 +1,14 @@
 //! Copying and moving files and folders: finding name clashes before
 //! anything changes, then doing the work with byte progress and a way to
-//! stop part way. A replaced item is only removed once its replacement is
-//! complete, so a failed or stopped copy leaves the destination as it was.
+//! stop part way.
+//!
+//! Nothing here deletes what the user had. A copy is built under a hidden
+//! name and renamed into place only when it is whole, with a rename that
+//! refuses a taken name, so an item that appears at the name meanwhile is
+//! never overwritten. Replace sets the old item aside as "name (replaced)"
+//! rather than deleting it; the app then moves it to the Trash. A move
+//! across volumes removes its original only after the copy is flushed to
+//! disk and holds as many bytes.
 
 use std::fs::{self, File};
 use std::io::{self, Read as _, Write as _};
@@ -37,6 +44,10 @@ pub enum TransferError {
     IntoItself(String),
     #[error("“{0}” can’t replace the folder it’s in")]
     ReplacesParent(String),
+    /// Replace would set aside the item a link points to, or a folder that
+    /// holds other items of the same job.
+    #[error("“{0}” can’t replace an item it links to or that holds what’s being copied or moved")]
+    ReplacesSource(String),
     #[error("{}: {source}", .path.display())]
     Io { path: PathBuf, source: io::Error },
     /// A move across volumes copied the item, but the original at `path`
@@ -192,6 +203,10 @@ pub struct Report {
     /// Items moved across volumes whose copy is complete (and in `done`)
     /// but whose original couldn't be removed, and why.
     pub left: Vec<(PathBuf, String)>,
+    /// Items that Replace took the place of: where each one was, and the
+    /// name it was set aside under beside it, "name (replaced).ext". None of
+    /// them is deleted; the app moves them to the Trash.
+    pub replaced: Vec<(PathBuf, PathBuf)>,
     /// Stop was pressed; the item in progress was removed.
     pub cancelled: bool,
 }
@@ -230,10 +245,17 @@ fn run_items(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
         let taken = transfer
             .target(source)
             .filter(|t| t.symlink_metadata().is_ok());
+        // Two sources with one name, from different folders, or names that
+        // differ only in case on a volume that ignores it: the second finds
+        // the first one there. That one is never replaced or skipped.
+        let ours = taken
+            .as_deref()
+            .is_some_and(|t| report.done.iter().any(|(_, made)| same_item(made, t)));
         let (target, replace) = match (in_place, transfer.mode, taken) {
             (true, Mode::Move, _) => continue,
             (true, Mode::Copy, _) => (copy_name(&transfer.dest, &name, is_dir), false),
             (false, _, None) => (transfer.dest.join(&name), false),
+            (false, _, Some(_)) if ours => (numbered_name(&transfer.dest, &name, is_dir), false),
             (false, _, Some(target)) => match clash {
                 Clash::Skip => {
                     // This item's bytes were counted; count them as done.
@@ -244,30 +266,73 @@ fn run_items(transfer: &Transfer, clash: Clash, progress: &Progress) -> Report {
                     continue;
                 }
                 Clash::KeepBoth => (numbered_name(&transfer.dest, &name, is_dir), false),
-                Clash::Replace if resolved_item(source).starts_with(resolved_item(&target)) => {
-                    report.failed.push((
-                        source.clone(),
-                        TransferError::ReplacesParent(name).to_string(),
-                    ));
-                    continue;
-                }
-                Clash::Replace => (target, true),
+                Clash::Replace => match replace_refusal(transfer, source, &target) {
+                    Some(err) => {
+                        report.failed.push((source.clone(), err.to_string()));
+                        continue;
+                    }
+                    None => (target, true),
+                },
             },
         };
         match transfer_one(source, &target, transfer.mode, replace, progress) {
-            Ok(()) => report.done.push((source.clone(), target)),
+            Ok(placed) => {
+                if let Some(aside) = placed.replaced {
+                    report.replaced.push((target.clone(), aside));
+                }
+                if let Some(err) = placed.left {
+                    let left = TransferError::OriginalLeft {
+                        path: source.clone(),
+                        source: err,
+                    };
+                    report.left.push((source.clone(), left.to_string()));
+                }
+                report.done.push((source.clone(), target));
+            }
             Err(TransferError::Cancelled) => {
                 report.cancelled = true;
                 break;
-            }
-            Err(err @ TransferError::OriginalLeft { .. }) => {
-                report.left.push((source.clone(), err.to_string()));
-                report.done.push((source.clone(), target));
             }
             Err(err) => report.failed.push((source.clone(), err.to_string())),
         }
     }
     report
+}
+
+/// Why Replace can't put `source` at `target`, when it can't. Setting the
+/// item at `target` aside would take along `source` itself (its own folder),
+/// another item of the same job, or what `source` links to, leaving a link
+/// that points at nothing.
+fn replace_refusal(transfer: &Transfer, source: &Path, target: &Path) -> Option<TransferError> {
+    let there = resolved_item(target);
+    if resolved_item(source).starts_with(&there) {
+        return Some(TransferError::ReplacesParent(display_name(source)));
+    }
+    let holds_another = transfer
+        .sources
+        .iter()
+        .any(|other| resolved_item(other).starts_with(&there));
+    // `resolved` follows a link at the end too, to what it points to.
+    let links_into = resolved(source).starts_with(&there);
+    (holds_another || links_into).then(|| TransferError::ReplacesSource(display_name(source)))
+}
+
+/// Whether two paths name the same item on disk, however each is spelled.
+fn same_item(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows file systems ignore case, and std can't read file ids yet.
+        let key = |p: &Path| resolved_item(p).to_string_lossy().to_lowercase();
+        a.symlink_metadata().is_ok() && b.symlink_metadata().is_ok() && key(a) == key(b)
+    }
 }
 
 /// Run `work` while another thread adds up the bytes under `sources` for
@@ -314,8 +379,30 @@ fn count_bytes(path: &Path, progress: &Progress, finished: &AtomicBool) {
 
 /// Move one item to exactly `target`, which must be free: a rename, or a
 /// copy and delete across volumes.
+///
+/// # Errors
+///
+/// Fails, leaving the item where it was, when it can't be moved or `target`
+/// is taken; `OriginalLeft` when a move across volumes made a complete copy
+/// but couldn't remove the original.
 pub fn move_item(source: &Path, target: &Path) -> Result<(), TransferError> {
-    transfer_one(source, target, Mode::Move, false, &Progress::default())
+    let placed = transfer_one(source, target, Mode::Move, false, &Progress::default())?;
+    match placed.left {
+        Some(err) => Err(TransferError::OriginalLeft {
+            path: source.to_path_buf(),
+            source: err,
+        }),
+        None => Ok(()),
+    }
+}
+
+/// What became of one item put where it was sent.
+#[derive(Debug, Default)]
+struct Placed {
+    /// The item it took the place of, set aside beside it.
+    replaced: Option<PathBuf>,
+    /// Why the original of a move across volumes is still there.
+    left: Option<io::Error>,
 }
 
 fn transfer_one(
@@ -324,58 +411,274 @@ fn transfer_one(
     mode: Mode,
     replace: bool,
     progress: &Progress,
-) -> Result<(), TransferError> {
-    // A replaced item waits beside its replacement until that is complete.
-    let staging = if replace {
-        staging_path(target)
-    } else {
-        target.to_path_buf()
-    };
+) -> Result<Placed, TransferError> {
     if mode == Mode::Move {
-        match fs::rename(source, &staging) {
-            Ok(()) => return finish_replace(&staging, target, replace, Some(source)),
+        match place(source, target, replace) {
+            Ok(replaced) => {
+                return Ok(Placed {
+                    replaced,
+                    left: None,
+                });
+            }
             // `run` counted its bytes; copy and delete instead.
-            Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {}
+            Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
+                return move_by_copy(source, target, replace, progress);
+            }
             Err(err) => return Err(io_error(source)(err)),
         }
     }
-    if let Err(err) = copy_tree(source, &staging, progress) {
+    let staging = copy_to_staging(source, target, progress)?;
+    let replaced = place(&staging, target, replace).map_err(|err| {
         let _ = remove_any(&staging);
-        return Err(err);
-    }
-    finish_replace(&staging, target, replace, None)?;
-    if mode == Mode::Move {
-        remove_any(source).map_err(|err| TransferError::OriginalLeft {
-            path: source.to_path_buf(),
-            source: err,
+        io_error(target)(err)
+    })?;
+    Ok(Placed {
+        replaced,
+        left: None,
+    })
+}
+
+/// Move `source` to `target` on another volume: copy it, flush the copy to
+/// disk and check it holds every byte, put it in place, and only then
+/// remove the original. Until that last step the original is untouched.
+fn move_by_copy(
+    source: &Path,
+    target: &Path,
+    replace: bool,
+    progress: &Progress,
+) -> Result<Placed, TransferError> {
+    let staging = copy_to_staging(source, target, progress)?;
+    let replaced = settle_copy(source, &staging)
+        .and_then(|()| place(&staging, target, replace).map_err(io_error(target)))
+        .inspect_err(|_| {
+            let _ = remove_any(&staging);
         })?;
+    Ok(Placed {
+        replaced,
+        left: remove_any(source).err(),
+    })
+}
+
+/// Copy `source` to a fresh hidden name beside `target` and return it. When
+/// the copy fails or is stopped, what was made of it is removed: only this
+/// job's own hidden copy, never anything at `target`.
+fn copy_to_staging(
+    source: &Path,
+    target: &Path,
+    progress: &Progress,
+) -> Result<PathBuf, TransferError> {
+    let staging = fresh_staging(target);
+    copy_tree(source, &staging, progress).inspect_err(|_| {
+        let _ = remove_any(&staging);
+    })?;
+    Ok(staging)
+}
+
+/// Flush a finished copy to disk and check it holds as many bytes as the
+/// original, before the original of a move is removed. A file that changed
+/// while it was copied fails the check, so the original stays.
+fn settle_copy(original: &Path, copy: &Path) -> Result<(), TransferError> {
+    sync_tree(copy).map_err(io_error(copy))?;
+    let whole = Progress::default();
+    let (want, got) = (tree_size(original, &whole), tree_size(copy, &whole));
+    if want == got {
+        return Ok(());
     }
+    Err(TransferError::Io {
+        path: copy.to_path_buf(),
+        source: io::Error::other(format!(
+            "the copy holds {got} bytes but the original {want}, so the original was kept"
+        )),
+    })
+}
+
+/// Flush every file and folder under `path` to disk. A file system that
+/// can't flush (some network and FUSE volumes) is taken at its word.
+#[cfg(unix)]
+fn sync_tree(path: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.is_dir() {
+        for entry in fs::read_dir(path)? {
+            sync_tree(&entry?.path())?;
+        }
+    } else if !meta.is_file() {
+        return Ok(());
+    }
+    match File::open(path).and_then(|file| file.sync_all()) {
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            Ok(())
+        }
+        result => result,
+    }
+}
+
+/// Windows only flushes files opened for writing, which a read-only copy
+/// can't be, so it's left to the system there.
+#[cfg(not(unix))]
+fn sync_tree(_: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Swap a complete replacement in for the item it replaces. When that
-/// fails, a moved item goes back to `restore`.
-fn finish_replace(
-    staging: &Path,
-    target: &Path,
-    replace: bool,
-    restore: Option<&Path>,
-) -> Result<(), TransferError> {
+/// Rename `from` to `target`. With `replace`, the item at `target` is first
+/// renamed aside to "name (replaced).ext" beside it, and that path comes
+/// back; when `from` then can't go in, the old item goes back. Nothing is
+/// deleted either way.
+fn place(from: &Path, target: &Path, replace: bool) -> io::Result<Option<PathBuf>> {
     if !replace {
-        return Ok(());
+        return rename_no_replace(from, target).map(|()| None);
     }
-    let swapped = remove_any(target).and_then(|()| fs::rename(staging, target));
-    swapped.map_err(|err| {
-        match restore {
-            Some(original) => {
-                let _ = fs::rename(staging, original);
-            }
-            None => {
-                let _ = remove_any(staging);
-            }
+    let aside = match set_aside(target) {
+        Ok(aside) => aside,
+        // Gone since the clash was found: there's nothing to replace.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return rename_no_replace(from, target).map(|()| None);
         }
-        io_error(target)(err)
+        Err(err) => return Err(err),
+    };
+    if let Err(err) = rename_no_replace(from, target) {
+        let _ = rename_no_replace(&aside, target);
+        return Err(err);
+    }
+    Ok(Some(aside))
+}
+
+/// Rename the item at `target` to "name (replaced).ext" beside it, numbered
+/// when that's taken, and return where it is now.
+fn set_aside(target: &Path) -> io::Result<PathBuf> {
+    let is_dir = target.symlink_metadata()?.is_dir();
+    let dir = target.parent().unwrap_or(Path::new("."));
+    let name = display_name(target);
+    let (stem, ext) = split_extension(&name, is_dir);
+    rename_to_free_name(target, dir, |n| match n {
+        1 => format!("{stem} (replaced){ext}"),
+        n => format!("{stem} (replaced {n}){ext}"),
     })
+}
+
+/// Rename `from` into `dir` under the first name `make(n)` gives, for
+/// n = 1, 2, 3, …, that nothing has, and return it. The rename itself claims
+/// each name, so an item that takes one meanwhile is never replaced.
+///
+/// # Errors
+///
+/// What the rename failed with, other than a taken name.
+pub fn rename_to_free_name(
+    from: &Path,
+    dir: &Path,
+    make: impl Fn(usize) -> String,
+) -> io::Result<PathBuf> {
+    (1..)
+        .find_map(|n| {
+            let to = dir.join(make(n));
+            match rename_no_replace(from, &to) {
+                Ok(()) => Some(Ok(to)),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(err) => Some(Err(err)),
+            }
+        })
+        .expect("some numbered name is free")
+}
+
+/// Rename `from` to `to` only while nothing is at `to`. `fs::rename`
+/// replaces a file there on every system, and an empty folder on Unix, so
+/// a name found free a moment ago could otherwise lose what took it since.
+///
+/// # Errors
+///
+/// `AlreadyExists` when `to` is taken, `CrossesDevices` when the two are on
+/// different volumes, and otherwise what the rename failed with.
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    match rename_exclusive(from, to) {
+        // SMB, FAT, exFAT, and older Linux kernels can't refuse a taken name
+        // in the rename itself, so there the name is checked just before.
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            if to.symlink_metadata().is_ok() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            fs::rename(from, to)
+        }
+        result => result,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    let (from, to) = (c_path(from)?, c_path(to)?);
+    // SAFETY: both are NUL-terminated strings that live past the call.
+    let failed = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } != 0;
+    if failed {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    let (from, to) = (c_path(from)?, c_path(to)?);
+    // The system call itself: glibc only wraps it from 2.28 on. A kernel
+    // without it answers ENOSYS, which `rename_no_replace` handles.
+    // SAFETY: both are NUL-terminated strings that live past the call.
+    let failed = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0;
+    if failed {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn rename_exclusive(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(windows)]
+fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
+    use windows::core::HSTRING;
+    let (from, to) = (
+        HSTRING::from(from.as_os_str()),
+        HSTRING::from(to.as_os_str()),
+    );
+    // Without MOVEFILE_REPLACE_EXISTING a taken name fails the move, and
+    // without MOVEFILE_COPY_ALLOWED so does another volume.
+    // SAFETY: MoveFileExW only reads the two paths.
+    unsafe { MoveFileExW(&from, &to, MOVE_FILE_FLAGS(0)) }
+        .map_err(|err| io::Error::from_raw_os_error(err.code().0 & 0xFFFF))
+}
+
+/// A path as the C string the system calls take.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+    Ok(std::ffi::CString::new(path.as_os_str().as_bytes())?)
+}
+
+/// A hidden name beside `target` that nothing has yet, for work that isn't
+/// finished.
+fn fresh_staging(target: &Path) -> PathBuf {
+    std::iter::repeat_with(|| staging_path(target))
+        .find(|path| path.symlink_metadata().is_err())
+        .expect("staging names never run out")
 }
 
 /// A hidden name beside `target` for work that isn't finished yet. Each
@@ -386,8 +689,17 @@ pub(crate) fn staging_path(target: &Path) -> PathBuf {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // Names stop at 255 bytes; leave room for what's added around this one.
+    let mut keep = name.len().min(200);
+    while !name.is_char_boundary(keep) {
+        keep -= 1;
+    }
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    target.with_file_name(format!(".{name}.fffinder-{}-{n}", std::process::id()))
+    target.with_file_name(format!(
+        ".{}.fffinder-{}-{n}",
+        &name[..keep],
+        std::process::id()
+    ))
 }
 
 /// Copy a file, folder, or symbolic link (as a link) to `target`, which
@@ -406,10 +718,51 @@ pub fn copy_tree(source: &Path, target: &Path, progress: &Progress) -> Result<()
             let entry = entry.map_err(io_error(source))?;
             copy_tree(&entry.path(), &target.join(entry.file_name()), progress)?;
         }
+        copy_xattrs(source, target);
         return fs::set_permissions(target, meta.permissions()).map_err(io_error(target));
+    }
+    if is_special(&kind) {
+        // Opening a pipe waits for a writer, forever, and Stop can't end it.
+        return Err(TransferError::Io {
+            path: source.to_path_buf(),
+            source: io::Error::new(
+                io::ErrorKind::Unsupported,
+                "pipes, sockets, and devices can’t be copied",
+            ),
+        });
     }
     copy_file(source, target, &meta, progress)
 }
+
+/// A pipe, socket, or device: not a file whose bytes can be copied.
+#[cfg(unix)]
+fn is_special(kind: &fs::FileType) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    kind.is_fifo() || kind.is_socket() || kind.is_block_device() || kind.is_char_device()
+}
+
+#[cfg(not(unix))]
+fn is_special(_: &fs::FileType) -> bool {
+    false
+}
+
+/// Copy extended attributes, such as Finder tags, comments, and where a
+/// download came from. Best effort: a volume without them still gets the
+/// data.
+#[cfg(unix)]
+fn copy_xattrs(source: &Path, target: &Path) {
+    let Ok(names) = xattr::list(source) else {
+        return;
+    };
+    for name in names {
+        if let Ok(Some(value)) = xattr::get(source, &name) {
+            let _ = xattr::set(target, &name, &value);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn copy_xattrs(_: &Path, _: &Path) {}
 
 fn copy_file(
     source: &Path,
@@ -420,6 +773,10 @@ fn copy_file(
     let len = meta.len();
     if len < CHUNKED_COPY || clones_instantly(meta, target) {
         fs::copy(source, target).map_err(io_error(source))?;
+        // macOS's copy keeps extended attributes; Linux's doesn't.
+        if !cfg!(target_os = "macos") {
+            copy_xattrs(source, target);
+        }
         progress.advance(len);
     } else {
         let mut from = File::open(source).map_err(io_error(source))?;
@@ -434,6 +791,7 @@ fn copy_file(
             to.write_all(&buf[..read]).map_err(io_error(target))?;
             progress.advance(read as u64);
         }
+        copy_xattrs(source, target);
         fs::set_permissions(target, meta.permissions()).map_err(io_error(target))?;
     }
     // Copies keep the original's modification date, as in Finder.
@@ -828,6 +1186,311 @@ mod tests {
             fs::read_link(dir.path("dest/link")).unwrap(),
             Path::new("a.txt")
         );
+    }
+
+    /// Names in `dir`, hidden ones included, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn rename_no_replace_refuses_a_taken_name() {
+        let dir = Dir::new("no-replace");
+        fs::write(dir.path("dest/a.txt"), "old").unwrap();
+        let err = rename_no_replace(&dir.path("src/a.txt"), &dir.path("dest/a.txt")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(dir.read("dest/a.txt"), "old");
+        assert_eq!(dir.read("src/a.txt"), "alpha");
+
+        // `fs::rename` would replace an empty folder on Unix.
+        fs::create_dir(dir.path("dest/sub")).unwrap();
+        let err = rename_no_replace(&dir.path("src/sub"), &dir.path("dest/sub")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(dir.path("src/sub/b.txt").exists());
+
+        rename_no_replace(&dir.path("src/a.txt"), &dir.path("dest/b.txt")).unwrap();
+        assert_eq!(dir.read("dest/b.txt"), "alpha");
+    }
+
+    #[test]
+    fn free_names_are_claimed_by_the_rename() {
+        let dir = Dir::new("free-rename");
+        fs::write(dir.path("dest/a.txt"), "1").unwrap();
+        fs::write(dir.path("dest/a 2.txt"), "2").unwrap();
+        let landed = rename_to_free_name(&dir.path("src/a.txt"), &dir.path("dest"), |n| match n {
+            1 => "a.txt".into(),
+            n => format!("a {n}.txt"),
+        })
+        .unwrap();
+        assert_eq!(landed, dir.path("dest/a 3.txt"));
+        assert_eq!(dir.read("dest/a.txt"), "1");
+        assert_eq!(dir.read("dest/a 2.txt"), "2");
+    }
+
+    #[test]
+    fn replace_sets_the_old_item_aside() {
+        let dir = Dir::new("replace-aside");
+        fs::write(dir.path("dest/a.txt"), "old").unwrap();
+        fs::create_dir(dir.path("dest/sub")).unwrap();
+        fs::write(dir.path("dest/sub/only-here.txt"), "keep me").unwrap();
+        let report = run(
+            &dir.transfer(&["src/a.txt", "src/sub"], "dest", Mode::Copy),
+            Clash::Replace,
+            &Progress::default(),
+        );
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(dir.read("dest/a.txt"), "alpha");
+        assert_eq!(dir.read("dest/a (replaced).txt"), "old");
+        assert_eq!(dir.read("dest/sub/b.txt"), "beta");
+        assert_eq!(
+            dir.read("dest/sub (replaced)/only-here.txt"),
+            "keep me",
+            "a replaced folder keeps what the new one doesn't have"
+        );
+        assert_eq!(
+            report.replaced,
+            [
+                (dir.path("dest/a.txt"), dir.path("dest/a (replaced).txt")),
+                (dir.path("dest/sub"), dir.path("dest/sub (replaced)")),
+            ]
+        );
+
+        // Again: the first set-aside name is taken now.
+        fs::write(dir.path("src/a.txt"), "newer").unwrap();
+        let report = run(
+            &dir.transfer(&["src/a.txt"], "dest", Mode::Move),
+            Clash::Replace,
+            &Progress::default(),
+        );
+        assert_eq!(dir.read("dest/a.txt"), "newer");
+        assert_eq!(dir.read("dest/a (replaced 2).txt"), "alpha");
+        assert_eq!(dir.read("dest/a (replaced).txt"), "old");
+        assert!(!dir.path("src/a.txt").exists(), "it was moved");
+        assert_eq!(report.replaced.len(), 1);
+        assert!(
+            names_in(&dir.path("dest"))
+                .iter()
+                .all(|n| !n.starts_with('.')),
+            "nothing hidden is left: {:?}",
+            names_in(&dir.path("dest"))
+        );
+    }
+
+    #[test]
+    fn same_named_sources_are_both_kept() {
+        for (mode, clash) in [
+            (Mode::Copy, Clash::Replace),
+            (Mode::Copy, Clash::Skip),
+            (Mode::Move, Clash::Replace),
+            (Mode::Move, Clash::Skip),
+        ] {
+            let dir = Dir::new(&format!("same-names-{mode:?}-{clash:?}"));
+            fs::create_dir(dir.path("other")).unwrap();
+            fs::write(dir.path("other/a.txt"), "other").unwrap();
+            let report = run(
+                &dir.transfer(&["src/a.txt", "other/a.txt"], "dest", mode),
+                clash,
+                &Progress::default(),
+            );
+            assert!(
+                report.failed.is_empty(),
+                "{mode:?} {clash:?}: {:?}",
+                report.failed
+            );
+            assert!(report.replaced.is_empty() && report.skipped.is_empty());
+            assert_eq!(dir.read("dest/a.txt"), "alpha", "{mode:?} {clash:?}");
+            assert_eq!(dir.read("dest/a 2.txt"), "other", "{mode:?} {clash:?}");
+        }
+    }
+
+    #[test]
+    fn replace_refuses_to_set_aside_another_source() {
+        let dir = Dir::new("replace-holds");
+        fs::create_dir(dir.path("dest/sub")).unwrap();
+        fs::write(dir.path("dest/sub/x.txt"), "x").unwrap();
+        let report = run(
+            &dir.transfer(&["src/sub", "dest/sub/x.txt"], "dest", Mode::Move),
+            Clash::Replace,
+            &Progress::default(),
+        );
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert_eq!(report.failed[0].0, dir.path("src/sub"));
+        assert!(dir.path("src/sub/b.txt").exists(), "the refused item stays");
+        assert_eq!(dir.read("dest/x.txt"), "x", "the other one moved");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_refuses_a_link_to_what_it_would_replace() {
+        let dir = Dir::new("replace-link");
+        fs::write(dir.path("dest/a.txt"), "the real one").unwrap();
+        fs::create_dir(dir.path("links")).unwrap();
+        std::os::unix::fs::symlink(dir.path("dest/a.txt"), dir.path("links/a.txt")).unwrap();
+        for mode in [Mode::Copy, Mode::Move] {
+            let report = run(
+                &dir.transfer(&["links/a.txt"], "dest", mode),
+                Clash::Replace,
+                &Progress::default(),
+            );
+            assert_eq!(report.failed.len(), 1, "{mode:?}");
+            assert_eq!(dir.read("dest/a.txt"), "the real one");
+            assert!(
+                !fs::symlink_metadata(dir.path("dest/a.txt"))
+                    .unwrap()
+                    .is_symlink()
+            );
+        }
+    }
+
+    #[test]
+    fn a_taken_target_is_never_written_over() {
+        // As when something takes the name after the clash check.
+        let dir = Dir::new("taken-target");
+        fs::write(dir.path("dest/a.txt"), "old").unwrap();
+        fs::create_dir(dir.path("dest/sub")).unwrap();
+        for mode in [Mode::Copy, Mode::Move] {
+            for (source, target) in [("src/a.txt", "dest/a.txt"), ("src/sub", "dest/sub")] {
+                let result = transfer_one(
+                    &dir.path(source),
+                    &dir.path(target),
+                    mode,
+                    false,
+                    &Progress::default(),
+                );
+                assert!(result.is_err(), "{mode:?} {source}");
+            }
+        }
+        assert_eq!(dir.read("dest/a.txt"), "old");
+        assert!(fs::read_dir(dir.path("dest/sub")).unwrap().next().is_none());
+        assert_eq!(dir.read("src/a.txt"), "alpha");
+        assert_eq!(dir.read("src/sub/b.txt"), "beta");
+        assert_eq!(
+            names_in(&dir.path("dest")),
+            ["a.txt", "sub"],
+            "no copy is left behind"
+        );
+    }
+
+    #[test]
+    fn a_move_across_volumes_keeps_the_original_until_the_copy_is_whole() {
+        let dir = Dir::new("move-by-copy");
+        move_by_copy(
+            &dir.path("src/sub"),
+            &dir.path("dest/sub"),
+            false,
+            &Progress::default(),
+        )
+        .unwrap();
+        assert_eq!(dir.read("dest/sub/b.txt"), "beta");
+        assert!(
+            !dir.path("src/sub").exists(),
+            "the original goes once the copy is in place"
+        );
+
+        // A copy that stops part way leaves the original as it was.
+        let progress = Progress::default();
+        progress.cancel();
+        let result = move_by_copy(
+            &dir.path("src/a.txt"),
+            &dir.path("dest/a.txt"),
+            false,
+            &progress,
+        );
+        assert!(matches!(result, Err(TransferError::Cancelled)));
+        assert_eq!(dir.read("src/a.txt"), "alpha");
+        assert_eq!(names_in(&dir.path("dest")), ["sub"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_move_across_volumes_with_an_unreadable_file_moves_nothing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = Dir::new("move-unreadable");
+        let locked = dir.path("src/sub/locked.txt");
+        fs::write(&locked, "secret").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&locked).is_ok() {
+            return; // Running as root, which reads anything.
+        }
+        let result = move_by_copy(
+            &dir.path("src/sub"),
+            &dir.path("dest/sub"),
+            false,
+            &Progress::default(),
+        );
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(dir.read("src/sub/b.txt"), "beta");
+        assert_eq!(dir.read("src/sub/locked.txt"), "secret");
+        assert!(names_in(&dir.path("dest")).is_empty(), "no partial copy");
+    }
+
+    #[test]
+    fn a_copy_that_differs_from_its_original_is_caught() {
+        let dir = Dir::new("settle");
+        copy_tree(
+            &dir.path("src"),
+            &dir.path("dest/src"),
+            &Progress::default(),
+        )
+        .unwrap();
+        assert!(settle_copy(&dir.path("src"), &dir.path("dest/src")).is_ok());
+        fs::write(dir.path("src/a.txt"), "alpha, changed while it was copied").unwrap();
+        assert!(settle_copy(&dir.path("src"), &dir.path("dest/src")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipes_are_refused_rather_than_waited_on() {
+        let dir = Dir::new("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(dir.path("src/sub/pipe"))
+            .status();
+        if !made.is_ok_and(|status| status.success()) {
+            return;
+        }
+        let (src, dest) = (dir.path("src"), dir.path("dest/src"));
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(copy_tree(&src, &dest, &Progress::default()).is_err());
+        });
+        let refused = receive
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("copying a folder with a pipe in it finishes");
+        assert!(refused);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_tags_and_comments_are_copied() {
+        let dir = Dir::new("xattrs");
+        if xattr::set(dir.path("src/sub"), "user.fffinder-test", b"tagged").is_err() {
+            return; // This file system has no extended attributes.
+        }
+        copy_tree(
+            &dir.path("src/sub"),
+            &dir.path("dest/sub"),
+            &Progress::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            xattr::get(dir.path("dest/sub"), "user.fffinder-test").unwrap(),
+            Some(b"tagged".to_vec())
+        );
+    }
+
+    #[test]
+    fn long_names_still_have_room_to_stage() {
+        let name = format!("{}.txt", "é".repeat(120));
+        assert_eq!(name.len(), 244);
+        let staged = staging_path(&Path::new("/a").join(&name));
+        let staged = staged.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(staged.len() <= 255, "{} bytes", staged.len());
     }
 
     #[test]

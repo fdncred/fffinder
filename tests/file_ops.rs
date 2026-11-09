@@ -80,10 +80,214 @@ fn replacing_on_paste(cx: &mut TestAppContext) {
     );
     ui.press(&cmd("v"));
     ui.click("clash-replace");
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+    assert_eq!(read(fx.path("Projects/notes.txt")), "plain notes\n");
+    // What was replaced isn't deleted: it's in the Trash.
+    let trash = common::trash_dir(&fx.dir);
+    assert_eq!(read(trash.join("notes (replaced).txt")), "older");
+    assert!(!fx.path("Projects/notes (replaced).txt").exists());
+
+    // Undo takes back the paste, and the next Undo puts back what it replaced,
+    // under its own name.
+    ui.press(&cmd("z"));
+    assert!(!fx.path("Projects/notes.txt").exists());
+    ui.press(&cmd("z"));
+    assert_eq!(read(fx.path("Projects/notes.txt")), "older");
+    assert!(!fx.path("Projects/notes (replaced).txt").exists());
     assert_eq!(
-        std::fs::read_to_string(fx.path("Projects/notes.txt")).unwrap(),
-        "plain notes\n"
+        read(fx.path("notes.txt")),
+        "plain notes\n",
+        "the copy's source is untouched"
     );
+}
+
+#[gpui_kit::test]
+fn replacing_a_folder_keeps_the_old_one_whole(cx: &mut TestAppContext) {
+    let fx = Fixture::new("replace-folder");
+    std::fs::create_dir_all(fx.path("Elsewhere/atlas")).unwrap();
+    std::fs::write(fx.path("Elsewhere/atlas/new.txt"), "new").unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.go_to(&fx.path("Elsewhere"));
+    ui.select("atlas");
+    ui.press(&cmd("x"));
+    ui.go_to(&fx.path("Projects"));
+    ui.press(&cmd("v"));
+    assert!(ui.dialog_open());
+    ui.click("clash-replace");
+    assert!(fx.path("Projects/atlas/new.txt").exists());
+    assert!(!fx.path("Elsewhere/atlas").exists(), "it was moved");
+    let old = common::trash_dir(&fx.dir).join("atlas (replaced)/Project Atlas.txt");
+    assert_eq!(
+        std::fs::read_to_string(old).unwrap(),
+        "atlas",
+        "the old folder is in the Trash with everything in it"
+    );
+}
+
+#[gpui_kit::test]
+fn moving_onto_a_taken_name_skips_keeps_both_or_replaces(cx: &mut TestAppContext) {
+    let fx = Fixture::new("move-clash");
+    std::fs::write(fx.path("Projects/notes.txt"), "older").unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+    let cut_notes_into_projects = |ui: &mut Ui| {
+        ui.go_to(&fx.dir);
+        ui.select("notes.txt");
+        ui.press(&cmd("x"));
+        ui.go_to(&fx.path("Projects"));
+        ui.press(&cmd("v"));
+        assert!(ui.dialog_open(), "a name clash asks first");
+    };
+
+    cut_notes_into_projects(&mut ui);
+    ui.click("clash-skip");
+    assert_eq!(
+        read(fx.path("notes.txt")),
+        "plain notes\n",
+        "Skip moves nothing"
+    );
+    assert_eq!(read(fx.path("Projects/notes.txt")), "older");
+
+    cut_notes_into_projects(&mut ui);
+    ui.click("clash-keep");
+    assert!(!fx.path("notes.txt").exists());
+    assert_eq!(read(fx.path("Projects/notes 2.txt")), "plain notes\n");
+    assert_eq!(read(fx.path("Projects/notes.txt")), "older");
+
+    // Put it back to replace this time.
+    std::fs::rename(fx.path("Projects/notes 2.txt"), fx.path("notes.txt")).unwrap();
+    cut_notes_into_projects(&mut ui);
+    ui.click("clash-replace");
+    assert!(!fx.path("notes.txt").exists());
+    assert_eq!(read(fx.path("Projects/notes.txt")), "plain notes\n");
+    assert_eq!(
+        read(common::trash_dir(&fx.dir).join("notes (replaced).txt")),
+        "older"
+    );
+}
+
+#[gpui_kit::test]
+fn pasting_items_with_one_name_keeps_them_all(cx: &mut TestAppContext) {
+    let fx = Fixture::new("same-names");
+    std::fs::write(fx.path("Projects/notes.txt"), "project notes").unwrap();
+    std::fs::create_dir(fx.path("Dest")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    // Paths copied as text, as from search results or a terminal.
+    let paths = format!(
+        "{}\n{}",
+        fx.path("notes.txt").display(),
+        fx.path("Projects/notes.txt").display()
+    );
+    ui.cx
+        .write_to_clipboard(gpui_kit::ClipboardItem::new_string(paths));
+    ui.go_to(&fx.path("Dest"));
+    ui.press(&cmd("v"));
+    assert!(!ui.dialog_open(), "nothing is in the way yet");
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap();
+    assert_eq!(read(fx.path("Dest/notes.txt")), "plain notes\n");
+    assert_eq!(
+        read(fx.path("Dest/notes 2.txt")),
+        "project notes",
+        "the second doesn't replace the first"
+    );
+}
+
+#[gpui_kit::test]
+fn duplicating_a_folder_copies_everything_in_it(cx: &mut TestAppContext) {
+    let fx = Fixture::new("duplicate-folder");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("Projects");
+    ui.press(&cmd("d"));
+    assert_eq!(
+        std::fs::read_to_string(fx.path("Projects copy/atlas/Project Atlas.txt")).unwrap(),
+        "atlas"
+    );
+    assert_eq!(ui.selected(), ["Projects copy"]);
+    ui.select("Projects");
+    ui.press(&cmd("d"));
+    assert!(fx.path("Projects copy 2/atlas").is_dir());
+    ui.press(&cmd("z"));
+    assert!(
+        !fx.path("Projects copy 2").exists(),
+        "Undo moves the copy to the Trash"
+    );
+    assert!(fx.path("Projects/atlas/Project Atlas.txt").exists());
+}
+
+#[gpui_kit::test]
+fn new_folder_takes_the_next_free_name(cx: &mut TestAppContext) {
+    let fx = Fixture::new("new-folder-names");
+    std::fs::create_dir(fx.path("untitled folder")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nowhere", fx.path("untitled folder 2")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.press(&cmd("shift-n"));
+    ui.press("escape");
+    let made = if cfg!(unix) {
+        "untitled folder 3"
+    } else {
+        "untitled folder 2"
+    };
+    assert!(fx.path(made).is_dir(), "{:?}", ui.names());
+    assert!(fx.path("untitled folder").is_dir());
+    ui.press(&cmd("z"));
+    assert!(!fx.path(made).exists(), "Undo moves it to the Trash");
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn renaming_onto_a_broken_link_is_refused(cx: &mut TestAppContext) {
+    let fx = Fixture::new("rename-broken-link");
+    std::os::unix::fs::symlink("nowhere", fx.path("ghost.txt")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.select("notes.txt");
+    ui.press("f2");
+    ui.press(&cmd("a"));
+    ui.type_text("ghost.txt");
+    ui.press("enter");
+    assert!(fx.path("notes.txt").exists(), "the name was taken");
+    assert_eq!(
+        std::fs::read_link(fx.path("ghost.txt")).unwrap(),
+        std::path::Path::new("nowhere"),
+        "and the link is still there"
+    );
+}
+
+#[cfg(unix)]
+#[gpui_kit::test]
+fn deleting_a_link_to_a_folder_leaves_the_folder(cx: &mut TestAppContext) {
+    let fx = Fixture::new("delete-link");
+    std::os::unix::fs::symlink(fx.path("Projects"), fx.path("Shortcut")).unwrap();
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("Shortcut");
+    ui.press(&cmd("alt-backspace"));
+    ui.click("ok");
+    assert!(fx.path("Shortcut").symlink_metadata().is_err());
+    assert!(
+        fx.path("Projects/atlas/Project Atlas.txt").exists(),
+        "only the link is gone"
+    );
+}
+
+#[gpui_kit::test]
+fn undo_takes_back_new_files_and_links(cx: &mut TestAppContext) {
+    let fx = Fixture::new("undo-made");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.press(&cmd("alt-n"));
+    ui.type_text("todo");
+    ui.click("new-file-create");
+    assert!(fx.path("todo.txt").is_file());
+    ui.press(&cmd("z"));
+    assert!(!fx.path("todo.txt").exists());
+    assert!(common::trash_dir(&fx.dir).join("todo.txt").exists());
+
+    ui.select("Roadmap.md");
+    ui.dispatch(MakeSymlink);
+    assert!(fx.path("Roadmap.md link").symlink_metadata().is_ok());
+    ui.press(&cmd("z"));
+    assert!(fx.path("Roadmap.md link").symlink_metadata().is_err());
+    assert!(fx.path("Roadmap.md").exists(), "the link's target stays");
 }
 
 #[gpui_kit::test]

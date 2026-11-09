@@ -1,4 +1,4 @@
-//! The floating sidebar: Recents, Favorites, Smart Folders, Locations, the
+//! The sidebar: Recents, Favorites, Smart Folders, Locations, the
 //! Trash, and index status. With the folder tree on (see folder_tree.rs),
 //! Favorites and Locations open in place to show the folders inside them.
 //! The rows are drawn from a list of lines, and only the lines on screen are
@@ -365,19 +365,19 @@ impl Finder {
                 self.tree_keys(keys, cx)
             });
 
+        // Edge to edge, as in macOS 27 and the Windows and Linux file
+        // managers: attached to the window, with a line between it and the
+        // files rather than a floating panel inset from the edges.
         div()
             .w(ui(self.sidebar_width_shown(window)))
             .h_full()
             .flex_shrink_0()
-            .p(ui(8.))
-            .pr(ui(0.))
             .child(
                 v_flex()
                     .id("sidebar")
                     .size_full()
-                    .rounded(ui(14.))
                     .bg(bg)
-                    .border_1()
+                    .border_r_1()
                     .border_color(border)
                     .overflow_hidden()
                     // Drop folders here to add them to Favorites. A folder
@@ -398,7 +398,7 @@ impl Finder {
                     }))
                     .child(window_drag_area(
                         h_flex()
-                            .h(ui(TOOLBAR_HEIGHT - 8.))
+                            .h(ui(TOOLBAR_HEIGHT))
                             .flex_shrink_0()
                             .justify_end()
                             .px(ui(6.))
@@ -883,7 +883,16 @@ impl Finder {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let spinner = || Spinner::new().xsmall().color(muted).into_any_element();
+        let held = crate::disk_access::index_held(cx);
         let (icon, text) = match self.index_activity() {
+            // Nothing is indexed yet, and the click below says why.
+            _ if held => (
+                Icon::new(Lucide::Lock)
+                    .with_size(ui(14.))
+                    .text_color(muted)
+                    .into_any_element(),
+                "Indexing paused".to_string(),
+            ),
             Some(IndexActivity::Scanning(n)) => {
                 (spinner(), format!("Indexing… {}", group_digits(n)))
             }
@@ -907,7 +916,28 @@ impl Finder {
             .text_size(ui(11.))
             .text_color(muted)
             .child(icon)
-            .child(div().flex_1().truncate().child(text))
+            .child(
+                div()
+                    .id("index-status")
+                    .flex_1()
+                    .truncate()
+                    .child(text)
+                    .when(held, |this| {
+                        this.cursor_pointer()
+                            .hover(|s| s.text_color(theme.foreground))
+                            .tooltip(|window, cx| {
+                                Tooltip::new(
+                                    "Indexing waits for Full Disk Access. Click to turn it on, \
+                                     or to index without it.",
+                                )
+                                .build(window, cx)
+                            })
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.ask_for_full_disk_access(window, cx)
+                            }))
+                    })
+                    .test_support(),
+            )
             .child(
                 div()
                     .id("index-settings")

@@ -6,8 +6,9 @@
 
 use crate::rename::{self, MoveError};
 use crate::trash_bin::{Bin, TrashError, Trashed};
+use fffinder_core::ops;
 use gpui_kit::{App, Global};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 /// The most operations Undo remembers.
@@ -22,6 +23,10 @@ pub enum Change {
     Created(Vec<PathBuf>),
     /// Items moved to the Trash. Undo puts them back.
     Trashed(Vec<Trashed>),
+    /// Items Replace set aside and moved to the Trash, each with the path it
+    /// had before. Undo puts them back there once it's free again, as it is
+    /// after undoing what replaced them.
+    Replaced(Vec<(Trashed, PathBuf)>),
 }
 
 impl Change {
@@ -30,6 +35,7 @@ impl Change {
             Change::Moved(pairs) => pairs.is_empty(),
             Change::Created(paths) => paths.is_empty(),
             Change::Trashed(items) => items.is_empty(),
+            Change::Replaced(items) => items.is_empty(),
         }
     }
 }
@@ -246,6 +252,48 @@ pub fn reverse(change: &Change, bin: &dyn Bin) -> Result<Reversed, Box<Stopped>>
                 }))
             }
         },
+        Change::Replaced(items) => {
+            let trashed: Vec<Trashed> = items.iter().map(|(item, _)| item.clone()).collect();
+            match bin.restore(&trashed) {
+                Ok(back) => {
+                    let back: Vec<PathBuf> = back
+                        .into_iter()
+                        .zip(items)
+                        .map(|(aside, (_, name))| named_back(aside, name))
+                        .collect();
+                    Ok(Reversed {
+                        opposite: Change::Created(back.clone()),
+                        back,
+                    })
+                }
+                Err(err) => {
+                    let (left, restored): (Vec<_>, Vec<_>) =
+                        items.iter().cloned().partition(|(item, _)| item.in_trash());
+                    let back: Vec<PathBuf> = restored
+                        .into_iter()
+                        .filter_map(|(item, name)| Some(named_back(item.original?, &name)))
+                        .collect();
+                    Err(Box::new(Stopped {
+                        done: Reversed {
+                            opposite: Change::Created(back.clone()),
+                            back,
+                        },
+                        left: Change::Replaced(left),
+                        error: err.into(),
+                    }))
+                }
+            }
+        }
+    }
+}
+
+/// A replaced item, just put back from the Trash at `aside`, renamed to
+/// `name`, the name it had before it was replaced, when nothing has that.
+/// Otherwise it keeps "name (replaced)", and nothing is overwritten.
+fn named_back(aside: PathBuf, name: &Path) -> PathBuf {
+    match ops::rename_no_replace(&aside, name) {
+        Ok(()) => name.to_path_buf(),
+        Err(_) => aside,
     }
 }
 

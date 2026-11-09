@@ -5,11 +5,13 @@
 //! `preview.rs`).
 
 use super::Finder;
+use super::explore::{QuickLookMode, mode_buttons};
 use super::pdf::Surface;
 use super::preview::{preview_area, preview_caption, text_size_buttons, text_size_handler};
 use crate::actions::{
-    MoveDown, MoveLeft, MoveRight, MoveUp, NextPdfPage, PreviewTextBigger, PreviewTextReset,
-    PreviewTextSmaller, PreviousPdfPage, QUICK_LOOK, QuickLook,
+    ExploreBack, ExploreInto, MoveDown, MoveLeft, MoveRight, MoveUp, NextPdfPage,
+    PreviewTextBigger, PreviewTextReset, PreviewTextSmaller, PreviousPdfPage, QUICK_LOOK,
+    QuickLook, QuickLookExplore,
 };
 use crate::theme::ui;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -72,6 +74,28 @@ impl QuickLookWindow {
             .ok();
     }
 
+    /// Space or Cmd-Space: the mode Quick Look is in closes it, and the
+    /// other switches to that mode.
+    fn show_as(&mut self, mode: QuickLookMode, window: &mut Window, cx: &mut Context<Self>) {
+        match self.finder.upgrade() {
+            Some(finder) if finder.read(cx).quick_look_mode() != mode => {
+                finder.update(cx, |this, cx| this.set_quick_look_mode(mode, cx));
+            }
+            _ => self.close(window, cx),
+        }
+    }
+
+    /// Escape: back out of the value explore mode is in, or else close.
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let went_back = self
+            .finder
+            .upgrade()
+            .is_some_and(|finder| finder.update(cx, |this, cx| this.explore_back(cx)));
+        if !went_back {
+            self.close(window, cx);
+        }
+    }
+
     fn page(&mut self, by: isize, cx: &mut Context<Self>) {
         self.with_finder(cx, |finder, _, cx| {
             finder.step_pdf_page(by, Surface::QuickLook, cx)
@@ -97,7 +121,18 @@ impl Render for QuickLookWindow {
             .bg(background)
             .track_focus(&self.focus)
             .key_context(QUICK_LOOK)
-            .on_action(cx.listener(|this, _: &QuickLook, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &QuickLook, window, cx| {
+                this.show_as(QuickLookMode::Text, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &QuickLookExplore, window, cx| {
+                this.show_as(QuickLookMode::Explore, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ExploreBack, window, cx| this.back(window, cx)))
+            .on_action(cx.listener(|this, _: &ExploreInto, _, cx| {
+                if let Some(finder) = this.finder.upgrade() {
+                    finder.update(cx, |this, cx| this.explore_into(cx));
+                }
+            }))
             .on_action(cx.listener(|this, _: &MoveUp, _, cx| this.step(0, -1, cx)))
             .on_action(cx.listener(|this, _: &MoveDown, _, cx| this.step(0, 1, cx)))
             .on_action(cx.listener(|this, _: &MoveLeft, _, cx| this.step(-1, 0, cx)))
@@ -120,6 +155,7 @@ impl Render for QuickLookWindow {
             .preview_of(&entry)
             .has_text()
             .then(|| browser.config.preview_font_size());
+        let modes = Finder::can_explore(&entry, cx).then_some(browser.quick_look_mode());
         let (open_path, reveal_path) = (entry.path.clone(), entry.path.clone());
         let (open_finder, finder_window) = (finder.downgrade(), self.finder_window);
         root.child(div().flex_1().min_h_0().w_full().child(preview_area(
@@ -130,8 +166,11 @@ impl Render for QuickLookWindow {
             cx,
         )))
         .child(
+            // When the caption and the controls don't fit on one line, the
+            // controls move to a second one, so the caption is never cut off.
             h_flex()
                 .flex_shrink_0()
+                .flex_wrap()
                 .gap(ui(8.))
                 .px(ui(10.))
                 .py(ui(6.))
@@ -139,40 +178,50 @@ impl Render for QuickLookWindow {
                 .border_color(border)
                 .child(
                     div()
-                        .flex_1()
+                        .id("ql-caption")
+                        .test_support()
+                        .flex_grow_1()
                         .min_w_0()
-                        .truncate()
                         .child(preview_caption(browser, &entry, cx)),
                 )
-                .when_some(text_size, |this, size| {
-                    this.child(text_size_buttons(&finder, size))
-                })
                 .child(
-                    Button::new("ql-reveal")
-                        .small()
-                        .label(super::menus::reveal_label())
-                        .on_click(move |_, _, cx| crate::system::reveal(&reveal_path, cx)),
-                )
-                .child(
-                    Button::new("ql-open")
-                        .small()
-                        .primary()
-                        .label("Open")
-                        .on_click(move |_, window, cx| {
-                            window.remove_window();
-                            let (finder, path) = (open_finder.clone(), open_path.clone());
-                            finder_window
-                                .update(cx, |_, window, cx| {
-                                    window.activate_window();
-                                    finder
-                                        .update(cx, |this, cx| {
-                                            // A file no app claims opens in an editor.
-                                            this.open_files(vec![path], window, cx)
+                    h_flex()
+                        .id("ql-controls")
+                        .test_support()
+                        .flex_shrink_0()
+                        .ml_auto()
+                        .gap(ui(8.))
+                        .when_some(text_size, |this, size| {
+                            this.child(text_size_buttons(&finder, size))
+                        })
+                        .when_some(modes, |this, mode| this.child(mode_buttons(&finder, mode)))
+                        .child(
+                            Button::new("ql-reveal")
+                                .small()
+                                .label(super::menus::reveal_label())
+                                .on_click(move |_, _, cx| crate::system::reveal(&reveal_path, cx)),
+                        )
+                        .child(
+                            Button::new("ql-open")
+                                .small()
+                                .primary()
+                                .label("Open")
+                                .on_click(move |_, window, cx| {
+                                    window.remove_window();
+                                    let (finder, path) = (open_finder.clone(), open_path.clone());
+                                    finder_window
+                                        .update(cx, |_, window, cx| {
+                                            window.activate_window();
+                                            finder
+                                                .update(cx, |this, cx| {
+                                                    // A file no app claims opens in an editor.
+                                                    this.open_files(vec![path], window, cx)
+                                                })
+                                                .ok();
                                         })
                                         .ok();
-                                })
-                                .ok();
-                        }),
+                                }),
+                        ),
                 ),
         )
     }
@@ -187,14 +236,14 @@ impl Finder {
     /// Open Quick Look in a window of its own over this one, or close it.
     pub(super) fn toggle_quick_look_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(open) = self.quick_look_window.take() {
-            self.quick_look_open = false;
+            self.quick_look_closed();
             open.update(cx, |_, window, _| window.remove_window()).ok();
             return;
         }
         // Open but without a window yet: it opens after this update, and a
         // second press before then means it shouldn't.
         if self.quick_look_open {
-            self.quick_look_open = false;
+            self.quick_look_closed();
             return;
         }
         let Some(entry) = self.primary_entry() else {
@@ -235,14 +284,14 @@ impl Finder {
                     this.quick_look_window = Some(handle);
                     cx.observe_release(&view, |this, _, cx| {
                         this.quick_look_window = None;
-                        this.quick_look_open = false;
+                        this.quick_look_closed();
                         this.forget_pdf_surface(Surface::QuickLook);
                         cx.notify();
                     })
                     .detach();
                 }
                 Err(err) => {
-                    this.quick_look_open = false;
+                    this.quick_look_closed();
                     log::error!("opening Quick Look: {err}");
                 }
             });

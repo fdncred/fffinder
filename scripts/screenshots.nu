@@ -15,20 +15,40 @@ def main [
     cd $root
     ^cargo build --example screenshot
     let tool = target-dir | path join debug examples screenshot
+    let home = $nu.home-dir
     let shots = [
         {file: icons-dark.png, args: [--view icons --dark]}
         {file: list-light.png, args: [--view list --light --select 1]}
         {file: search-dark.png, args: [--view list --dark --scope-folder --query proj]}
         {file: gallery-dark.png, args: [--view gallery --dark --select 1]}
-        {file: quicklook-dark.png, args: [--view icons --dark --select 1 --quicklook]}
+        {file: quicklook-dark.png, args: [--view icons --dark --select 2 --quicklook]}
         {file: nushell-dark.png, args: [--view list --dark --nu 'where type == file | select name size kind | sort-by size --reverse']}
+        # The demo is a Favorite here, so the tree opens it there rather
+        # than under the temporary folder it really lives in.
+        {
+            file: tree-dark.png
+            dir: ($demo | path join Projects)
+            args: [--view list --dark]
+            settings: {
+                sidebar_mode: tree
+                favorites: [/Applications $demo ($home | path join Documents) ($home | path join Downloads)]
+            }
+        }
     ]
+    let base = $demo | path dirname
     let written = $shots | each {|shot|
         let file = $out | path join $shot.file
-        ^$tool $file --dir $demo ...$shot.args | ignore
+        # Each shot starts from the default settings plus its own, so the
+        # pictures don't depend on how this computer is set up.
+        let config = $base | path join config ($shot.file | path parse | get stem)
+        mkdir $config
+        $shot.settings? | default {} | save ($config | path join settings.json)
+        with-env {FFFINDER_CONFIG_DIR: $config, FFFINDER_DATA_DIR: ($base | path join data)} {
+            ^$tool $file --dir ($shot.dir? | default $demo) ...$shot.args | ignore
+        }
         $file
     }
-    rm --recursive --force ($demo | path dirname)
+    rm --recursive --force $base
     $written
 }
 
@@ -50,6 +70,11 @@ def make-demo []: nothing -> path {
     "# Roadmap\n\n1. Fuzzy search\n2. Nushell everywhere\n" | save ($demo | path join Roadmap.md)
     "Project Atlas\n" | save ($demo | path join Projects 'Project Atlas.txt')
     "Project Borealis\n" | save ($demo | path join Projects 'Project Borealis.md')
+    # Folders inside folders, for the sidebar's tree.
+    for dir in [Atlas Borealis] {
+        mkdir ($demo | path join Projects $dir Drafts)
+        "Kickoff\n" | save ($demo | path join Projects $dir 'Kickoff.md')
+    }
     cp (repo-root | path join assets app-icon.svg) ($demo | path join Assets Logo.svg)
     $demo
 }

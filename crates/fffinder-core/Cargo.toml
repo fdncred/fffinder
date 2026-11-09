@@ -29,6 +29,9 @@ fs4 = "1"
 hayro = "0.8"
 
 [target.'cfg(unix)'.dependencies]
+# Renames that refuse a taken name (`renamex_np`, `renameat2`), so a copy or
+# move never replaces an item that appeared since its name was checked.
+libc = "0.2"
 # Owner and group names for Get Info.
 uzers = "0.12"
 # Extended attributes: where a download came from, and macOS's last opened date.

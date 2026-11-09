@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{Fixture, Ui, cmd};
+use common::{Fixture, Open, Ui, cmd};
+use fffinder::finder::QuickLookMode;
 use fffinder::model::Location;
 use fffinder_core::ViewMode;
 use gpui_kit::TestAppContext;
@@ -362,6 +363,107 @@ fn typing_jumps_to_matching_names(cx: &mut TestAppContext) {
         2,
         "the folder opens to the right"
     );
+}
+
+#[gpui_kit::test]
+fn quick_look_footer_wraps_instead_of_cutting_the_caption(cx: &mut TestAppContext) {
+    let fx = Fixture::new("ql-footer");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("notes.txt");
+    ui.press("space");
+    ui.in_quick_look(|ui| {
+        ui.resize(1400., 500.);
+        let caption = ui.snapshot("ql-caption").bounds();
+        let controls = ui.snapshot("ql-controls").bounds();
+        assert!(
+            controls.top() < caption.bottom(),
+            "a wide window has one footer line: {caption:?} {controls:?}"
+        );
+
+        ui.resize(420., 500.);
+        let caption = ui.snapshot("ql-caption").bounds();
+        let controls = ui.snapshot("ql-controls").bounds();
+        assert!(
+            controls.top() >= caption.bottom(),
+            "a narrow one moves the controls under the caption: {caption:?} {controls:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn quick_look_explores_structured_files(cx: &mut TestAppContext) {
+    let Some(nu) = fffinder::nushell::find_nu(None) else {
+        eprintln!("nu not installed; skipping");
+        return;
+    };
+    let fx = Fixture::new("explore");
+    std::fs::write(
+        fx.path("app.json"),
+        r#"{"name": "fff", "deps": {"serde": {"version": "1"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(fx.path("broken.json"), r#"{"name": "#).unwrap();
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        Open {
+            nu: Some(nu),
+            ..Default::default()
+        },
+    );
+    let crumb = |depth: usize| ("explore-crumb", depth);
+    ui.select("app.json");
+    ui.press(&cmd("space"));
+    assert!(ui.read(|f| f.quick_look_is_open()));
+    assert_eq!(ui.read(|f| f.quick_look_mode()), QuickLookMode::Explore);
+    ui.in_quick_look(|ui| {
+        assert!(ui.exists(crumb(0)), "Cmd-Space explores the data");
+        ui.press("down");
+        ui.press("enter");
+        assert!(ui.exists(crumb(1)), "Return goes into deps");
+        ui.press("enter");
+        assert!(ui.exists(crumb(2)), "and into serde");
+        ui.click(crumb(0));
+        assert!(!ui.exists(crumb(1)), "the path goes back to the top");
+        ui.press("enter");
+        assert!(ui.exists(crumb(1)), "the cursor stayed on deps");
+        ui.press("escape");
+        assert!(!ui.exists(crumb(1)), "Escape goes back out");
+        ui.press("space");
+    });
+    assert!(
+        ui.read(|f| f.quick_look_is_open()),
+        "Space switches to text"
+    );
+    assert_eq!(ui.read(|f| f.quick_look_mode()), QuickLookMode::Text);
+    ui.in_quick_look(|ui| {
+        assert!(!ui.exists(crumb(0)));
+        ui.press(&cmd("space"));
+        assert!(ui.exists(crumb(0)), "and Cmd-Space back to explore");
+        ui.press("escape");
+    });
+    assert!(
+        !ui.read(|f| f.quick_look_is_open()),
+        "Escape at the top closes Quick Look"
+    );
+
+    // Arrows still move through the items where there's no grid.
+    ui.select("notes.txt");
+    ui.press(&cmd("space"));
+    ui.in_quick_look(|ui| ui.press("right"));
+    assert_eq!(ui.selected(), ["Projects"]);
+
+    // A file Nushell can't parse says why, and Space still shows its text.
+    ui.select("broken.json");
+    ui.in_quick_look(|ui| {
+        assert!(
+            ui.exists("explore-failure"),
+            "a broken file explains itself"
+        );
+        ui.press("space");
+        assert!(!ui.exists("explore-failure"), "Space shows the text");
+    });
+    assert!(ui.read(|f| f.quick_look_is_open()));
 }
 
 #[gpui_kit::test]
