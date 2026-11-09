@@ -1,4 +1,4 @@
-//! The floating sidebar: Recents, Favorites, Smart Folders, Locations, the
+//! The sidebar: Recents, Favorites, Smart Folders, Locations, the
 //! Trash, and index status. With the folder tree on (see folder_tree.rs),
 //! Favorites and Locations open in place to show the folders inside them.
 //! The rows are drawn from a list of lines, and only the lines on screen are
@@ -365,19 +365,19 @@ impl Finder {
                 self.tree_keys(keys, cx)
             });
 
+        // Edge to edge, as in macOS 27 and the Windows and Linux file
+        // managers: attached to the window, with a line between it and the
+        // files rather than a floating panel inset from the edges.
         div()
             .w(ui(self.sidebar_width_shown(window)))
             .h_full()
             .flex_shrink_0()
-            .p(ui(8.))
-            .pr(ui(0.))
             .child(
                 v_flex()
                     .id("sidebar")
                     .size_full()
-                    .rounded(ui(14.))
                     .bg(bg)
-                    .border_1()
+                    .border_r_1()
                     .border_color(border)
                     .overflow_hidden()
                     // Drop folders here to add them to Favorites. A folder
@@ -398,7 +398,7 @@ impl Finder {
                     }))
                     .child(window_drag_area(
                         h_flex()
-                            .h(ui(TOOLBAR_HEIGHT - 8.))
+                            .h(ui(TOOLBAR_HEIGHT))
                             .flex_shrink_0()
                             .justify_end()
                             .px(ui(6.))

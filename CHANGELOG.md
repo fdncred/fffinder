@@ -10,6 +10,7 @@ All notable changes to fffinder are listed here. The format follows [Keep a Chan
 
 ### Changed
 
+- The sidebar runs edge to edge, attached to the window with a line beside it, as sidebars do again in macOS 27 Golden Gate and in the Windows and Linux file managers, instead of floating inset from the window's edges.
 - CSV, JSON, TOML, YAML, XML, INI, and the other structured files that are text preview as colored text in the gallery, the column view, the Preview Pane, and Quick Look, instead of as a Nushell table whose nested values couldn't be opened. SQLite databases, spreadsheets, MessagePack, and binary plists still preview as a table. NUON files are colored by `nu-highlight`, like `.nu` scripts.
 - Code previews use bat's grammars instead of syntect's own, which adds TOML, INI, CSV, TSV, and many other languages.
 - The Nushell table previews, and explore mode, load the plugins registered with `plugin add`, so formats a plugin reads, such as INI with `nu_plugin_formats`, open as data.
