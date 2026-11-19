@@ -4,13 +4,14 @@ This file lists every notable change to fffinder. The format follows [Keep a Cha
 
 ## [0.5.2] - 2026-11-19
 
-This release takes items out of the search index as soon as they move to the Trash or are deleted, so searches and Recents no longer list them, and with watching off, what Put Back or Undo brings back returns to the index at once.
+This release takes items out of the search index as soon as they move to the Trash or are deleted, so searches and Recents no longer list them, and with watching off, what Put Back or Undo brings back returns to the index at once. On macOS, fffinder no longer asks for Full Disk Access at every launch on a Mac whose file modes keep it out of the privacy database.
 
 ### Fixed
 
 - Items moved to the Trash or deleted, including what Undo or Redo moves to the Trash, now leave the search index as soon as they're gone. They used to stay in it until the file watcher caught up, or until a Rescan with watching off, so Recents, a new search, or a search in another tab could still list them. While an `fff watch` client is connected, a trashed folder's files still wait for the watcher, so each one sends `removed`.
 - Their rows leave the window at once, without waiting for the index. Items inside a folder opened in place in the list view used to stay for up to two seconds.
 - With watching off, items that Put Back, Undo, or Redo brings back from the Trash return to the index at once, instead of after a Rescan.
+- On a Mac where the folder holding the privacy database (`TCC.db`) had been closed to everyone but root, fffinder asked for Full Disk Access at every launch, even after it was granted. A read that file modes refuse no longer counts as missing access, since Full Disk Access can't get past file modes either. The same goes for a Trash closed by its file modes, such as one a `sudo` run left to root, which used to offer the Full Disk Access button. The check also tries Mail and Messages, so a new account with no Trash or Safari data still has a folder to test. ([#11](https://github.com/fdncred/fffinder/pull/11))
 
 ## [0.5.1] - 2026-11-09
 
