@@ -16,9 +16,10 @@ pub const SETTINGS_URL: &str =
 pub enum Access {
     /// A protected place could be read.
     Granted,
-    /// macOS refused a read of a protected place.
+    /// macOS refused a read of a protected place for want of Full Disk Access.
     Denied,
-    /// Nothing protected was there to try, or this isn't macOS.
+    /// Nothing protected was there to try, or only places closed by file
+    /// modes, or this isn't macOS.
     Unknown,
 }
 
@@ -132,8 +133,8 @@ pub(crate) fn is_full_disk_access_refusal(err: &std::io::Error) -> bool {
 ///
 /// # Returns
 ///
-/// [`Access::Denied`] if a read was refused, [`Access::Granted`] if one
-/// worked, or [`Access::Unknown`]
+/// [`Access::Denied`] if macOS refused a read for want of Full Disk Access,
+/// [`Access::Granted`] if one worked, or [`Access::Unknown`]
 #[cfg(any(target_os = "macos", test))]
 fn judge(tries: impl IntoIterator<Item = std::io::Result<()>>) -> Access {
     let mut granted = false;
