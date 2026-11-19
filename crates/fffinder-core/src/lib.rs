@@ -28,8 +28,8 @@ pub use config::{
     SmartFolder, ViewMode,
 };
 pub use engine::{
-    Engine, EngineOptions, FolderStats, GrepHit, GrepModeKind, GrepRequest, GrepResponse,
-    IndexedItem, RootStatus, SearchHit, SearchRequest, SearchResponse, Watch,
+    Engine, EngineOptions, FolderStats, Gone, GrepHit, GrepModeKind, GrepRequest, GrepResponse,
+    IndexedItem, Leaving, RootStatus, SearchHit, SearchRequest, SearchResponse, Watch,
 };
 pub use entry::FileEntry;
 pub use grouping::GroupKey;

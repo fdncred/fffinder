@@ -44,7 +44,7 @@ Paths are always absolute; clients compute relative paths themselves. `size` is 
 
 ```json
 {
-  "app": "fffinder", "version": "0.5.1", "protocol": 1, "pid": 4242,
+  "app": "fffinder", "version": "0.5.2", "protocol": 1, "pid": 4242,
   "watch": true, "scanning": false, "finishing": false, "files": 672643, "dirs": 91420,
   "roots": [
     {"path": "/Users/me", "scanning": false, "finishing": false, "files": 264824, "dirs": 40122, "git_repo": false}
@@ -102,6 +102,8 @@ Stream file changes until the client disconnects.
 | `max_events` | Stop after this many events. |
 
 Lines: `{"kind": "modified", "path": "…"}`, plus `"from"` for `renamed`. Kinds are `created`, `modified`, `removed`, `renamed`, and `rescan`.
+
+fffinder takes what its window moves to the Trash or deletes out of the index before the watcher sees it go, and each file still sends `removed`. While a client watches, a folder removed that way is left for the watcher to take out, so every file inside it sends `removed` too; until then, searches can still list those files.
 
 ### `GET /v1/selection`
 

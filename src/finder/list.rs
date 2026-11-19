@@ -118,6 +118,12 @@ impl Finder {
     /// Reread folder stats for the folder shown and every open subfolder.
     pub(super) fn reload_folder_stats(&mut self, cx: &mut Context<Self>) {
         self.folder_stats.clear();
+        self.refresh_folder_stats(cx);
+    }
+
+    /// Reread folder stats for the folder shown and every open subfolder,
+    /// keeping the ones on screen until the new ones are read.
+    pub(super) fn refresh_folder_stats(&mut self, cx: &mut Context<Self>) {
         let dirs: Vec<PathBuf> = self
             .current_folder()
             .map(Path::to_path_buf)

@@ -987,7 +987,7 @@ These are fff-search's options. Each change applies and saves right away.
 | Control | What it does | Saved as |
 | --- | --- | --- |
 | Follow symbolic links | Index what symbolic links point to. | `search.follow_symlinks` |
-| Watch folders for changes | Keep the indexes current while fffinder runs. Off, they update on Rescan. | `search.watch` |
+| Watch folders for changes | Keep the indexes current while fffinder runs. Off, they update on Rescan, except that items fffinder moves to the Trash or deletes leave them at once, and items it puts back from the Trash return at once. | `search.watch` |
 | Rank recent git changes higher | In a git repository, files from the last 10 commits rank higher. | `search.git_recency` |
 | Index file contents | After scanning, index file contents so content searches skip non-matching files sooner. Uses more memory. | `search.content_index` |
 | Keep often-used files in memory | Load the most-opened files into memory for faster content search. | `search.preload_files` |

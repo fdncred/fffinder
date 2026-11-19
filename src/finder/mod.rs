@@ -1088,22 +1088,28 @@ impl Finder {
                     }
                 }
                 this.rebuild_rows(cx);
-                let found: Vec<usize> = select
-                    .iter()
-                    .filter_map(|path| this.rows.iter().position(|r| r.entry.path == *path))
-                    .collect();
-                if let Some((&first, rest)) = found.split_first() {
-                    this.selection.select_only(first);
-                    for &ix in rest {
-                        this.selection.toggle(ix);
-                    }
-                    this.scroll_to(first);
-                    this.selection_changed(cx);
-                }
+                this.select_paths(&select, cx);
                 cx.notify();
             })
             .ok();
         });
+    }
+
+    /// Select the rows showing `paths`, with the first scrolled into view;
+    /// paths not shown are passed over.
+    fn select_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let found: Vec<usize> = paths
+            .iter()
+            .filter_map(|path| self.rows.iter().position(|r| r.entry.path == *path))
+            .collect();
+        if let Some((&first, rest)) = found.split_first() {
+            self.selection.select_only(first);
+            for &ix in rest {
+                self.selection.toggle(ix);
+            }
+            self.scroll_to(first);
+            self.selection_changed(cx);
+        }
     }
 
     /// Reload quietly what changed on disk: the folder the window shows,
