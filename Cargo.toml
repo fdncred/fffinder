@@ -123,6 +123,10 @@ objc2-quick-look-thumbnailing = "0.3"
 trash = "5"
 
 # Linux: a thumbnailer that hangs is stopped after a while.
+# Unix: errno values, to tell a Full Disk Access refusal from a file mode one.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 wait-timeout = "0.2"
 

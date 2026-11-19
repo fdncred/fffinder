@@ -77,10 +77,19 @@ pub fn check() -> Access {
             "/Library/Application Support/com.apple.TCC/TCC.db",
         ))
         .map(|path| std::fs::File::open(path).map(drop));
-        // Without a home folder, only the database tells.
+        // Without a home folder, only the database tells. Several folders, so
+        // a new account without a Trash or Safari data still has one to try.
         let folders = dirs::home_dir()
             .into_iter()
-            .flat_map(|home| [home.join(".Trash"), home.join("Library/Safari")])
+            .flat_map(|home| {
+                [
+                    "Library/Mail",
+                    "Library/Messages",
+                    "Library/Safari",
+                    ".Trash",
+                ]
+                .map(|folder| home.join(folder))
+            })
             .map(|path| std::fs::read_dir(path).map(drop));
         judge(database.chain(folders))
     }
@@ -90,16 +99,32 @@ pub fn check() -> Access {
     }
 }
 
-/// `EACCES`, which ordinary file modes give. macOS refuses a read that needs
-/// Full Disk Access with `EPERM` instead; Rust calls both `PermissionDenied`.
+/// Whether macOS refused a read for want of Full Disk Access. It refuses with
+/// `EPERM`. Ordinary file modes refuse with `EACCES`, which Full Disk Access
+/// can't get past, so that says nothing about it; Rust calls both
+/// `PermissionDenied`.
+///
+/// # Arguments
+///
+/// * `err` - The error a read of a protected place returned
 #[cfg(any(target_os = "macos", test))]
-const EACCES: i32 = 13;
+pub(crate) fn is_full_disk_access_refusal(err: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
+}
 
-/// Decide from the reads in `tries`, stopping at the first refusal. A place
-/// that isn't there says nothing either way, and neither does one its file
-/// modes close to this user. The folder holding `TCC.db` is normally open to
-/// everyone, but where its modes have been changed to root's alone, reading
-/// it fails even with Full Disk Access.
+/// Decide from the reads in `tries`, stopping at the first refusal for want
+/// of Full Disk Access. A place that isn't there says nothing either way, and
+/// neither does one its file modes close to this user. The folder holding
+/// `TCC.db` is normally open to everyone, but where its modes have been
+/// changed to root's alone, reading it fails even with Full Disk Access.
 ///
 /// # Arguments
 ///
@@ -115,12 +140,7 @@ fn judge(tries: impl IntoIterator<Item = std::io::Result<()>>) -> Access {
     for result in tries {
         match result {
             Ok(()) => granted = true,
-            Err(err)
-                if err.kind() == std::io::ErrorKind::PermissionDenied
-                    && err.raw_os_error() != Some(EACCES) =>
-            {
-                return Access::Denied;
-            }
+            Err(err) if is_full_disk_access_refusal(&err) => return Access::Denied,
             Err(_) => {}
         }
     }
@@ -149,14 +169,17 @@ mod tests {
     use super::{Access, judge};
     use std::io::{Error, ErrorKind};
 
+    /// What macOS returns for a read Full Disk Access would allow.
+    #[cfg(unix)]
     fn refused() -> std::io::Result<()> {
-        Err(Error::from(ErrorKind::PermissionDenied))
+        Err(Error::from_raw_os_error(libc::EPERM))
     }
 
     fn missing() -> std::io::Result<()> {
         Err(Error::from(ErrorKind::NotFound))
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_refused_read_means_no_access() {
         assert_eq!(judge([Ok(()), refused()]), Access::Denied);
@@ -168,17 +191,19 @@ mod tests {
         assert_eq!(judge([missing(), Ok(())]), Access::Granted);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_mode_refusal_tells_nothing() {
         // TCC.db in a folder only root can enter, out of reach even with
         // Full Disk Access.
-        let closed = || Err(Error::from_raw_os_error(super::EACCES));
+        let closed = || Err(Error::from_raw_os_error(libc::EACCES));
         assert_eq!(judge([closed(), Ok(())]), Access::Granted);
         assert_eq!(judge([closed()]), Access::Unknown);
-        // What macOS gives a read Full Disk Access would allow.
+        assert_eq!(judge([closed(), refused()]), Access::Denied);
+        // A refusal without an OS error isn't one macOS makes.
         assert_eq!(
-            judge([closed(), Err(Error::from_raw_os_error(1))]),
-            Access::Denied
+            judge([Err(Error::from(ErrorKind::PermissionDenied))]),
+            Access::Unknown
         );
     }
 
@@ -203,6 +228,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn reading_stops_at_the_first_refusal() {
         let mut made = 0;
