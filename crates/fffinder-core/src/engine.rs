@@ -256,6 +256,71 @@ pub struct GrepResponse {
     pub stopped: bool,
 }
 
+/// Items about to leave the disk, each noted as a folder or not while it can
+/// still be read. A folder is forgotten with a pass over its root's files,
+/// a file with one lookup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Leaving {
+    /// Each path, and whether it's a folder.
+    items: Vec<(PathBuf, bool)>,
+}
+
+impl Leaving {
+    /// Note `paths` before they're trashed or deleted.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Items the caller is about to remove; ones that don't exist
+    ///   are noted as files
+    ///
+    /// # Returns
+    ///
+    /// The items, for [`Leaving::gone`] once the removal is done
+    pub fn note(paths: &[PathBuf]) -> Leaving {
+        Leaving {
+            items: paths
+                .iter()
+                .map(|path| (path.clone(), path.is_dir()))
+                .collect(),
+        }
+    }
+
+    /// The items that left the disk, once the removal is done. One that's
+    /// still there, as after a removal that stopped part way, is dropped.
+    ///
+    /// # Returns
+    ///
+    /// What [`Engine::forget`] takes out of the index
+    pub fn gone(mut self) -> Gone {
+        self.items.retain(|(path, _)| is_gone(path));
+        Gone { items: self.items }
+    }
+}
+
+/// Whether nothing is at `path`, not even a broken link.
+fn is_gone(path: &Path) -> bool {
+    path.symlink_metadata().is_err()
+}
+
+/// Items that left the disk, from [`Leaving::gone`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Gone {
+    /// Each path, and whether it was a folder.
+    items: Vec<(PathBuf, bool)>,
+}
+
+impl Gone {
+    /// The paths that left, spelled as they were noted.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.items.iter().map(|(path, _)| path.as_path())
+    }
+
+    /// Whether nothing left, as when the removal failed at the first item.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
 /// A change subscription from [`Engine::watch`]; dropping it unsubscribes.
 pub struct Watch {
     pub events: std::sync::mpsc::Receiver<Vec<WatchEvent>>,
@@ -1286,6 +1351,72 @@ impl Engine {
         }
     }
 
+    /// Take items that left the disk out of every index now, so searches,
+    /// Recents, and folder sizes stop showing them before a watcher reports
+    /// the removal, or when nothing watches. An item that's back on disk by
+    /// the time it gets to it, as after a quick Undo, is kept.
+    ///
+    /// Each folder costs a pass over its root's files (about 120 ms for 3
+    /// million files) under the index's write lock, taken once per folder
+    /// so searches can run between passes. Run it off the UI thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `gone` - The items, spelled either the way the root was given or
+    ///   the way search results spell it
+    pub fn forget(&self, gone: &Gone) {
+        if gone.is_empty() {
+            return;
+        }
+        // Cloned so no picker lock is waited on while holding the list's.
+        let indexes: Vec<RootIndex> = {
+            let indexes = self.read_indexes();
+            indexes
+                .roots
+                .iter()
+                .chain(&indexes.adhoc)
+                .cloned()
+                .collect()
+        };
+        for index in &indexes {
+            let mut folders = Vec::new();
+            {
+                let Ok(mut guard) = index.picker.write() else {
+                    continue;
+                };
+                let Some(picker) = guard.as_mut() else {
+                    continue;
+                };
+                let base = picker.base_path().to_path_buf();
+                // Each item is looked at again under the lock, so one put
+                // back since can't be lost, and the watcher can't add it
+                // back between the look and the removal.
+                for (path, is_dir) in gone.items.iter().filter(|(p, _)| is_gone(p)) {
+                    let path = index.in_base(path, &base);
+                    // A folder holding the whole root takes all of it.
+                    let path = if *is_dir && base.starts_with(&path) {
+                        base.clone()
+                    } else {
+                        path
+                    };
+                    // One lookup, which also catches a link to a folder
+                    // that was indexed as a file.
+                    if path.starts_with(&base) && !picker.remove_file_by_path(&path) && *is_dir {
+                        folders.push(path);
+                    }
+                }
+            }
+            for folder in &folders {
+                if let Ok(mut guard) = index.picker.write()
+                    && let Some(picker) = guard.as_mut()
+                    && is_gone(folder)
+                {
+                    picker.remove_all_files_in_dir(folder);
+                }
+            }
+        }
+    }
+
     fn read_indexes(&self) -> std::sync::RwLockReadGuard<'_, Indexes> {
         self.indexes.read().unwrap_or_else(|e| e.into_inner())
     }
@@ -1755,6 +1886,110 @@ mod tests {
             both[1], stats,
             "one pass gives what one folder at a time does"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn forgets_what_left_the_disk() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder/deeper")).unwrap();
+        std::fs::write(dir.join("folder/inner.txt"), "123").unwrap();
+        std::fs::write(dir.join("folder/deeper/more.txt"), "12").unwrap();
+        std::fs::write(dir.join("gone.txt"), "1").unwrap();
+        std::fs::write(dir.join("kept.txt"), "1").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        let names = |items: Vec<IndexedItem>| -> Vec<String> {
+            let mut names: Vec<String> = items.iter().map(|i| display_name(&i.path)).collect();
+            names.sort();
+            names
+        };
+        // Search results spell a path the way fff-search spells the root,
+        // which on macOS is `/private/var/…` for a root given as `/var/…`.
+        let found = engine.search(&SearchRequest {
+            query: "gone".into(),
+            limit: 10,
+            ..Default::default()
+        });
+        let gone_as_found = found.hits[0].entry.path.clone();
+        let leaving = Leaving::note(&[
+            gone_as_found.clone(),
+            dir.join("folder"),
+            dir.join("kept.txt"),
+        ]);
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        std::fs::remove_dir_all(dir.join("folder")).unwrap();
+
+        let gone = leaving.gone();
+        let left: Vec<&Path> = gone.paths().collect();
+        assert_eq!(
+            left,
+            [gone_as_found.as_path(), &dir.join("folder")],
+            "kept.txt is still there"
+        );
+        engine.forget(&gone);
+
+        assert_eq!(names(engine.list(false, None, 0)), ["kept.txt"]);
+        assert!(
+            names(engine.list(true, None, 0))
+                .iter()
+                .all(|n| n != "folder" && n != "deeper")
+        );
+        let recents: Vec<String> = engine.recents(10).into_iter().map(|e| e.name).collect();
+        assert_eq!(recents, ["kept.txt"]);
+        assert!(
+            engine.folder_stats(&dir).sizes.is_empty(),
+            "no folder left to add up"
+        );
+        let found = engine.search(&SearchRequest {
+            query: "inner".into(),
+            limit: 10,
+            ..Default::default()
+        });
+        assert!(found.hits.is_empty(), "{:?}", found.hits);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keeps_what_came_back_before_it_was_forgotten() {
+        let dir = std::env::temp_dir().join(format!("fff-engine-back-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("folder/inner.txt"), "1").unwrap();
+        std::fs::write(dir.join("file.txt"), "1").unwrap();
+        let engine = Engine::new(EngineOptions {
+            roots: vec![dir.clone()],
+            app_dirs: Vec::new(),
+            db_dir: None,
+            watch: false,
+            search: Default::default(),
+        });
+        assert!(engine.wait_ready(Duration::from_secs(10)));
+        let leaving = Leaving::note(&[dir.join("file.txt"), dir.join("folder")]);
+        std::fs::remove_file(dir.join("file.txt")).unwrap();
+        std::fs::remove_dir_all(dir.join("folder")).unwrap();
+        let gone = leaving.gone();
+        // As Undo or Put Back does before a queued forget runs.
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("folder/inner.txt"), "1").unwrap();
+        std::fs::write(dir.join("file.txt"), "1").unwrap();
+
+        engine.forget(&gone);
+
+        let mut names: Vec<String> = engine
+            .list(false, None, 0)
+            .iter()
+            .map(|i| display_name(&i.path))
+            .collect();
+        names.sort();
+        assert_eq!(names, ["file.txt", "inner.txt"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

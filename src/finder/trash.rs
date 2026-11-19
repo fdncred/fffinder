@@ -9,8 +9,8 @@ use crate::model::Location;
 use crate::theme::ui;
 use crate::trash_bin::{self, TrashError, TrashStopped, Trashed};
 use crate::undo::{self, Change, Step};
-use fffinder_core::FileEntry;
 use fffinder_core::ops;
+use fffinder_core::{FileEntry, Gone, Leaving};
 use gpui_kit::component::button::{Button, ButtonVariant};
 use gpui_kit::component::input;
 use gpui_kit::component::notification::NotificationType;
@@ -20,6 +20,10 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// What file work did: whether it failed, and which items left the disk,
+/// even when it stopped part way.
+type FileJobOutcome = (Result<(), TrashError>, Gone);
 
 impl Finder {
     /// Cmd+Backspace: move the selection to the Trash, or in the Trash, put
@@ -59,20 +63,22 @@ impl Finder {
         let bin = trash_bin::bin(cx);
         let paths = ops::outermost(&paths);
         cx.spawn_in(window, async move |this, cx| {
-            let gone = paths.clone();
-            let result = cx.background_spawn(async move { bin.trash(&paths) }).await;
+            let tried = paths.clone();
+            let (result, gone) = cx
+                .background_spawn(async move {
+                    let leaving = Leaving::note(&paths);
+                    let result = bin.trash(&paths);
+                    (result, leaving.gone())
+                })
+                .await;
             this.update_in(cx, |this, window, cx| {
-                let next = item_after(&this.rows, &gone);
+                let next = item_after(&this.rows, &tried);
                 // The window leaves a folder that went to the Trash, or was
                 // inside one that did, for the folder that held it.
                 let leave_for = this
                     .current_folder()
-                    .and_then(|current| {
-                        gone.iter().find(|path| {
-                            current.starts_with(path) && path.symlink_metadata().is_err()
-                        })
-                    })
-                    .and_then(|path| path.parent())
+                    .and_then(|current| gone.paths().find(|path| current.starts_with(path)))
+                    .and_then(Path::parent)
                     .map(Path::to_path_buf);
                 this.selection.clear();
                 // What went before a failure can still be put back.
@@ -91,7 +97,7 @@ impl Finder {
                         cx,
                     );
                     // What's still there stays selected, to try again.
-                    let left: Vec<PathBuf> = gone
+                    let left: Vec<PathBuf> = tried
                         .into_iter()
                         .filter(|path| path.symlink_metadata().is_ok())
                         .collect();
@@ -102,7 +108,7 @@ impl Finder {
                 if let Some(parent) = leave_for {
                     this.navigate(Location::Folder(parent), window, cx);
                 }
-                this.files_changed(select, cx);
+                this.items_removed(gone, select, cx);
             })
             .ok();
         })
@@ -130,7 +136,11 @@ impl Finder {
             return;
         }
         let bin = trash_bin::bin(cx);
-        self.run_file_job(move || bin.restore(&items).map(|_| ()), window, cx);
+        self.run_file_job(
+            move || (bin.restore(&items).map(|_| ()), Gone::default()),
+            window,
+            cx,
+        );
     }
 
     /// Delete the selection for good, after asking.
@@ -152,11 +162,16 @@ impl Finder {
         let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
         let paths = ops::outermost(&paths);
         let bin = trash_bin::bin(cx);
+        // What's in the Trash was never indexed.
         self.confirm_danger(title, "Delete", window, cx, move || match &trashed {
-            Some(items) => bin.delete(items),
-            None => paths
-                .iter()
-                .try_for_each(|p| ops::remove_any(p).map_err(TrashError::from)),
+            Some(items) => (bin.delete(items), Gone::default()),
+            None => {
+                let leaving = Leaving::note(&paths);
+                let result = paths
+                    .iter()
+                    .try_for_each(|p| ops::remove_any(p).map_err(TrashError::from));
+                (result, leaving.gone())
+            }
         });
     }
 
@@ -176,7 +191,10 @@ impl Finder {
             "Empty Trash",
             window,
             cx,
-            move || bin.delete(&bin.list()?),
+            move || {
+                let result = bin.list().and_then(|items| bin.delete(&items));
+                (result, Gone::default())
+            },
         );
     }
 
@@ -187,7 +205,7 @@ impl Finder {
         ok: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
-        job: impl Fn() -> Result<(), TrashError> + Clone + Send + 'static,
+        job: impl Fn() -> FileJobOutcome + Clone + Send + 'static,
     ) {
         self.focus_before_dialog(window, cx);
         let view = cx.entity();
@@ -210,7 +228,7 @@ impl Finder {
     /// Run file work off the UI thread, then reload what changed.
     fn run_file_job(
         &mut self,
-        job: impl FnOnce() -> Result<(), TrashError> + Send + 'static,
+        job: impl FnOnce() -> FileJobOutcome + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -218,7 +236,7 @@ impl Finder {
             return;
         }
         cx.spawn_in(window, async move |this, cx| {
-            let result = cx.background_spawn(async move { job() }).await;
+            let (result, gone) = cx.background_spawn(async move { job() }).await;
             this.update_in(cx, |this, window, cx| {
                 if let Err(err) = result {
                     window.push_notification((NotificationType::Error, err.to_string()), cx);
@@ -226,7 +244,7 @@ impl Finder {
                 let selected = this.selected_entries().into_iter().map(|e| e.path);
                 let next = item_after(&this.rows, &selected.collect::<Vec<_>>());
                 this.selection.clear();
-                this.files_changed(next.into_iter().collect(), cx);
+                this.items_removed(gone, next.into_iter().collect(), cx);
             })
             .ok();
         })
@@ -297,9 +315,17 @@ impl Finder {
         let bin = trash_bin::bin(cx);
         cx.spawn_in(window, async move |this, cx| {
             let name = operation.name;
-            let (result, running) = cx
+            let (result, gone, running) = cx
                 .background_spawn(async move {
-                    (undo::reverse(&operation.change, bin.as_ref()), running)
+                    // Reversing a copy or New Folder, or redoing a Move to
+                    // Trash, trashes what it made.
+                    let made: &[PathBuf] = match &operation.change {
+                        Change::Created(made) => made,
+                        Change::Moved(_) | Change::Trashed(_) | Change::Replaced(_) => &[],
+                    };
+                    let leaving = Leaving::note(made);
+                    let result = undo::reverse(&operation.change, bin.as_ref());
+                    (result, leaving.gone(), running)
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
@@ -318,7 +344,7 @@ impl Finder {
                             change: reversed.opposite,
                         };
                         undo::stepped(step, opposite, cx);
-                        this.files_changed(reversed.back, cx);
+                        this.items_removed(gone, reversed.back, cx);
                         window.push_notification(format!("{} {name}", step.past()), cx);
                     }
                     Err(stopped) => {
@@ -332,7 +358,7 @@ impl Finder {
                             cx,
                         );
                         undo::put_back(step, undo::Operation { name, change: left }, cx);
-                        this.files_changed(done.back, cx);
+                        this.items_removed(gone, done.back, cx);
                         let verb = match step {
                             Step::Undo => "undo",
                             Step::Redo => "redo",
@@ -372,6 +398,43 @@ impl Finder {
         self.reload_columns(cx);
         self.check_tree_for_changes(cx);
         self.tell_others(cx);
+    }
+
+    /// Items left the disk: drop their rows now, then take them out of the
+    /// index off the UI thread and reload, so Recents, folder sizes, and the
+    /// other tabs' searches stop showing them too. Forgetting a folder reads
+    /// every indexed file, which is why the rows don't wait for it.
+    pub(super) fn items_removed(
+        &mut self,
+        gone: Gone,
+        select: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if gone.is_empty() {
+            self.files_changed(select, cx);
+            return;
+        }
+        let left: HashSet<&Path> = gone.paths().collect();
+        let stays = |path: &Path| !inside_any(path, &left);
+        self.listing.retain(|entry| stays(&entry.path));
+        self.results.retain(|row| stays(&row.entry.path));
+        // Folders open in place in the list keep their own items.
+        for folder in self.children.values_mut() {
+            folder.entries.retain(|entry| stays(&entry.path));
+        }
+        self.rebuild_rows(cx);
+        self.select_paths(&select, cx);
+        // These read the disk, not the index.
+        self.reload_columns(cx);
+        self.check_tree_for_changes(cx);
+        let engine = self.engine.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async move { engine.forget(&gone) })
+                .await;
+            this.update(cx, |this, cx| this.files_changed(Vec::new(), cx))
+                .ok();
+        })
+        .detach();
     }
 
     /// The bar over the Trash, with its Empty button.
@@ -415,13 +478,18 @@ pub(super) fn trash_drop_target<E: InteractiveElement>(el: E, cx: &mut Context<F
 /// going goes with it.
 fn item_after(rows: &[super::Row], gone: &[PathBuf]) -> Option<PathBuf> {
     let gone: HashSet<&Path> = gone.iter().map(PathBuf::as_path).collect();
-    let is_gone = |row: &super::Row| row.entry.path.ancestors().any(|dir| gone.contains(dir));
+    let is_gone = |row: &super::Row| inside_any(&row.entry.path, &gone);
     let last = rows.iter().rposition(is_gone)?;
     rows[last + 1..]
         .iter()
         .chain(rows[..last].iter().rev())
         .find(|row| !is_gone(row))
         .map(|row| row.entry.path.clone())
+}
+
+/// Whether `path` is one of `gone` or inside one of them.
+fn inside_any(path: &Path, gone: &HashSet<&Path>) -> bool {
+    path.ancestors().any(|dir| gone.contains(dir))
 }
 
 /// The folder an item in the Trash came from, as the list shows it.

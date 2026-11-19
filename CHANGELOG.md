@@ -2,6 +2,13 @@
 
 This file lists every notable change to fffinder. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Items moved to the Trash or deleted, including what Undo or Redo moves to the Trash, now leave the search index as soon as they're gone. They used to stay in it until the file watcher caught up, or until a Rescan with watching off, so Recents, a new search, or a search in another tab could still list them.
+- Their rows leave the window at once, without waiting for the index. Items inside a folder opened in place in the list view used to stay for up to two seconds.
+
 ## [0.5.1] - 2026-11-09
 
 This release keeps every folder on screen up to date with files other programs add, remove, or rename, including folders opened in place in the list and the column view's panes. The sidebar's tree also scrolls sideways when it's wider than the sidebar.

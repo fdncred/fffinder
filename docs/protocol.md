@@ -103,6 +103,8 @@ Stream file changes until the client disconnects.
 
 Lines: `{"kind": "modified", "path": "…"}`, plus `"from"` for `renamed`. Kinds are `created`, `modified`, `removed`, `renamed`, and `rescan`.
 
+fffinder takes what its window moves to the Trash or deletes out of the index before the watcher sees it go. A file still sends `removed`, but the files inside a folder removed that way send nothing.
+
 ### `GET /v1/selection`
 
 What the frontmost window shows. With `all=true`, `items` holds every item shown instead of only the selected ones.

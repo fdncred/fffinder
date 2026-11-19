@@ -723,6 +723,153 @@ fn delete_immediately_asks_first(cx: &mut TestAppContext) {
     );
 }
 
+// ----- what leaves the disk leaves the index ----------------------------------------------
+//
+// The harness indexes with watching off, so the index learns of a removal
+// only from the window itself.
+
+/// The names a new search for `query` shows, asked of the index again
+/// rather than kept from the rows already showing.
+fn search_again(ui: &mut Ui, query: &str) -> Vec<String> {
+    let query = query.to_string();
+    ui.update(|f, _, cx| {
+        f.set_query(String::new(), true, cx);
+        f.set_query(query, true, cx);
+    });
+    ui.names()
+}
+
+#[gpui_kit::test]
+fn what_goes_to_the_trash_leaves_recents_and_later_searches(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-index");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.click("recents");
+    assert!(ui.names().contains(&"notes.txt".to_string()));
+
+    ui.select("notes.txt");
+    ui.press(&cmd("backspace"));
+
+    assert!(
+        !ui.names().contains(&"notes.txt".to_string()),
+        "Recents comes from the index"
+    );
+    assert!(!search_again(&mut ui, "notes").contains(&"notes.txt".to_string()));
+
+    // A folder takes everything in it out of the index.
+    ui.update(|f, _, cx| f.set_query(String::new(), true, cx));
+    ui.go_to(&fx.dir);
+    ui.select("Projects");
+    ui.press(&cmd("backspace"));
+    let found = search_again(&mut ui, "atlas");
+    assert!(
+        !found
+            .iter()
+            .any(|n| n == "atlas" || n == "Project Atlas.txt"),
+        "{found:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn what_is_trashed_from_search_results_stays_out_of_them(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-results");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    assert!(search_again(&mut ui, "roadmap").contains(&"Roadmap.md".to_string()));
+
+    ui.select("Roadmap.md");
+    ui.press(&cmd("backspace"));
+
+    assert!(!ui.names().contains(&"Roadmap.md".to_string()));
+    assert!(!search_again(&mut ui, "roadmap").contains(&"Roadmap.md".to_string()));
+}
+
+#[gpui_kit::test]
+fn what_is_deleted_leaves_later_searches(cx: &mut TestAppContext) {
+    let fx = Fixture::new("delete-index");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.select("Budget.csv");
+    ui.press(&cmd("alt-backspace"));
+    ui.click("ok");
+
+    assert!(!fx.path("Budget.csv").exists());
+    assert!(!search_again(&mut ui, "budget").contains(&"Budget.csv".to_string()));
+}
+
+#[gpui_kit::test]
+fn what_undo_trashes_leaves_later_searches(cx: &mut TestAppContext) {
+    let fx = Fixture::new("undo-index");
+    let mut ui = Ui::open(cx, &fx.dir);
+    // As if a copy had made it: the index found it when the window opened.
+    let made = fx.path("notes.txt");
+    ui.update(|_, _, cx| {
+        fffinder::undo::record("Copy", fffinder::undo::Change::Created(vec![made]), cx)
+    });
+
+    ui.press(&cmd("z"));
+
+    assert!(!fx.path("notes.txt").exists(), "Undo moves it to the Trash");
+    assert!(!search_again(&mut ui, "notes").contains(&"notes.txt".to_string()));
+}
+
+#[gpui_kit::test]
+fn what_is_trashed_inside_an_open_folder_leaves_the_list_at_once(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-open-folder");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    ui.click(item_id("disclosure", &fx.path("Projects")));
+    assert!(ui.names().contains(&"atlas".to_string()));
+
+    ui.select("atlas");
+    ui.press(&cmd("backspace"));
+
+    assert!(!fx.path("Projects/atlas").exists());
+    assert!(
+        !ui.names().contains(&"atlas".to_string()),
+        "{:?}",
+        ui.names()
+    );
+}
+
+#[gpui_kit::test]
+fn what_one_tab_trashes_leaves_another_tabs_search(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-other-tab");
+    let mut ui = Ui::open_with(
+        cx,
+        &fx.dir,
+        common::Open {
+            workspace: true,
+            ..Default::default()
+        },
+    );
+    let workspace = ui.workspace.clone().expect("opened with tabs");
+    ui.press(&cmd("t"));
+    let second = workspace.read_with(ui.cx, |w, _| w.active().clone());
+    let names = |ui: &Ui| -> Vec<String> {
+        second.read_with(ui.cx, |f, _| {
+            f.rows_for_test()
+                .iter()
+                .map(|r| r.entry.name.clone())
+                .collect()
+        })
+    };
+    ui.window(|_, cx| second.update(cx, |f, cx| f.set_query("atlas".into(), true, cx)));
+    ui.settle();
+    assert!(names(&ui).contains(&"Project Atlas.txt".to_string()));
+
+    let projects = fx.path("Projects");
+    ui.update(|f, window, cx| f.trash_now(vec![projects], window, cx));
+
+    assert!(!fx.path("Projects").exists());
+    let found = names(&ui);
+    assert!(
+        !found
+            .iter()
+            .any(|n| n == "atlas" || n == "Project Atlas.txt"),
+        "the other tab searches again once the index has forgotten it: {found:?}"
+    );
+}
+
 #[gpui_kit::test]
 fn get_info_shows_details_and_changes_permissions(cx: &mut TestAppContext) {
     let fx = Fixture::new("info");
