@@ -332,7 +332,9 @@ mod imp {
             use std::os::unix::fs::MetadataExt as _;
             let dir = trash_dir()?;
             let read = std::fs::read_dir(&dir).map_err(|err| {
-                if err.kind() == std::io::ErrorKind::PermissionDenied {
+                // A Trash its file modes close, say one a `sudo` run left
+                // root's, isn't something Full Disk Access would open.
+                if crate::disk_access::is_full_disk_access_refusal(&err) {
                     TrashError::NeedsFullDiskAccess
                 } else {
                     err.into()
