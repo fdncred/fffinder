@@ -813,6 +813,68 @@ fn what_undo_trashes_leaves_later_searches(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn what_undo_or_put_back_brings_back_returns_to_searches(cx: &mut TestAppContext) {
+    let fx = Fixture::new("restore-index");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let atlas = "Project Atlas.txt".to_string();
+    ui.select("Projects");
+    ui.press(&cmd("backspace"));
+    assert!(!search_again(&mut ui, "atlas").contains(&atlas));
+
+    ui.update(|f, _, cx| f.set_query(String::new(), true, cx));
+    ui.press(&cmd("z"));
+    assert!(fx.path("Projects").exists(), "Undo puts the folder back");
+    assert!(
+        search_again(&mut ui, "atlas").contains(&atlas),
+        "what's in the folder is found again without a Rescan"
+    );
+
+    ui.update(|f, _, cx| f.set_query(String::new(), true, cx));
+    ui.select("notes.txt");
+    ui.press(&cmd("backspace"));
+    assert!(!search_again(&mut ui, "notes").contains(&"notes.txt".to_string()));
+    ui.update(|f, _, cx| f.set_query(String::new(), true, cx));
+    ui.click("trash");
+    ui.select("notes.txt");
+    ui.press(&cmd("backspace"));
+    assert!(fx.path("notes.txt").exists(), "Put Back restores it");
+    assert!(search_again(&mut ui, "notes").contains(&"notes.txt".to_string()));
+}
+
+#[gpui_kit::test(iterations = 10)]
+fn a_selection_made_while_the_index_catches_up_holds(cx: &mut TestAppContext) {
+    let fx = Fixture::new("trash-then-select");
+    let mut ui = Ui::open(cx, &fx.dir);
+    ui.click("view-list");
+    let view = ui.view.clone();
+    let projects = fx.path("Projects");
+    ui.window(|window, cx| view.update(cx, |f, cx| f.trash_now(vec![projects], window, cx)));
+    // Step until the Trash is done and its rows are gone, which leaves the
+    // index work queued behind it.
+    let listed =
+        |ui: &Ui| ui.read(|f| f.rows_for_test().iter().any(|r| r.entry.name == "Projects"));
+    for _ in 0..10_000 {
+        if !listed(&ui) || !ui.cx.executor().tick() {
+            break;
+        }
+    }
+    assert!(!listed(&ui), "the Trash finished");
+
+    let notes = fx.path("notes.txt");
+    ui.window(|window, cx| view.update(cx, |f, cx| f.reveal_in_place(&notes, window, cx)));
+    ui.settle();
+
+    let selected: Vec<String> = ui.read(|f| {
+        f.selected_entries()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect()
+    });
+    assert_eq!(selected, ["notes.txt"]);
+}
+
+#[gpui_kit::test]
 fn what_is_trashed_inside_an_open_folder_leaves_the_list_at_once(cx: &mut TestAppContext) {
     let fx = Fixture::new("trash-open-folder");
     let mut ui = Ui::open(cx, &fx.dir);

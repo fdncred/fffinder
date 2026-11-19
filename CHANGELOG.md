@@ -6,8 +6,9 @@ This file lists every notable change to fffinder. The format follows [Keep a Cha
 
 ### Fixed
 
-- Items moved to the Trash or deleted, including what Undo or Redo moves to the Trash, now leave the search index as soon as they're gone. They used to stay in it until the file watcher caught up, or until a Rescan with watching off, so Recents, a new search, or a search in another tab could still list them.
+- Items moved to the Trash or deleted, including what Undo or Redo moves to the Trash, now leave the search index as soon as they're gone. They used to stay in it until the file watcher caught up, or until a Rescan with watching off, so Recents, a new search, or a search in another tab could still list them. While an `fff watch` client is connected, a trashed folder's files still wait for the watcher, so each one sends `removed`.
 - Their rows leave the window at once, without waiting for the index. Items inside a folder opened in place in the list view used to stay for up to two seconds.
+- With watching off, items that Put Back, Undo, or Redo brings back from the Trash return to the index at once, instead of after a Rescan.
 
 ## [0.5.1] - 2026-11-09
 

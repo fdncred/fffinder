@@ -9,16 +9,16 @@ use crate::entry::{FileEntry, display_name};
 use crate::kind::{self, KindFilter};
 use fff_search::file_picker::FilePicker;
 use fff_search::{
-    Casing, DirSearchConfig, FFFMode, FilePickerOptions, FrecencyTracker, FuzzySearchOptions,
-    GitRecencyConfig, GrepConfig, GrepMode, GrepSearchOptions, MixedItemRef, MixedSearchConfig,
-    PaginationArgs, QueryParser, QueryTracker, SharedFilePicker, SharedFrecency,
+    Casing, DirItem, DirSearchConfig, FFFMode, FilePickerOptions, FrecencyTracker,
+    FuzzySearchOptions, GitRecencyConfig, GrepConfig, GrepMode, GrepSearchOptions, MixedItemRef,
+    MixedSearchConfig, PaginationArgs, QueryParser, QueryTracker, SharedFilePicker, SharedFrecency,
     SharedQueryTracker, WatchEvent, WatchId, WatchOptions,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -46,6 +46,8 @@ struct RootIndex {
     /// way (`/private/var/…` for `/var/…` on macOS).
     canonical: PathBuf,
     picker: SharedFilePicker,
+    /// Live [`Watch`] subscriptions on this root, shared by its clones.
+    watches: Arc<AtomicUsize>,
 }
 
 impl RootIndex {
@@ -81,7 +83,49 @@ impl RootIndex {
             path: path.to_path_buf(),
             canonical: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
             picker,
+            watches: Arc::default(),
         })
+    }
+
+    /// Where this root's index can hold `item`, an item that left the disk
+    /// or came back, spelled the way fff spells `base`. A folder holding the
+    /// whole root gives `base`. Usually one spelling; two when the item was
+    /// reached through a link and fff found it under both.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The item, as the caller spelled it and with links resolved
+    /// * `base` - The index's base path
+    ///
+    /// # Returns
+    ///
+    /// The spellings inside `base`; empty when the root holds none of them
+    fn spellings(&self, item: &Noted, base: &Path) -> Vec<PathBuf> {
+        let (path, real) = (item.path.as_path(), item.real.as_deref());
+        let holds_root = item.is_dir
+            && (self.path.starts_with(path)
+                || base.starts_with(path)
+                || real.is_some_and(|real| self.canonical.starts_with(real)));
+        if holds_root {
+            return vec![base.to_path_buf()];
+        }
+        let mut spellings = Vec::with_capacity(2);
+        let as_given = self.in_base(path, base);
+        if as_given.starts_with(base) {
+            spellings.push(as_given);
+        }
+        if let Some(rest) = real.and_then(|real| real.strip_prefix(&self.canonical).ok()) {
+            let resolved = base.join(rest);
+            if !spellings.contains(&resolved) {
+                spellings.push(resolved);
+            }
+        }
+        spellings
+    }
+
+    /// Whether a [`Watch`] subscription is live on this root.
+    fn is_watched(&self) -> bool {
+        self.watches.load(Ordering::Relaxed) > 0
     }
 
     /// `scope`, a folder in this root, spelled the way fff spells the root's
@@ -276,11 +320,14 @@ impl Leaving {
     /// # Returns
     ///
     /// The items, for [`Leaving::gone`] once the removal is done
-    pub fn note(paths: &[PathBuf]) -> Leaving {
+    pub fn note<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>) -> Leaving {
         Leaving {
             items: paths
-                .iter()
-                .map(|path| (path.clone(), path.is_dir()))
+                .into_iter()
+                .map(|path| {
+                    let path = path.as_ref();
+                    (path.to_path_buf(), path.is_dir())
+                })
                 .collect(),
         }
     }
@@ -291,31 +338,78 @@ impl Leaving {
     /// # Returns
     ///
     /// What [`Engine::forget`] takes out of the index
-    pub fn gone(mut self) -> Gone {
-        self.items.retain(|(path, _)| is_gone(path));
-        Gone { items: self.items }
+    pub fn gone(self) -> Gone {
+        Gone {
+            items: self
+                .items
+                .into_iter()
+                .filter(|(path, _)| is_gone(path))
+                .map(|(path, is_dir)| Noted::new(path, is_dir))
+                .collect(),
+        }
     }
 }
 
-/// Whether nothing is at `path`, not even a broken link.
+/// Whether nothing is at `path`, not even a broken link. Any other error,
+/// as from a network volume that stopped answering, counts as still there,
+/// so nothing that may exist leaves the list or the index.
 fn is_gone(path: &Path) -> bool {
-    path.symlink_metadata().is_err()
+    matches!(
+        path.symlink_metadata(),
+        Err(err) if matches!(err.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory)
+    )
+}
+
+/// `path` with the links in its folder resolved, to find it in an index
+/// that reached it another way, as `/private/tmp/x` for `/tmp/x`. The item's
+/// own name is kept, so an item that is itself a link isn't followed.
+/// `None` when its folder can't be read.
+fn real_spelling(path: &Path) -> Option<PathBuf> {
+    let folder = std::fs::canonicalize(path.parent()?).ok()?;
+    Some(folder.join(path.file_name()?))
+}
+
+/// An item noted leaving the disk or coming back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Noted {
+    /// Spelled as the caller spelled it.
+    path: PathBuf,
+    /// From [`real_spelling`], read while the item's folder exists.
+    real: Option<PathBuf>,
+    is_dir: bool,
+}
+
+impl Noted {
+    fn new(path: PathBuf, is_dir: bool) -> Noted {
+        Noted {
+            real: real_spelling(&path),
+            path,
+            is_dir,
+        }
+    }
 }
 
 /// Items that left the disk, from [`Leaving::gone`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Gone {
-    /// Each path, and whether it was a folder.
-    items: Vec<(PathBuf, bool)>,
+    items: Vec<Noted>,
 }
 
 impl Gone {
-    /// The paths that left, spelled as they were noted.
+    /// The paths that left.
+    ///
+    /// # Returns
+    ///
+    /// Each path, spelled as it was noted
     pub fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.items.iter().map(|(path, _)| path.as_path())
+        self.items.iter().map(|item| item.path.as_path())
     }
 
     /// Whether nothing left, as when the removal failed at the first item.
+    ///
+    /// # Returns
+    ///
+    /// `true` when there's nothing for [`Engine::forget`] to do
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -324,13 +418,22 @@ impl Gone {
 /// A change subscription from [`Engine::watch`]; dropping it unsubscribes.
 pub struct Watch {
     pub events: std::sync::mpsc::Receiver<Vec<WatchEvent>>,
-    subscriptions: Vec<(SharedFilePicker, WatchId)>,
+    subscriptions: Vec<Subscription>,
+}
+
+/// One root's part of a [`Watch`].
+struct Subscription {
+    picker: SharedFilePicker,
+    id: WatchId,
+    /// The root's [`RootIndex::watches`].
+    watches: Arc<AtomicUsize>,
 }
 
 impl Drop for Watch {
     fn drop(&mut self) {
-        for (picker, id) in &self.subscriptions {
-            picker.unwatch(*id);
+        for subscription in &self.subscriptions {
+            subscription.picker.unwatch(subscription.id);
+            subscription.watches.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
@@ -1307,7 +1410,14 @@ impl Engine {
             match root.picker.watch(pattern, options, move |_, events| {
                 let _ = tx.send(events.to_vec());
             }) {
-                Ok(id) => subscriptions.push((root.picker.clone(), id)),
+                Ok(id) => {
+                    root.watches.fetch_add(1, Ordering::Relaxed);
+                    subscriptions.push(Subscription {
+                        picker: root.picker.clone(),
+                        id,
+                        watches: Arc::clone(&root.watches),
+                    });
+                }
                 Err(err) => last_error = Some(err),
             }
         }
@@ -1356,29 +1466,28 @@ impl Engine {
     /// the removal, or when nothing watches. An item that's back on disk by
     /// the time it gets to it, as after a quick Undo, is kept.
     ///
-    /// Each folder costs a pass over its root's files (about 120 ms for 3
-    /// million files) under the index's write lock, taken once per folder
-    /// so searches can run between passes. Run it off the UI thread.
+    /// Each folder the index holds costs a pass over its root's files (about
+    /// 120 ms for 3 million files) under the index's write lock, taken once
+    /// per folder so searches can run between passes; a folder it never
+    /// indexed, as one in the Trash usually is, costs a lookup. While a
+    /// [`Watch`] is live on a root, its folders are left to the watcher, so
+    /// subscribers get `removed` for each file inside. Run it off the UI
+    /// thread.
     ///
     /// # Arguments
     ///
-    /// * `gone` - The items, spelled either the way the root was given or
-    ///   the way search results spell it
-    pub fn forget(&self, gone: &Gone) {
+    /// * `gone` - The items, spelled the way the root was given, the way
+    ///   search results spell it, or through links
+    ///
+    /// # Returns
+    ///
+    /// How many files left an index
+    pub fn forget(&self, gone: &Gone) -> usize {
         if gone.is_empty() {
-            return;
+            return 0;
         }
-        // Cloned so no picker lock is waited on while holding the list's.
-        let indexes: Vec<RootIndex> = {
-            let indexes = self.read_indexes();
-            indexes
-                .roots
-                .iter()
-                .chain(&indexes.adhoc)
-                .cloned()
-                .collect()
-        };
-        for index in &indexes {
+        let mut forgotten = 0;
+        for index in &self.all_indexes() {
             let mut folders = Vec::new();
             {
                 let Ok(mut guard) = index.picker.write() else {
@@ -1388,21 +1497,22 @@ impl Engine {
                     continue;
                 };
                 let base = picker.base_path().to_path_buf();
+                let watcher_reports = picker.has_watcher() && index.is_watched();
                 // Each item is looked at again under the lock, so one put
                 // back since can't be lost, and the watcher can't add it
                 // back between the look and the removal.
-                for (path, is_dir) in gone.items.iter().filter(|(p, _)| is_gone(p)) {
-                    let path = index.in_base(path, &base);
-                    // A folder holding the whole root takes all of it.
-                    let path = if *is_dir && base.starts_with(&path) {
-                        base.clone()
-                    } else {
-                        path
-                    };
-                    // One lookup, which also catches a link to a folder
-                    // that was indexed as a file.
-                    if path.starts_with(&base) && !picker.remove_file_by_path(&path) && *is_dir {
-                        folders.push(path);
+                for item in gone.items.iter().filter(|item| is_gone(&item.path)) {
+                    for path in index.spellings(item, &base) {
+                        // One lookup, which also catches a link to a folder
+                        // that was indexed as a file.
+                        if picker.remove_file_by_path(&path) {
+                            forgotten += 1;
+                        } else if item.is_dir
+                            && !watcher_reports
+                            && holds_folder(picker, &base, &path)
+                        {
+                            folders.push(path);
+                        }
                     }
                 }
             }
@@ -1411,10 +1521,80 @@ impl Engine {
                     && let Some(picker) = guard.as_mut()
                     && is_gone(folder)
                 {
-                    picker.remove_all_files_in_dir(folder);
+                    forgotten += picker.remove_all_files_in_dir(folder);
                 }
             }
         }
+        forgotten
+    }
+
+    /// Put items that came back on disk, as after Put Back or Undo, back into
+    /// the indexes that took them out and have no watcher to see them
+    /// return. Only files an index held before come back, so one it never
+    /// indexed, as a hidden file, stays out. Run it off the UI thread.
+    ///
+    /// A folder costs a pass over its root's files, under the read lock;
+    /// each file found is read again under the write lock, taken for a batch
+    /// at a time so searches can run between batches. fff brings back only
+    /// the folder that holds each file, so a folder holding nothing but
+    /// folders, or nothing at all, stays out of folder searches until a
+    /// Rescan, as it does when fff's own watcher sees it come back.
+    ///
+    /// # Arguments
+    ///
+    /// * `back` - Where the items are now, spelled any way [`Engine::forget`]
+    ///   takes
+    ///
+    /// # Returns
+    ///
+    /// How many files came back into an index
+    pub fn remember(&self, back: &[PathBuf]) -> usize {
+        /// Files read again per hold of the write lock.
+        const BATCH: usize = 256;
+        if back.is_empty() {
+            return 0;
+        }
+        let items: Vec<Noted> = back
+            .iter()
+            .map(|path| Noted::new(path.clone(), path.is_dir()))
+            .collect();
+        let mut remembered = 0;
+        for index in &self.all_indexes() {
+            let found = {
+                let Ok(guard) = index.picker.read() else {
+                    continue;
+                };
+                match guard.as_ref() {
+                    Some(picker) if !picker.has_watcher() => forgotten_files(index, picker, &items),
+                    Some(_) | None => continue,
+                }
+            };
+            for batch in found.chunks(BATCH) {
+                let Ok(mut guard) = index.picker.write() else {
+                    break;
+                };
+                let Some(picker) = guard.as_mut() else {
+                    break;
+                };
+                remembered += batch
+                    .iter()
+                    .filter(|path| picker.handle_create_or_modify(path).is_some())
+                    .count();
+            }
+        }
+        remembered
+    }
+
+    /// Every index, roots and temporary ones, cloned so no picker lock is
+    /// waited on while holding the list's.
+    fn all_indexes(&self) -> Vec<RootIndex> {
+        let indexes = self.read_indexes();
+        indexes
+            .roots
+            .iter()
+            .chain(&indexes.adhoc)
+            .cloned()
+            .collect()
     }
 
     fn read_indexes(&self) -> std::sync::RwLockReadGuard<'_, Indexes> {
@@ -1639,6 +1819,98 @@ fn rerank(hit: &RawHit, words: &[String]) -> i32 {
 }
 
 /// fff returns `/`-separated relative paths on every OS.
+/// `dir` inside `base` the way fff stores folders: `/`-separated and ending
+/// in `/`, or empty for `base` itself.
+///
+/// # Returns
+///
+/// `None` when `dir` isn't inside `base`, or its name isn't UTF-8, which fff
+/// can't look up either
+fn folder_prefix(base: &Path, dir: &Path) -> Option<String> {
+    let rel = dir.strip_prefix(base).ok()?.to_str()?;
+    Some(match rel.is_empty() {
+        true => String::new(),
+        false => format!("{}/", fff_search::path_utils::to_canonical_slashes(rel)),
+    })
+}
+
+/// Whether `picker` holds a folder at or inside `dir`, taken out since or
+/// not. It's a binary search, where taking a folder out is a pass over
+/// every file, so a folder fff never indexed, as one in the Trash usually
+/// is, costs no pass.
+///
+/// # Arguments
+///
+/// * `picker` - The index
+/// * `base` - Its base path
+/// * `dir` - The folder, spelled the way fff spells `base`
+///
+/// # Returns
+///
+/// `true` when the folder may hold indexed files, as `base` always may
+fn holds_folder(picker: &FilePicker, base: &Path, dir: &Path) -> bool {
+    let Some(prefix) = folder_prefix(base, dir) else {
+        return false;
+    };
+    if prefix.is_empty() {
+        return true;
+    }
+    let dirs = picker.get_dirs();
+    // The scan's folders come first, sorted by path, which fff's own lookups
+    // rely on; folders a watcher added since follow them, unsorted.
+    let (scanned, added) = dirs.split_at(dirs.partition_point(|d| !d.is_overflow()));
+    let first = scanned.partition_point(|d| d.relative_path(picker) < prefix);
+    let inside = |d: &DirItem| d.relative_path(picker).starts_with(&prefix);
+    scanned.get(first).is_some_and(inside) || added.iter().any(inside)
+}
+
+/// The files `index` took out that `items`, items back on disk, hold: each
+/// item taken out itself, and every file taken out from inside a folder
+/// among them.
+///
+/// # Arguments
+///
+/// * `index` - The root whose files to look through
+/// * `picker` - Its index
+/// * `items` - The items that came back
+///
+/// # Returns
+///
+/// The files, spelled the way fff spells the index's base
+fn forgotten_files(index: &RootIndex, picker: &FilePicker, items: &[Noted]) -> Vec<PathBuf> {
+    let base = picker.base_path();
+    let mut files = Vec::new();
+    let mut folders = Vec::new();
+    for item in items {
+        for path in index.spellings(item, base) {
+            match picker.get_file_by_path(&path) {
+                Some(file) if file.is_deleted() => files.push(path),
+                Some(_) => {}
+                None if item.is_dir => folders.extend(folder_prefix(base, &path)),
+                None => {}
+            }
+        }
+    }
+    if !folders.is_empty() {
+        // Only files taken out are read for their paths, which keeps the
+        // pass cheap.
+        files.extend(
+            picker
+                .get_files()
+                .iter()
+                .filter(|file| file.is_deleted())
+                .map(|file| file.relative_path(picker))
+                .filter(|rel| {
+                    folders
+                        .iter()
+                        .any(|prefix| rel.starts_with(prefix.as_str()))
+                })
+                .map(|rel| join_rel(base, &rel)),
+        );
+    }
+    files
+}
+
 fn join_rel(base: &Path, rel: &str) -> PathBuf {
     let rel = rel.trim_end_matches('/');
     let mut path = base.to_path_buf();
@@ -1763,6 +2035,7 @@ mod tests {
             path: "/short/tree".into(),
             canonical: "/long/tree".into(),
             picker: SharedFilePicker::default(),
+            watches: Arc::default(),
         };
         let base = Path::new("/long/tree");
         let scope = |s: &str| root.in_base(Path::new(s), base);
@@ -1772,6 +2045,71 @@ mod tests {
             base.join("Projects/atlas")
         );
         assert_eq!(scope("/elsewhere"), Path::new("/elsewhere"));
+    }
+
+    #[test]
+    fn spells_an_item_the_way_fff_spells_the_root() {
+        // The root as given, as its links resolve, and as fff spells it.
+        let root = RootIndex {
+            path: "/given/tree".into(),
+            canonical: "/real/tree".into(),
+            picker: SharedFilePicker::default(),
+            watches: Arc::default(),
+        };
+        let base = Path::new("/fff/tree");
+        let spell = |path: &str, real: Option<&str>, is_dir: bool| {
+            root.spellings(
+                &Noted {
+                    path: path.into(),
+                    real: real.map(PathBuf::from),
+                    is_dir,
+                },
+                base,
+            )
+        };
+        let inside = base.join("a.txt");
+        assert_eq!(
+            spell("/given/tree/a.txt", None, false),
+            std::slice::from_ref(&inside)
+        );
+        assert_eq!(
+            spell("/fff/tree/a.txt", None, false),
+            std::slice::from_ref(&inside)
+        );
+        assert_eq!(
+            spell("/link/a.txt", Some("/real/tree/a.txt"), false),
+            std::slice::from_ref(&inside)
+        );
+        assert_eq!(
+            spell("/given/tree/a.txt", Some("/real/tree/b.txt"), false),
+            [inside, base.join("b.txt")],
+            "a link fff followed holds the item under both names"
+        );
+        for holder in ["/given", "/fff", "/given/tree"] {
+            assert_eq!(spell(holder, None, true), [base], "{holder}");
+        }
+        assert_eq!(spell("/link", Some("/real"), true), [base]);
+        assert_eq!(
+            spell("/given", None, false),
+            Vec::<PathBuf>::new(),
+            "a file holds nothing"
+        );
+        assert_eq!(
+            spell("/elsewhere/a.txt", None, false),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn folders_are_spelled_as_fff_stores_them() {
+        let base = Path::new("/base");
+        assert_eq!(folder_prefix(base, base).as_deref(), Some(""));
+        assert_eq!(folder_prefix(base, &base.join("a")).as_deref(), Some("a/"));
+        assert_eq!(
+            folder_prefix(base, &base.join("a/b")).as_deref(),
+            Some("a/b/")
+        );
+        assert_eq!(folder_prefix(base, Path::new("/other/a")), None);
     }
 
     #[test]
@@ -1889,43 +2227,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn forgets_what_left_the_disk() {
-        let dir = std::env::temp_dir().join(format!("fff-engine-forget-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("folder/deeper")).unwrap();
-        std::fs::write(dir.join("folder/inner.txt"), "123").unwrap();
-        std::fs::write(dir.join("folder/deeper/more.txt"), "12").unwrap();
-        std::fs::write(dir.join("gone.txt"), "1").unwrap();
-        std::fs::write(dir.join("kept.txt"), "1").unwrap();
+    /// An engine indexing `root` alone, ready to search.
+    fn engine_on(root: &Path, watch: bool) -> Result<Arc<Engine>, String> {
         let engine = Engine::new(EngineOptions {
-            roots: vec![dir.clone()],
+            roots: vec![root.to_path_buf()],
             app_dirs: Vec::new(),
             db_dir: None,
-            watch: false,
+            watch,
             search: Default::default(),
         });
-        assert!(engine.wait_ready(Duration::from_secs(10)));
-        let names = |items: Vec<IndexedItem>| -> Vec<String> {
-            let mut names: Vec<String> = items.iter().map(|i| display_name(&i.path)).collect();
-            names.sort();
-            names
-        };
+        match engine.wait_ready(Duration::from_secs(10)) {
+            true => Ok(engine),
+            false => Err(format!("{} wasn't indexed in time", root.display())),
+        }
+    }
+
+    /// The names of `items`, sorted.
+    fn names(items: &[IndexedItem]) -> Vec<String> {
+        let mut names: Vec<String> = items.iter().map(|i| display_name(&i.path)).collect();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forgets_what_a_link_spells_another_way() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let real = dir.join("real");
+        let link = dir.join("link");
+        let away = dir.join("away");
+        std::fs::create_dir_all(real.join("T/work"))?;
+        std::fs::create_dir_all(&away)?;
+        std::fs::write(real.join("T/work/a.txt"), "1")?;
+        std::fs::write(real.join("T/work/b.txt"), "1")?;
+        std::os::unix::fs::symlink(&real, &link)?;
+        let engine = engine_on(&real.join("T/work"), false)?;
+
+        // A window that reached the root's files through the link.
+        let leaving = Leaving::note(&[link.join("T/work/a.txt")]);
+        std::fs::rename(real.join("T/work/a.txt"), away.join("a.txt"))?;
+        engine.forget(&leaving.gone());
+        assert_eq!(names(&engine.list(false, None, 0)), ["b.txt"]);
+
+        // A folder above the root, which takes all of it.
+        let leaving = Leaving::note(&[link.join("T")]);
+        std::fs::rename(real.join("T"), away.join("T"))?;
+        engine.forget(&leaving.gone());
+        assert_eq!(names(&engine.list(false, None, 0)), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn forgets_what_left_the_disk() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder/deeper"))?;
+        std::fs::write(dir.join("folder/inner.txt"), "123")?;
+        std::fs::write(dir.join("folder/deeper/more.txt"), "12")?;
+        std::fs::write(dir.join("gone.txt"), "1")?;
+        std::fs::write(dir.join("kept.txt"), "1")?;
+        let engine = engine_on(&dir, false)?;
         // Search results spell a path the way fff-search spells the root,
-        // which on macOS is `/private/var/…` for a root given as `/var/…`.
+        // which on Windows is the root's long name.
         let found = engine.search(&SearchRequest {
             query: "gone".into(),
             limit: 10,
             ..Default::default()
         });
-        let gone_as_found = found.hits[0].entry.path.clone();
-        let leaving = Leaving::note(&[
+        let gone_as_found = found
+            .hits
+            .first()
+            .ok_or("the search found no gone.txt")?
+            .entry
+            .path
+            .clone();
+        let leaving = Leaving::note([
             gone_as_found.clone(),
             dir.join("folder"),
             dir.join("kept.txt"),
         ]);
-        std::fs::remove_file(dir.join("gone.txt")).unwrap();
-        std::fs::remove_dir_all(dir.join("folder")).unwrap();
+        std::fs::remove_file(dir.join("gone.txt"))?;
+        std::fs::remove_dir_all(dir.join("folder"))?;
 
         let gone = leaving.gone();
         let left: Vec<&Path> = gone.paths().collect();
@@ -1934,11 +2318,11 @@ mod tests {
             [gone_as_found.as_path(), &dir.join("folder")],
             "kept.txt is still there"
         );
-        engine.forget(&gone);
+        assert_eq!(engine.forget(&gone), 3);
 
-        assert_eq!(names(engine.list(false, None, 0)), ["kept.txt"]);
+        assert_eq!(names(&engine.list(false, None, 0)), ["kept.txt"]);
         assert!(
-            names(engine.list(true, None, 0))
+            names(&engine.list(true, None, 0))
                 .iter()
                 .all(|n| n != "folder" && n != "deeper")
         );
@@ -1955,42 +2339,189 @@ mod tests {
         });
         assert!(found.hits.is_empty(), "{:?}", found.hits);
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     #[test]
-    fn keeps_what_came_back_before_it_was_forgotten() {
+    fn keeps_what_came_back_before_it_was_forgotten() -> Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir().join(format!("fff-engine-back-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("folder")).unwrap();
-        std::fs::write(dir.join("folder/inner.txt"), "1").unwrap();
-        std::fs::write(dir.join("file.txt"), "1").unwrap();
-        let engine = Engine::new(EngineOptions {
-            roots: vec![dir.clone()],
-            app_dirs: Vec::new(),
-            db_dir: None,
-            watch: false,
-            search: Default::default(),
-        });
-        assert!(engine.wait_ready(Duration::from_secs(10)));
-        let leaving = Leaving::note(&[dir.join("file.txt"), dir.join("folder")]);
-        std::fs::remove_file(dir.join("file.txt")).unwrap();
-        std::fs::remove_dir_all(dir.join("folder")).unwrap();
+        std::fs::create_dir_all(dir.join("folder"))?;
+        std::fs::write(dir.join("folder/inner.txt"), "1")?;
+        std::fs::write(dir.join("file.txt"), "1")?;
+        let engine = engine_on(&dir, false)?;
+        let leaving = Leaving::note([dir.join("file.txt"), dir.join("folder")]);
+        std::fs::remove_file(dir.join("file.txt"))?;
+        std::fs::remove_dir_all(dir.join("folder"))?;
         let gone = leaving.gone();
         // As Undo or Put Back does before a queued forget runs.
-        std::fs::create_dir_all(dir.join("folder")).unwrap();
-        std::fs::write(dir.join("folder/inner.txt"), "1").unwrap();
-        std::fs::write(dir.join("file.txt"), "1").unwrap();
+        std::fs::create_dir_all(dir.join("folder"))?;
+        std::fs::write(dir.join("folder/inner.txt"), "1")?;
+        std::fs::write(dir.join("file.txt"), "1")?;
 
-        engine.forget(&gone);
+        assert_eq!(engine.forget(&gone), 0);
 
-        let mut names: Vec<String> = engine
-            .list(false, None, 0)
-            .iter()
-            .map(|i| display_name(&i.path))
-            .collect();
-        names.sort();
-        assert_eq!(names, ["file.txt", "inner.txt"]);
+        assert_eq!(
+            names(&engine.list(false, None, 0)),
+            ["file.txt", "inner.txt"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn remembers_what_came_back_after_it_was_forgotten() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-remember-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("root");
+        let away = dir.join("away");
+        std::fs::create_dir_all(root.join("folder/deeper"))?;
+        std::fs::create_dir_all(root.join("nest/only"))?;
+        std::fs::create_dir_all(&away)?;
+        std::fs::write(root.join("file.txt"), "1")?;
+        std::fs::write(root.join("kept.txt"), "1")?;
+        std::fs::write(root.join("folder/inner.txt"), "1")?;
+        std::fs::write(root.join("folder/deeper/more.txt"), "1")?;
+        std::fs::write(root.join("nest/only/x.txt"), "1")?;
+        let engine = engine_on(&root, false)?;
+        let items = ["file.txt", "folder", "nest"];
+        let leaving = Leaving::note(items.map(|name| root.join(name)));
+        for name in items {
+            std::fs::rename(root.join(name), away.join(name))?;
+        }
+        assert_eq!(engine.forget(&leaving.gone()), 4);
+        assert_eq!(names(&engine.list(false, None, 0)), ["kept.txt"]);
+
+        // Put back, with a file the index never saw.
+        std::fs::write(away.join("folder/new.txt"), "1")?;
+        for name in items {
+            std::fs::rename(away.join(name), root.join(name))?;
+        }
+        let back = items.map(|name| root.join(name));
+
+        assert_eq!(engine.remember(&back), 4);
+        assert_eq!(
+            names(&engine.list(false, None, 0)),
+            ["file.txt", "inner.txt", "kept.txt", "more.txt", "x.txt"],
+            "new.txt waits for a Rescan, as it would have without the Trash"
+        );
+        let folders = names(&engine.list(true, None, 0));
+        for folder in ["folder", "deeper", "only"] {
+            assert!(folders.iter().any(|f| f == folder), "{folders:?}");
+        }
+        let found = engine.search(&SearchRequest {
+            query: "inner".into(),
+            limit: 10,
+            ..Default::default()
+        });
+        assert_eq!(found.hits.len(), 1, "{:?}", found.hits);
+        assert_eq!(engine.remember(&back), 0, "nothing left to put back");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn finds_folders_named_around_the_separator() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-sorted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // `-` and `.` sort before `/`, and `0` after it.
+        for folder in ["a-b", "a.b", "a/sub", "a0", "ab"] {
+            std::fs::create_dir_all(dir.join(folder))?;
+            std::fs::write(dir.join(folder).join("f.txt"), "1")?;
+        }
+        let engine = engine_on(&dir, false)?;
+        {
+            let indexes = engine.read_indexes();
+            let root = indexes.roots.first().ok_or("the engine has no root")?;
+            let guard = root.picker.read()?;
+            let picker = guard.as_ref().ok_or("the root has no index")?;
+            let base = picker.base_path();
+            let holds = |rel: &str| holds_folder(picker, base, &base.join(rel));
+            for held in ["a", "a/sub", "a-b", "a.b", "a0", "ab"] {
+                assert!(holds(held), "{held}");
+            }
+            for not_held in ["a/su", "a/sub/f.txt/x", "b", "zz"] {
+                assert!(!holds(not_held), "{not_held}");
+            }
+            assert!(
+                holds_folder(picker, base, base),
+                "the root holds everything"
+            );
+            assert!(!holds_folder(picker, base, Path::new("/elsewhere")));
+        }
+
+        let leaving = Leaving::note([dir.join("a")]);
+        std::fs::remove_dir_all(dir.join("a"))?;
+        assert_eq!(engine.forget(&leaving.gone()), 1);
+        let left = engine.list(false, None, 0);
+        assert_eq!(left.len(), 4);
+        assert!(left.iter().all(|i| !i.path.starts_with(dir.join("a"))));
+
+        // A folder fff never indexed costs a lookup, not a pass.
+        let elsewhere = dir.join("a-b").join("missing");
+        let leaving = Leaving::note([elsewhere]);
+        assert_eq!(engine.forget(&leaving.gone()), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn only_what_is_missing_is_gone() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-is-gone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("file.txt"), "1")?;
+        assert!(!is_gone(&dir.join("file.txt")));
+        assert!(is_gone(&dir.join("missing.txt")));
+        assert!(
+            is_gone(&dir.join("file.txt/inside")),
+            "a file has nothing in it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn leaves_a_watched_folder_to_the_watcher() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!("fff-engine-watched-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder"))?;
+        std::fs::write(dir.join("folder/inner.txt"), "1")?;
+        std::fs::write(dir.join("file.txt"), "1")?;
+        let engine = engine_on(&dir, true)?;
+        let root = engine
+            .read_indexes()
+            .roots
+            .first()
+            .cloned()
+            .ok_or("the engine has no root")?;
+        assert!(root.picker.wait_for_watcher(Duration::from_secs(10)));
+        let watch = engine.watch("", &[])?;
+        assert!(root.is_watched());
+
+        let leaving = Leaving::note([dir.join("folder")]);
+        std::fs::remove_dir_all(dir.join("folder"))?;
+        assert_eq!(
+            engine.forget(&leaving.gone()),
+            0,
+            "the watcher takes the folder out, and says so"
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut removed = false;
+        while !removed && let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            let Ok(events) = watch.events.recv_timeout(left) else {
+                break;
+            };
+            removed = events.iter().any(|e| {
+                e.kind == fff_search::WatchEventKind::Removed && e.path.ends_with("inner.txt")
+            });
+        }
+        assert!(removed, "a watcher sends `removed` for the folder's file");
+
+        drop(watch);
+        assert!(!root.is_watched());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
     }
 
     #[test]

@@ -103,7 +103,7 @@ Stream file changes until the client disconnects.
 
 Lines: `{"kind": "modified", "path": "…"}`, plus `"from"` for `renamed`. Kinds are `created`, `modified`, `removed`, `renamed`, and `rescan`.
 
-fffinder takes what its window moves to the Trash or deletes out of the index before the watcher sees it go. A file still sends `removed`, but the files inside a folder removed that way send nothing.
+fffinder takes what its window moves to the Trash or deletes out of the index before the watcher sees it go, and each file still sends `removed`. While a client watches, a folder removed that way is left for the watcher to take out, so every file inside it sends `removed` too; until then, searches can still list those files.
 
 ### `GET /v1/selection`
 

@@ -7,7 +7,7 @@ use super::views::DraggedFiles;
 use crate::actions::*;
 use crate::model::Location;
 use crate::theme::ui;
-use crate::trash_bin::{self, TrashError, TrashStopped, Trashed};
+use crate::trash_bin::{self, Bin, TrashError, TrashStopped, Trashed};
 use crate::undo::{self, Change, Step};
 use fffinder_core::ops;
 use fffinder_core::{FileEntry, Gone, Leaving};
@@ -21,9 +21,41 @@ use gpui_kit::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// What file work did: whether it failed, and which items left the disk,
-/// even when it stopped part way.
-type FileJobOutcome = (Result<(), TrashError>, Gone);
+/// What file work changed that the index learns of at once, rather than
+/// from a watcher, or from a Rescan with watching off: items that left the
+/// disk, and items put back from the Trash.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct IndexUpdate {
+    gone: Gone,
+    back: Vec<PathBuf>,
+}
+
+impl IndexUpdate {
+    /// Items that left the disk.
+    fn left(gone: Gone) -> IndexUpdate {
+        IndexUpdate {
+            gone,
+            back: Vec::new(),
+        }
+    }
+
+    /// Items put back from the Trash, where they are now.
+    fn returned(back: Vec<PathBuf>) -> IndexUpdate {
+        IndexUpdate {
+            gone: Gone::default(),
+            back,
+        }
+    }
+
+    /// Whether the index has nothing to learn.
+    fn is_empty(&self) -> bool {
+        self.gone.is_empty() && self.back.is_empty()
+    }
+}
+
+/// What file work did: whether it failed, and what it changed for the
+/// index, even when it stopped part way.
+type FileJobOutcome = (Result<(), TrashError>, IndexUpdate);
 
 impl Finder {
     /// Cmd+Backspace: move the selection to the Trash, or in the Trash, put
@@ -108,7 +140,7 @@ impl Finder {
                 if let Some(parent) = leave_for {
                     this.navigate(Location::Folder(parent), window, cx);
                 }
-                this.items_removed(gone, select, cx);
+                this.items_changed(IndexUpdate::left(gone), select, cx);
             })
             .ok();
         })
@@ -137,7 +169,10 @@ impl Finder {
         }
         let bin = trash_bin::bin(cx);
         self.run_file_job(
-            move || (bin.restore(&items).map(|_| ()), Gone::default()),
+            move || match bin.restore(&items) {
+                Ok(back) => (Ok(()), IndexUpdate::returned(back)),
+                Err(err) => (Err(err), IndexUpdate::returned(out_of_trash(&items))),
+            },
             window,
             cx,
         );
@@ -162,15 +197,14 @@ impl Finder {
         let paths: Vec<PathBuf> = entries.into_iter().map(|e| e.path).collect();
         let paths = ops::outermost(&paths);
         let bin = trash_bin::bin(cx);
-        // What's in the Trash was never indexed.
         self.confirm_danger(title, "Delete", window, cx, move || match &trashed {
-            Some(items) => (bin.delete(items), Gone::default()),
+            Some(items) => delete_trashed(bin.as_ref(), items),
             None => {
                 let leaving = Leaving::note(&paths);
                 let result = paths
                     .iter()
                     .try_for_each(|p| ops::remove_any(p).map_err(TrashError::from));
-                (result, leaving.gone())
+                (result, IndexUpdate::left(leaving.gone()))
             }
         });
     }
@@ -191,9 +225,9 @@ impl Finder {
             "Empty Trash",
             window,
             cx,
-            move || {
-                let result = bin.list().and_then(|items| bin.delete(&items));
-                (result, Gone::default())
+            move || match bin.list() {
+                Ok(items) => delete_trashed(bin.as_ref(), &items),
+                Err(err) => (Err(err), IndexUpdate::default()),
             },
         );
     }
@@ -236,7 +270,7 @@ impl Finder {
             return;
         }
         cx.spawn_in(window, async move |this, cx| {
-            let (result, gone) = cx.background_spawn(async move { job() }).await;
+            let (result, update) = cx.background_spawn(async move { job() }).await;
             this.update_in(cx, |this, window, cx| {
                 if let Err(err) = result {
                     window.push_notification((NotificationType::Error, err.to_string()), cx);
@@ -244,7 +278,7 @@ impl Finder {
                 let selected = this.selected_entries().into_iter().map(|e| e.path);
                 let next = item_after(&this.rows, &selected.collect::<Vec<_>>());
                 this.selection.clear();
-                this.items_removed(gone, next.into_iter().collect(), cx);
+                this.items_changed(update, next.into_iter().collect(), cx);
             })
             .ok();
         })
@@ -313,6 +347,8 @@ impl Finder {
             return;
         };
         let bin = trash_bin::bin(cx);
+        // Undoing a Move to Trash or a replace puts items back from the Trash.
+        let restores = matches!(operation.change, Change::Trashed(_) | Change::Replaced(_));
         cx.spawn_in(window, async move |this, cx| {
             let name = operation.name;
             let (result, gone, running) = cx
@@ -329,6 +365,10 @@ impl Finder {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
+                let index_update = |back: &[PathBuf]| IndexUpdate {
+                    gone,
+                    back: if restores { back.to_vec() } else { Vec::new() },
+                };
                 // What Undo or Redo moved is followed like any other move.
                 let made = match &result {
                     Ok(reversed) => &reversed.opposite,
@@ -344,7 +384,7 @@ impl Finder {
                             change: reversed.opposite,
                         };
                         undo::stepped(step, opposite, cx);
-                        this.items_removed(gone, reversed.back, cx);
+                        this.items_changed(index_update(&reversed.back), reversed.back, cx);
                         window.push_notification(format!("{} {name}", step.past()), cx);
                     }
                     Err(stopped) => {
@@ -358,7 +398,7 @@ impl Finder {
                             cx,
                         );
                         undo::put_back(step, undo::Operation { name, change: left }, cx);
-                        this.items_removed(gone, done.back, cx);
+                        this.items_changed(index_update(&done.back), done.back, cx);
                         let verb = match step {
                             Step::Undo => "undo",
                             Step::Redo => "redo",
@@ -400,20 +440,43 @@ impl Finder {
         self.tell_others(cx);
     }
 
-    /// Items left the disk: drop their rows now, then take them out of the
-    /// index off the UI thread and reload, so Recents, folder sizes, and the
-    /// other tabs' searches stop showing them too. Forgetting a folder reads
-    /// every indexed file, which is why the rows don't wait for it.
-    pub(super) fn items_removed(
-        &mut self,
-        gone: Gone,
-        select: Vec<PathBuf>,
-        cx: &mut Context<Self>,
-    ) {
-        if gone.is_empty() {
+    /// Files changed on disk, some of them by leaving it or coming back from
+    /// the Trash. The window catches up now. The index catches up off the
+    /// UI thread, and then what this tab shows from it and the other tabs,
+    /// so Recents, folder sizes, and searches match the disk without waiting
+    /// for a watcher, or for a Rescan with watching off. Rows of items that
+    /// left go at once, since forgetting a folder reads every indexed file.
+    fn items_changed(&mut self, update: IndexUpdate, select: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // The Trash lists what's in it, and where each item came from, from
+        // the disk.
+        if update.gone.is_empty() || matches!(self.location(), Location::Trash) {
             self.files_changed(select, cx);
+        } else {
+            self.drop_rows(&update.gone, &select, cx);
+        }
+        if update.is_empty() {
             return;
         }
+        let restored = !update.back.is_empty();
+        let engine = self.engine.clone();
+        cx.spawn(async move |this, cx| {
+            let changed = cx
+                .background_spawn(async move {
+                    engine.forget(&update.gone) + engine.remember(&update.back)
+                })
+                .await;
+            if changed > 0 {
+                this.update(cx, |this, cx| this.index_changed(restored, cx))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Drop the rows of items that left the disk, select `select`, and
+    /// reread what comes from the disk rather than the index, here and in
+    /// the other tabs, as a reload of the listing would.
+    fn drop_rows(&mut self, gone: &Gone, select: &[PathBuf], cx: &mut Context<Self>) {
         let left: HashSet<&Path> = gone.paths().collect();
         let stays = |path: &Path| !inside_any(path, &left);
         self.listing.retain(|entry| stays(&entry.path));
@@ -423,18 +486,34 @@ impl Finder {
             folder.entries.retain(|entry| stays(&entry.path));
         }
         self.rebuild_rows(cx);
-        self.select_paths(&select, cx);
-        // These read the disk, not the index.
+        self.select_paths(select, cx);
+        self.tree_saw_listing(cx);
+        self.load_free_space(cx);
         self.reload_columns(cx);
         self.check_tree_for_changes(cx);
-        let engine = self.engine.clone();
-        cx.spawn(async move |this, cx| {
-            cx.background_spawn(async move { engine.forget(&gone) })
-                .await;
-            this.update(cx, |this, cx| this.files_changed(Vec::new(), cx))
-                .ok();
-        })
-        .detach();
+        self.tell_others(cx);
+    }
+
+    /// The index changed: reread what this tab shows from it, and tell the
+    /// other tabs, which search again. What this tab shows from the disk is
+    /// current already, so a listing loading since, as after New Folder,
+    /// keeps the item it's about to select.
+    fn index_changed(&mut self, restored: bool, cx: &mut Context<Self>) {
+        match self.location() {
+            Location::Recents => self.load_listing(Vec::new(), true, cx),
+            Location::Folder(_) => self.refresh_folder_stats(cx),
+            Location::Results { .. } | Location::Trash => {}
+        }
+        if self.is_searching() {
+            // What left is out of the rows already, but not what came back.
+            if restored {
+                self.run_search(false, cx);
+            } else {
+                self.results.retain(|r| r.entry.path.exists());
+                self.rebuild_rows(cx);
+            }
+        }
+        self.tell_others(cx);
     }
 
     /// The bar over the Trash, with its Empty button.
@@ -487,6 +566,25 @@ fn item_after(rows: &[super::Row], gone: &[PathBuf]) -> Option<PathBuf> {
         .map(|row| row.entry.path.clone())
 }
 
+/// Delete `items` in the Trash for good, noted first: a search location
+/// holding the Trash can index it, as fff does hidden folders inside a git
+/// repository.
+fn delete_trashed(bin: &dyn Bin, items: &[Trashed]) -> FileJobOutcome {
+    let leaving = Leaving::note(items.iter().map(|item| &item.path));
+    let result = bin.delete(items);
+    (result, IndexUpdate::left(leaving.gone()))
+}
+
+/// Where the items of `items` that left the Trash are now, after a Put Back
+/// that stopped part way.
+fn out_of_trash(items: &[Trashed]) -> Vec<PathBuf> {
+    items
+        .iter()
+        .filter(|item| !item.in_trash())
+        .filter_map(|item| item.original.clone())
+        .collect()
+}
+
 /// Whether `path` is one of `gone` or inside one of them.
 fn inside_any(path: &Path, gone: &HashSet<&Path>) -> bool {
     path.ancestors().any(|dir| gone.contains(dir))
@@ -512,10 +610,66 @@ pub(super) fn can_put_back(trashed: &[Trashed], entries: &[FileEntry]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::item_after;
+    use super::{IndexUpdate, delete_trashed, item_after, out_of_trash};
     use crate::finder::Row;
-    use fffinder_core::FileEntry;
+    use crate::trash_bin::{Bin, FolderBin};
+    use fffinder_core::{FileEntry, Gone, Leaving};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn deleting_from_the_trash_notes_what_left() -> Result<(), Box<dyn std::error::Error>> {
+        let dir =
+            std::env::temp_dir().join(format!("fffinder-delete-trashed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder"))?;
+        std::fs::write(dir.join("folder/inner.txt"), "1")?;
+        std::fs::write(dir.join("file.txt"), "1")?;
+        let bin = FolderBin::new(dir.join("trash"));
+        let trashed = bin
+            .trash(&[dir.join("file.txt"), dir.join("folder")])
+            .map_err(|stopped| stopped.error)?;
+
+        let (result, update) = delete_trashed(&bin, &trashed);
+
+        result?;
+        let left: Vec<&Path> = update.gone.paths().collect();
+        let in_trash: Vec<&Path> = trashed.iter().map(|t| t.path.as_path()).collect();
+        assert_eq!(left, in_trash);
+        assert!(update.back.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn what_left_the_trash_is_where_it_came_from() -> Result<(), Box<dyn std::error::Error>> {
+        let dir =
+            std::env::temp_dir().join(format!("fffinder-out-of-trash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("a.txt"), "1")?;
+        std::fs::write(dir.join("b.txt"), "1")?;
+        let bin = FolderBin::new(dir.join("trash"));
+        let trashed = bin
+            .trash(&[dir.join("a.txt"), dir.join("b.txt")])
+            .map_err(|stopped| stopped.error)?;
+        let (first, rest) = trashed.split_first().ok_or("the Trash holds nothing")?;
+        bin.restore(std::slice::from_ref(first))?;
+
+        assert_eq!(out_of_trash(&trashed), [dir.join("a.txt")]);
+        assert!(out_of_trash(rest).is_empty(), "b.txt is still in the Trash");
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn an_index_update_says_whether_there_is_anything_to_learn() {
+        assert!(IndexUpdate::default().is_empty());
+        assert!(IndexUpdate::left(Gone::default()).is_empty());
+        assert!(!IndexUpdate::returned(vec![PathBuf::from("/back")]).is_empty());
+        let missing = std::env::temp_dir().join("fffinder-index-update-missing");
+        let gone = Leaving::note([&missing]).gone();
+        assert!(!IndexUpdate::left(gone).is_empty());
+    }
 
     /// A row for each of `names` under `/list`, which needn't exist.
     fn rows(names: &[&str]) -> Vec<Row> {
