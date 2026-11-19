@@ -90,8 +90,16 @@ pub fn check() -> Access {
     }
 }
 
+/// `EACCES`, which ordinary file modes give. macOS refuses a read that needs
+/// Full Disk Access with `EPERM` instead; Rust calls both `PermissionDenied`.
+#[cfg(any(target_os = "macos", test))]
+const EACCES: i32 = 13;
+
 /// Decide from the reads in `tries`, stopping at the first refusal. A place
-/// that isn't there says nothing either way.
+/// that isn't there says nothing either way, and neither does one its file
+/// modes close to this user. The folder holding `TCC.db` is normally open to
+/// everyone, but where its modes have been changed to root's alone, reading
+/// it fails even with Full Disk Access.
 ///
 /// # Arguments
 ///
@@ -107,7 +115,10 @@ fn judge(tries: impl IntoIterator<Item = std::io::Result<()>>) -> Access {
     for result in tries {
         match result {
             Ok(()) => granted = true,
-            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(err)
+                if err.kind() == std::io::ErrorKind::PermissionDenied
+                    && err.raw_os_error() != Some(EACCES) =>
+            {
                 return Access::Denied;
             }
             Err(_) => {}
@@ -155,6 +166,20 @@ mod tests {
     #[test]
     fn a_read_that_works_means_access() {
         assert_eq!(judge([missing(), Ok(())]), Access::Granted);
+    }
+
+    #[test]
+    fn a_file_mode_refusal_tells_nothing() {
+        // TCC.db in a folder only root can enter, out of reach even with
+        // Full Disk Access.
+        let closed = || Err(Error::from_raw_os_error(super::EACCES));
+        assert_eq!(judge([closed(), Ok(())]), Access::Granted);
+        assert_eq!(judge([closed()]), Access::Unknown);
+        // What macOS gives a read Full Disk Access would allow.
+        assert_eq!(
+            judge([closed(), Err(Error::from_raw_os_error(1))]),
+            Access::Denied
+        );
     }
 
     #[test]
